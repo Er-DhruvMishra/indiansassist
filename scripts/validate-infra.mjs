@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Validates infra/ without Docker: both Compose files (parsed with `yaml`), infra/.env.example, the coturn
-// template and the nginx configuration, against contracts sections 11.3-11.5.
+// template and the nginx configuration, against contracts sections 11.3-11.5, plus Phase B 10.2 / 12.2 / 13.5 (the
+// /replayer.html header set, frame-src, the Phase B variables and the REGION_ORIGINS / VITE_REGION_ORIGINS /
+// extension manifest agreement). Node >= 22.18 imports the extension's manifest.ts directly (type stripping).
 //
 //   node scripts/validate-infra.mjs            (or: pnpm validate:infra)
 //
@@ -10,7 +12,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkMainCompose, checkTurnHostCompose, parseEnvFile } from './infra/compose.mjs';
-import { checkNginx, checkSecurityHeaders, checkTurnserverConf } from './infra/configs.mjs';
+import {
+  checkNginx,
+  checkRegionAgreement,
+  checkReplayerLocation,
+  checkSecurityHeaders,
+  checkTurnserverConf,
+} from './infra/configs.mjs';
+import { buildManifest } from '../apps/extension/src/manifest.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,14 +66,26 @@ export function validateInfra(root = ROOT) {
           problems.push(`${k}: entry "${pair}" must be region=https://origin`);
       }
     }
+    for (const k of [
+      'EXTENSION_IDS',
+      'EXTENSION_WEBSTORE_URL',
+      'EXTENSION_EDGE_URL',
+      'EXTENSION_MIN_VERSION',
+      'MIRROR_RELAY_BUDGET_BYTES',
+      'SIGNUP_PLAN_TIER',
+    ]) {
+      if (!env.has(k)) problems.push(`${k} is not documented (Phase B)`);
+    }
     return problems;
   });
+  run('region origins / extension manifest', () => checkRegionAgreement(env, buildManifest));
   run('infra/docker-compose.yml', () => checkMainCompose(read('infra/docker-compose.yml'), env));
   run('infra/docker-compose.turn-host.yml', () => checkTurnHostCompose(read('infra/docker-compose.turn-host.yml')));
   run('infra/coturn/turnserver.conf', () => checkTurnserverConf(read('infra/coturn/turnserver.conf')));
   run('infra/nginx/*.conf', () => [
     ...checkNginx(read('infra/nginx/nginx.conf'), read('infra/nginx/web.conf'), read('infra/nginx/proxy-common.conf')),
     ...checkSecurityHeaders(read('infra/nginx/security-headers.conf')),
+    ...checkReplayerLocation(read('infra/nginx/web.conf')),
   ]);
   return groups;
 }

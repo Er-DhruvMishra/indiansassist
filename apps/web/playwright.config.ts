@@ -2,7 +2,8 @@
  * Playwright config for the Package 1 two-browser end-to-end test (apps/web/e2e). Starts the API on a fresh
  * PGlite database under ./data/e2e (rate limits off, metrics port off) and the Vite dev server, then drives
  * one Chromium with fake media devices and an auto-selected screen so getDisplayMedia / getUserMedia resolve
- * without pickers. Run from the repo root with `pnpm e2e` (ports 4000 and 5173 must be free).
+ * without pickers. Run from the repo root with `pnpm e2e` (ports 4000 and 5173 must be free; `E2E_API_PORT=4100 pnpm e2e`
+ * moves the api when :4000 is taken, the web app reads it through VITE_API_URL).
  */
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'node:path';
@@ -11,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../..');
 const headed = process.env.E2E_HEADED === '1';
+const apiPort = process.env.E2E_API_PORT || '4000';
+const apiUrl = `http://localhost:${apiPort}`;
 
 export default defineConfig({
   testDir: './e2e',
@@ -43,13 +46,14 @@ export default defineConfig({
     {
       command: 'node apps/web/e2e/reset-data.mjs && pnpm --filter @indiansassist/api dev',
       cwd: repoRoot,
-      url: 'http://localhost:4000/api/v1/health',
+      url: `${apiUrl}/api/v1/health`,
       reuseExistingServer: false,
       timeout: 120_000,
       stdout: 'ignore',
       stderr: 'pipe',
       env: {
-        PORT: '4000',
+        PORT: apiPort,
+        API_ORIGIN: apiUrl,
         METRICS_PORT: '0',
         PGLITE_DIR: './data/e2e/pglite',
         STORAGE_FS_DIR: './data/e2e/storage',
@@ -65,6 +69,7 @@ export default defineConfig({
       timeout: 120_000,
       stdout: 'ignore',
       stderr: 'pipe',
+      env: { VITE_API_URL: apiUrl },
     },
   ],
 });

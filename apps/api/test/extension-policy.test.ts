@@ -132,7 +132,8 @@ describe('POST /sessions/:id/events console reports (3.7, Y24)', () => {
       const s = await k2.active(a);
       const codes = (
         await Promise.all(
-          Array.from({ length: 45 }, (_, i) =>
+          // 100 at once: even when a loaded machine spreads them over a few seconds of 10 / s refill, burst 30 runs out.
+          Array.from({ length: 100 }, (_, i) =>
             call(limited.app, `/api/v1/sessions/${s.sessionId}/events`, { cookie: a.cookie, body: { action: 'tab.action', data: { kind: 'tabs.pin', opId: OP, tabId: i } } }),
           ),
         )

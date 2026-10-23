@@ -18,7 +18,8 @@
     "smoke:p2": "node scripts/smoke-p2.mjs",
     "validate:infra": "node scripts/validate-infra.mjs",
     "test:scripts": "vitest run --config scripts/vitest.config.mjs",
-    "e2e": "pnpm --filter @indiansassist/web e2e"
+    "e2e": "pnpm --filter @indiansassist/web e2e",
+    "e2e:ext": "pnpm --filter @indiansassist/extension e2e"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

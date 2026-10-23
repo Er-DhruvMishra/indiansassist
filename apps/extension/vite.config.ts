@@ -3,7 +3,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { asciiPlugin } from './scripts/ascii.mjs';
-import { buildEnv, defines } from './scripts/env.mjs';
+import { OUT_DIR, buildEnv, defines } from './scripts/env.mjs';
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const cfg = buildEnv();
@@ -15,7 +15,7 @@ export default defineConfig({
   define: defines(cfg),
   plugins: [asciiPlugin()],
   build: {
-    outDir: here('./dist'),
+    outDir: OUT_DIR,
     emptyOutDir: true,
     target: 'es2022',
     sourcemap: false,

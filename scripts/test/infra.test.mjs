@@ -12,7 +12,15 @@ import {
   parseCompose,
   parseEnvFile,
 } from '../infra/compose.mjs';
-import { checkNginx, checkSecurityHeaders, checkTurnserverConf, DENIED_PEER_RANGES } from '../infra/configs.mjs';
+import {
+  checkNginx,
+  checkRegionAgreement,
+  checkReplayerLocation,
+  checkSecurityHeaders,
+  checkTurnserverConf,
+  DENIED_PEER_RANGES,
+} from '../infra/configs.mjs';
+import { buildManifest } from '../../apps/extension/src/manifest.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
@@ -22,7 +30,7 @@ const env = parseEnvFile(read('infra/.env.example'));
 describe('shipped infra passes every check', () => {
   it('validateInfra reports no problems', () => {
     const groups = validateInfra(ROOT);
-    expect(groups.map((g) => g.name)).toHaveLength(5);
+    expect(groups.map((g) => g.name)).toHaveLength(6);
     for (const g of groups) expect(g.problems, g.name).toEqual([]);
   });
 
@@ -120,6 +128,32 @@ describe('nginx and coturn drift is detected', () => {
   it('a weakened CSP', () => {
     const bad = headers.replace("script-src 'self';", "script-src 'self' 'unsafe-eval';");
     expect(checkSecurityHeaders(bad).join('\n')).toMatch(/Content-Security-Policy is/);
+  });
+
+  it('Phase B: the SPA CSP without frame-src, and a /replayer.html location that is missing or framed like the SPA', () => {
+    expect(checkSecurityHeaders(headers.replace(" frame-src 'self';", '')).join('\n')).toMatch(
+      /Content-Security-Policy is/,
+    );
+    expect(checkReplayerLocation(web)).toEqual([]);
+    expect(checkReplayerLocation(web.replace('location = /replayer.html', 'location = /replayer-old.html'))).toEqual([
+      'web.conf: missing location = /replayer.html (Phase B 10.2)',
+    ]);
+    const framed = web.replace(
+      'add_header Content-Security-Policy "frame-ancestors https://$host" always;',
+      'add_header X-Frame-Options "DENY" always;',
+    );
+    const problems = checkReplayerLocation(framed).join('\n');
+    expect(problems).toMatch(/lacks add_header Content-Security-Policy/);
+    expect(problems).toMatch(/must not send X-Frame-Options/);
+  });
+
+  it('Phase B: REGION_ORIGINS, VITE_REGION_ORIGINS and the extension manifest must agree', () => {
+    expect(checkRegionAgreement(env, buildManifest)).toEqual([]);
+    const drift = new Map(env);
+    drift.set('VITE_REGION_ORIGINS', 'in-mum=https://in.indiansassist.example');
+    expect(checkRegionAgreement(drift, buildManifest).join('\n')).toMatch(/must list the same region=origin pairs/);
+    const wildcard = () => ({ externally_connectable: { matches: ['https://*/*'] }, content_scripts: [] });
+    expect(checkRegionAgreement(env, wildcard).join('\n')).toMatch(/externally_connectable/);
   });
 
   it('a missing denied-peer-ip range and a literal TURN secret', () => {

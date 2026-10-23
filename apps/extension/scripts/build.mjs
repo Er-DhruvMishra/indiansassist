@@ -2,7 +2,7 @@
 // dist/manifest.json, icons and the managed schema. `--watch` rebuilds on change.
 import { build } from 'vite';
 import { resolve } from 'node:path';
-import { ROOT } from './env.mjs';
+import { OUT_DIR, ROOT } from './env.mjs';
 import { writeManifest } from './manifest.mjs';
 
 const watch = process.argv.includes('--watch') ? {} : null;
@@ -13,4 +13,4 @@ for (const mode of ['content', 'bridge']) {
   await build({ configFile: resolve(ROOT, 'vite.content.config.ts'), mode, logLevel, build: { watch } });
 }
 const manifest = writeManifest();
-console.log(`extension ${manifest.version} built to ${resolve(ROOT, 'dist')} (externally_connectable: ${manifest.externally_connectable.matches.join(', ')})`);
+console.log(`extension ${manifest.version} built to ${OUT_DIR} (externally_connectable: ${manifest.externally_connectable.matches.join(', ')})`);

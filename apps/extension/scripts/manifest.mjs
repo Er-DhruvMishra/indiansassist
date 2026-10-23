@@ -3,7 +3,7 @@
 import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildManifest } from '../src/manifest.ts';
-import { DEV_CONNECT_SRC, ROOT, buildEnv } from './env.mjs';
+import { DEV_CONNECT_SRC, OUT_DIR, ROOT, buildEnv } from './env.mjs';
 
 export function validateManifest(manifest) {
   const problems = [];
@@ -26,7 +26,7 @@ export function validateManifest(manifest) {
   return problems;
 }
 
-export function writeManifest(cfg = buildEnv(), outDir = resolve(ROOT, 'dist')) {
+export function writeManifest(cfg = buildEnv(), outDir = OUT_DIR) {
   const manifest = buildManifest({
     version: cfg.version,
     regionOrigins: cfg.regionOrigins,

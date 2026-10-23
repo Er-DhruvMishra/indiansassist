@@ -18,3 +18,7 @@ apps/web/e2e/artifacts/
 playwright-report/
 test-results/
 blob-report/
+
+# Extension e2e build and artefacts
+apps/extension/dist-e2e/
+apps/extension/test/e2e/artifacts/

@@ -258,8 +258,10 @@ export class LiveSession implements ControlHost {
     const parsed = dataChannelMessageSchema.safeParse(raw);
     if (!parsed.success) return;
     const msg = parsed.data;
-    if (label === 'ia.chat' && msg.t === 'chat' && msg.from === 'assist') this.receiveChat({ msgId: msg.msgId, from: 'assist', text: msg.text, ts: msg.ts });
-    else if (label === 'ia.ctrl' && msg.t === 'recording.state') this.setRecording(msg.recording);
+    if (label === 'ia.chat' && msg.t === 'chat' && msg.from === 'assist') {
+      this.receiveChat({ msgId: msg.msgId, from: 'assist', text: msg.text, ts: msg.ts });
+      await this.m.offscreen.send({ t: 'dc.send', label: 'ia.chat', msg: { t: 'chat.ack', msgId: msg.msgId, ts: Date.now() } }); // A section 8.1
+    } else if (label === 'ia.ctrl' && msg.t === 'recording.state') this.setRecording(msg.recording);
     else if (label === 'ia.ctrl' && msg.t === 'voice.state') this.m.ui.broadcast({ t: 'peerVoice', muted: msg.muted });
     else if (label === 'ia.annot' && msg.t === 'annot') await this.tabs.annotate(raw as Record<string, unknown>);
   }

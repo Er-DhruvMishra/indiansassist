@@ -19,6 +19,13 @@ const toWorker = (msg: { t: string } & Record<string, unknown>) => void sendBus(
 const ports = new Map<number, chrome.runtime.Port>();
 let peer: DeskPeer | null = null;
 let relayAllowed = false;
+/**
+ * Section 4.6: the relay carries plaintext through the server, so it is used only once the direct channels failed to
+ * open within RELAY_FALLBACK_AFTER_MS of building the connection, after one of them closed mid-session, or during a
+ * rebuild (restart). Until then frames wait (the sender re-snapshots when a transport opens).
+ */
+let relayArmed = false;
+const relayUsable = (): boolean => relayAllowed && relayArmed;
 let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 let lastStats = { at: Date.now(), bytes: 0 };
 
@@ -33,20 +40,30 @@ const files: FileEngine = new FileEngine({
 });
 const mirror: MirrorSender = new MirrorSender({
   channel: (): RTCDataChannel | null => channels.get('ia.mirror'),
-  relayAllowed: () => relayAllowed,
+  relayAllowed: relayUsable,
   relay,
   maxMessageSize: () => peer?.maxMessageSize() ?? 65536,
   toTab: (tabId, msg) => ports.get(tabId)?.postMessage(msg),
   onTooLarge: (tabId, transport) => toWorker({ t: 'mirror.tooLarge', tabId, transport }),
   onTransport: (transport) => toWorker({ t: 'mirror.transport', transport }),
 });
-const channels: OffscreenChannels = new OffscreenChannels({ toWorker, files, mirror, relay, relayAllowed: () => relayAllowed });
+const channels: OffscreenChannels = new OffscreenChannels({
+  toWorker,
+  files,
+  mirror,
+  relay,
+  relayAllowed: relayUsable,
+  onClosed: (label) => {
+    if (label === 'ia.mirror' || label === 'ia.control') relayArmed = true;
+  },
+});
 const voice = new Voice();
 const css = new CssFetcher();
 
 function createPeer(iceServers: RTCIceServer[], restart: boolean): void {
   peer?.close();
   channels.clear();
+  relayArmed = restart;
   peer = new DeskPeer({
     iceServers,
     restart,
@@ -60,6 +77,7 @@ function createPeer(iceServers: RTCIceServer[], restart: boolean): void {
   // Relay fallback: the mirror / control channels are not open 5 s after the connection was built (4.6).
   if (fallbackTimer) clearTimeout(fallbackTimer);
   fallbackTimer = setTimeout(() => {
+    relayArmed = true;
     if (relayAllowed && !channels.isOpen('ia.mirror')) mirror.setTransport('relay');
   }, RELAY_FALLBACK_AFTER_MS);
   for (const tabId of ports.keys()) mirror.snapshot(tabId);

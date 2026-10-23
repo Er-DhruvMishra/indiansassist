@@ -13,7 +13,7 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | @noble/ed25519, @noble/hashes | MIT | token signing, hashing | in use |
 | argon2 | MIT | password hashing | in use |
 | React, Vite, Tailwind CSS | MIT | Assist console, Desk web room | in use |
-| Playwright (@playwright/test) and the Chromium build it downloads | Apache-2.0 (Chromium: BSD-3-Clause) | Package 1 two-browser e2e (dev only, not shipped) | in use (dev) |
+| Playwright (@playwright/test) and the Chromium build it downloads | Apache-2.0 (Chromium: BSD-3-Clause) | Package 1 two-browser e2e (`apps/web/e2e`) and the Package 2 extension e2e (`apps/extension/test/e2e`, unpacked extension in a persistent Chromium context); dev only, not shipped | in use (dev) |
 | coturn | BSD-3-Clause | STUN/TURN | self-hosted service |
 | PostgreSQL | PostgreSQL Licence | database | self-hosted service |
 | Valkey | BSD-3-Clause | presence / pub-sub (Redis compatible) | self-hosted service |

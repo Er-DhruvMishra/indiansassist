@@ -15,6 +15,8 @@ export type ChannelDeps = {
   mirror: MirrorSender;
   relay: RelayPacer;
   relayAllowed: () => boolean;
+  /** A live channel of the current peer connection closed (arms the relay fallback mid-session, 4.6). */
+  onClosed?: (label: DataChannelLabel) => void;
   now?: () => number;
 };
 
@@ -38,11 +40,12 @@ export class OffscreenChannels {
     ch.binaryType = 'arraybuffer';
     ch.onopen = () => {
       this.d.toWorker({ t: 'dc.open', label });
-      if (label === 'ia.mirror') this.d.mirror.setTransport('dc');
+      if (label === 'ia.mirror') this.d.mirror.channelOpened();
     };
     ch.onclose = () => {
       if (this.channels.get(label) !== ch) return;
       this.d.toWorker({ t: 'dc.close', label });
+      this.d.onClosed?.(label);
       if (label === 'ia.mirror' && this.d.relayAllowed()) this.d.mirror.setTransport('relay');
     };
     ch.onmessage = (ev: MessageEvent) => this.onMessage(label, ev.data);

@@ -1,4 +1,5 @@
 export declare const ROOT: string;
+export declare const OUT_DIR: string;
 export declare const DEV_WEB_ORIGINS: string[];
 export declare const DEV_CONNECT_SRC: string[];
 export type BuildConfig = {

@@ -94,9 +94,37 @@ export const SECURITY_HEADERS = {
   'Permissions-Policy': 'camera=(), geolocation=(), display-capture=(self), microphone=(self)',
   'Content-Security-Policy':
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
-    "media-src 'self' blob: mediastream:; connect-src 'self' wss:; worker-src 'self' blob:; " +
+    "media-src 'self' blob: mediastream:; connect-src 'self' wss:; worker-src 'self' blob:; frame-src 'self'; " +
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 };
+
+/** Phase B 10.2: `/replayer.html` header set (P3 minus X-Frame-Options, frame-ancestors of the host, CORP, no-store). */
+export const REPLAYER_HEADERS = {
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), geolocation=(), display-capture=(self), microphone=(self)',
+  'Content-Security-Policy': 'frame-ancestors https://$host',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Cache-Control': 'no-store',
+};
+
+export function checkReplayerLocation(webConf) {
+  const block = locationBlock(webConf, '= /replayer.html');
+  if (!block) return ['web.conf: missing location = /replayer.html (Phase B 10.2)'];
+  const problems = [];
+  for (const [h, v] of Object.entries(REPLAYER_HEADERS)) {
+    const m = new RegExp(`add_header\\s+${h}\\s+"([^"]*)"\\s+always;`).exec(block);
+    if (!m) problems.push(`web.conf: /replayer.html lacks add_header ${h} ... always`);
+    else if (m[1] !== v) problems.push(`web.conf: /replayer.html ${h} is "${m[1]}", contract says "${v}"`);
+  }
+  if (/X-Frame-Options/.test(block)) problems.push('web.conf: /replayer.html must not send X-Frame-Options');
+  if (/security-headers\.conf/.test(block))
+    problems.push('web.conf: /replayer.html must not include the SPA header set');
+  if (!/try_files\s+\$uri\s+=404;/.test(block))
+    problems.push('web.conf: /replayer.html must be served as a file (try_files $uri =404)');
+  return problems;
+}
 
 export function checkSecurityHeaders(text) {
   const problems = [];
@@ -105,6 +133,40 @@ export function checkSecurityHeaders(text) {
     const m = re.exec(text);
     if (!m) problems.push(`security-headers.conf: missing add_header ${h} ... always`);
     else if (m[1] !== v) problems.push(`security-headers.conf: ${h} is "${m[1]}", contract says "${v}"`);
+  }
+  return problems;
+}
+
+/**
+ * Phase B 13.5: the region list compiled into the extension must be the web app's list (the join handshake and
+ * the bridge content script trust exactly these origins). Checks REGION_ORIGINS === VITE_REGION_ORIGINS (same
+ * region=origin pairs) and that the production manifest generated from them lists each origin, and nothing else,
+ * in `externally_connectable` and in the bridge content script's `matches`.
+ * `buildManifest` is passed in (apps/extension/src/manifest.ts) so this module stays plain JS.
+ */
+export function checkRegionAgreement(env, buildManifest, version = '0.0.0') {
+  const problems = [];
+  const pairs = (k) =>
+    String(env.get(k) ?? '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .sort();
+  const api = pairs('REGION_ORIGINS');
+  const web = pairs('VITE_REGION_ORIGINS');
+  if (api.join(',') !== web.join(','))
+    problems.push('REGION_ORIGINS and VITE_REGION_ORIGINS must list the same region=origin pairs');
+  const origins = [...new Set(web.map((p) => p.slice(p.indexOf('=') + 1).replace(/\/+$/, '')))].sort();
+  if (origins.length === 0) return [...problems, 'VITE_REGION_ORIGINS is empty'];
+  const manifest = buildManifest({ version, regionOrigins: origins, devConnectSrc: [], key: null });
+  const want = origins.map((o) => `${o}/*`).join(',');
+  const ec = [...(manifest.externally_connectable?.matches ?? [])].sort().join(',');
+  if (ec !== want)
+    problems.push(`extension manifest externally_connectable (${ec}) does not equal the region origins (${want})`);
+  for (const cs of manifest.content_scripts ?? []) {
+    const m = [...cs.matches].sort().join(',');
+    if (m !== want)
+      problems.push(`extension manifest content script ${cs.js.join('+')} matches ${m}, expected ${want}`);
   }
   return problems;
 }

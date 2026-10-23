@@ -85,4 +85,8 @@ masked; `[data-ia-block]` is never captured; identity providers, Indian net bank
 
 `build`, `dev`, `typecheck`, `lint` (bans `innerHTML` and friends, `eval`, and `chrome.debugger.sendCommand`
 outside the allow-list wrapper), `test` (vitest; jsdom for content-script tests, an in-memory `chrome` fake in
-`test/chrome-mock.ts`), `icons` (regenerates `icons/`).
+`test/chrome-mock.ts`), `icons` (regenerates `icons/`), `e2e` (Playwright, `test/e2e/`: builds `dist-e2e/` with
+`IA_E2E=1`, starts the api, the web dev server and the fixture server on :4175, loads the unpacked extension into a
+persistent Chromium context and drives a whole session against a second Chromium running the console; run it from the
+repo root with `pnpm e2e:ext`, ports 4000, 5173 and 4175 free or `E2E_API_PORT=4100`). `IA_OUT_DIR` changes the build
+output directory (default `dist`).

@@ -114,10 +114,12 @@ describe('session state machine (sections 2.4, 3, 9.2)', () => {
     expect(ws.of('desk.consent')[0]).toMatchObject({ state: 'granted', surface: 'browser', extension: { level: 'tab_control', scope: 'current_tab', backstage: false } });
     expect(m.phase).toBe('active');
     expect(offscreenSent(chrome, 'pc.create')[0]).toMatchObject({ restart: false, relayAllowed: true });
+    // The capture injection and the mirror.started attestation run asynchronously after consent.ok; under a
+    // loaded parallel test run the fixed tick in toActive is not always enough, so wait for them.
+    await vi.waitFor(() => expect(ws.of('desk.event').some((e) => e.action === 'mirror.started')).toBe(true), { timeout: 3000 });
     expect(chrome.scripting.executeScript).toHaveBeenCalledWith({ target: { tabId: 1 }, files: ['content.js'] });
     expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1);
     expect(chrome.scripting.registerContentScripts).not.toHaveBeenCalled();
-    expect(ws.of('desk.event').some((e) => e.action === 'mirror.started')).toBe(true);
   });
 
   it('deep_control without the debugger permission is downgraded to in_page before the WS frame', async () => {
@@ -131,6 +133,17 @@ describe('session state machine (sections 2.4, 3, 9.2)', () => {
     await tick(5);
     await handleUiCommand(m, { to: 'worker', t: 'ui.consent', decision: 'share', level: 'deep_control', scope: 'all_tabs', backstage: true, tabId: 1 });
     expect(ws.of('desk.consent')[0]).toMatchObject({ extension: { level: 'in_page', scope: 'current_tab', backstage: true } });
+  });
+
+  it('a chat from the Assist on ia.chat is shown once and acknowledged with chat.ack (A section 8.1)', async () => {
+    const m = machine();
+    await toActive(m);
+    const chat = { t: 'chat', msgId: '00000000-0000-4000-8000-0000000000c1', from: 'assist', text: 'Hello', ts: 5 };
+    await m.live!.onChannelMessage('ia.chat', chat);
+    await m.live!.onChannelMessage('ia.chat', chat);
+    const acks = offscreenSent(chrome, 'dc.send').filter((x) => x.label === 'ia.chat').map((x) => x.msg as Record<string, unknown>);
+    expect(acks[0]).toMatchObject({ t: 'chat.ack', msgId: chat.msgId });
+    expect((m.live as unknown as { chatLines: { msgId: string }[] }).chatLines.filter((l) => l.msgId === chat.msgId)).toHaveLength(1);
   });
 
   it('tabs.close with 50 ids writes exactly one tab.action desk.event', async () => {

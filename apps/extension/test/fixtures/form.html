@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>IA Fixture Form</title>
+    <style>
+      body { font-family: sans-serif; margin: 24px; }
+      label { display: block; margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>IA fixture: payroll settings</h1>
+    <p id="visible">Fixture visible text for the mirror</p>
+    <form onsubmit="return false">
+      <label>Employee name <input id="name" type="text" value="" autocomplete="off" /></label>
+      <label>Password <input id="pw" type="password" value="hunter2-secret" autocomplete="off" /></label>
+    </form>
+    <p>Account number: <span id="sensitive" data-ia-sensitive>SENSITIVE-4111-2222</span></p>
+    <div data-ia-block id="blocked">BLOCKED-PANEL-CONTENT</div>
+    <button id="toggle" type="button" onclick="this.textContent = this.textContent === 'On' ? 'Off' : 'On'">Off</button>
+  </body>
+</html>

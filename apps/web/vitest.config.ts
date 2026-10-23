@@ -9,5 +9,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['test/setup.ts'],
     restoreMocks: true,
+    // user-event flows in jsdom take 1-3 s alone and over 5 s when `pnpm -r test` runs every package in parallel.
+    testTimeout: 20_000,
   },
 });

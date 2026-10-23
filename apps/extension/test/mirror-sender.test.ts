@@ -102,6 +102,32 @@ describe('mirror sender (sections 4.3-4.5)', () => {
     expect(relayFrames[0]).toMatchObject({ t: 'mirror.relay', tabId: 4, seq: 0, kind: 'snapshot', part: 1, parts: 1 });
     expect(JSON.parse(new TextDecoder().decode(fromBase64url(relayFrames[0]!.data)))[0].type).toBe(4);
   });
+
+  it('inside the relay grace a snapshot waits, and the first channel open asks the tab for it again (4.6)', async () => {
+    const relayFrames: RelayFrame[] = [];
+    let ch: FakeChannel | null = null;
+    const toTab = vi.fn();
+    const s = new MirrorSender({
+      channel: () => ch as unknown as RTCDataChannel,
+      relayAllowed: () => false, // org allows relay, but the 5 s grace has not passed yet
+      relay: new RelayPacer((f) => (relayFrames.push(f), true)),
+      maxMessageSize: () => 262144,
+      toTab,
+      onTooLarge: vi.fn(),
+      onTransport: vi.fn(),
+    });
+    await s.ingest(4, [{ type: 4, timestamp: 1, data: { width: 1, height: 1 } }], true);
+    expect(relayFrames).toHaveLength(0);
+    expect(toTab).not.toHaveBeenCalled();
+    ch = new FakeChannel();
+    s.channelOpened();
+    expect(toTab).toHaveBeenCalledWith(4, { t: 'oc.snapshot' });
+    await s.ingest(4, [{ type: 4, timestamp: 2, data: { width: 1, height: 1 } }], true);
+    expect(ch.frames).toHaveLength(1);
+    toTab.mockClear();
+    s.channelOpened(); // nothing is waiting any more: no extra snapshot
+    expect(toTab).not.toHaveBeenCalled();
+  });
 });
 
 describe('relay pacer (section 4.6)', () => {

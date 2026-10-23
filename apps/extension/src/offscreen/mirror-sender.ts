@@ -185,6 +185,15 @@ export class MirrorSender {
     for (const id of ports) this.d.toTab(id, { t: 'oc.focus', focused: id === tabId });
   }
 
+  /**
+   * `ia.mirror` opened. After relay this is a transport switch (announced by a snapshot); on the first open, which
+   * may come after the relay grace (4.6) held frames back, every tab still waiting for a snapshot gets one.
+   */
+  channelOpened(): void {
+    if (this.transport !== 'dc') return this.setTransport('dc');
+    for (const [id, s] of this.tabs) if (s.awaitingSnapshot) this.snapshot(id);
+  }
+
   /** A transport switch is announced by a fresh snapshot of the focused tab on the new transport (4.6). */
   setTransport(t: MirrorTransport): void {
     if (this.transport === t) return;

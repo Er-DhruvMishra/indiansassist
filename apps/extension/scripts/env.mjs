@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+/** Output directory: `dist/` unless IA_OUT_DIR names another (the Playwright e2e builds into `dist-e2e/`). */
+export const OUT_DIR = resolve(ROOT, process.env.IA_OUT_DIR || 'dist');
 export const DEV_WEB_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 export const DEV_CONNECT_SRC = ['http://localhost:*', 'ws://localhost:*', 'http://127.0.0.1:*', 'ws://127.0.0.1:*'];
 
