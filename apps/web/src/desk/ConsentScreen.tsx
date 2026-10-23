@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { Alert, Button } from '../components/ui';
 import { safeAccent } from '../lib/contrast';
+import { safeLogo } from './brand';
 import type { DeskController, DeskSnapshot } from './deskController';
 import { DeskLayout } from './DeskLayout';
 
@@ -17,10 +18,10 @@ export function ConsentScreen({ ctrl, snap }: { ctrl: DeskController; snap: Desk
   const org = created.org;
   const busy = snap.phase !== 'consent';
   return (
-    <DeskLayout>
+    <DeskLayout brand={org}>
       <div className="rounded-lg border-t-4 bg-white p-5 shadow-sm dark:bg-slate-900" style={{ borderTopColor: safeAccent(org.accentColor) }}>
         <div className="mb-4 flex items-center gap-3">
-          {org.logoData?.startsWith('data:image/') && <img src={org.logoData} alt="" className="h-10 w-10 rounded object-contain" />}
+          {safeLogo(org.logoData) && <img src={safeLogo(org.logoData)!} alt="" className="h-10 w-10 rounded object-contain" />}
           <h1 className="text-xl font-semibold">
             {created.assist.name} from {org.displayName} is asking to see your screen
           </h1>
@@ -52,7 +53,7 @@ export function ConsentScreen({ ctrl, snap }: { ctrl: DeskController; snap: Desk
         </section>
         {snap.notice && <div className="mb-3"><Alert tone="amber">{snap.notice}</Alert></div>}
         <div className="flex flex-wrap gap-2" aria-live="polite">
-          <Button size="lg" disabled={!ready || busy} onClick={() => void ctrl.share(singleWindow)}>
+          <Button size="lg" disabled={!ready || busy} onClick={() => void ctrl.share(singleWindow)} style={ready && !busy ? { backgroundColor: safeAccent(org.accentColor) } : undefined}>
             {snap.phase === 'picking' ? 'Choose what to share...' : snap.phase === 'starting' ? 'Starting...' : 'Share my screen'}
           </Button>
           <Button size="lg" variant="secondary" disabled={snap.phase === 'starting'} onClick={() => ctrl.decline()}>

@@ -9,7 +9,9 @@ import { LIMITS } from '@indiansassist/shared';
 import type { Db } from '@indiansassist/db';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { buildAuthProvider } from './adapters/auth-provider.js';
+import { RedisLimiter } from './adapters/limiter-redis.js';
 import { buildPresence, type Presence } from './adapters/presence.js';
+import { RedisPresence } from './adapters/presence-redis.js';
 import type { ObjectStorage } from './adapters/storage.js';
 import { FsObjectStorage } from './adapters/storage-fs.js';
 import { S3ObjectStorage } from './adapters/storage-s3.js';
@@ -19,7 +21,7 @@ import { derivePresignKey } from './lib/crypto.js';
 import { loadKeySet } from './lib/keys.js';
 import { loggerOptions } from './lib/logger.js';
 import { createMetrics, type Metrics } from './lib/metrics.js';
-import { MemoryLimiter, ShortCodeBudget } from './limiter.js';
+import { MemoryLimiter, ShortCodeBudget, type Limiter } from './limiter.js';
 import { registerAuth } from './plugins/auth.js';
 import { registerErrorHandlers } from './plugins/errors.js';
 import { registerSecurity } from './plugins/security.js';
@@ -57,7 +59,12 @@ export function packageVersion(): string {
 export function buildStorage(config: Config, presignKey: Buffer): ObjectStorage {
   return config.storageDriver === 's3'
     ? new S3ObjectStorage(config.s3)
-    : new FsObjectStorage({ root: config.storageFsDir, apiOrigin: config.apiOrigin, presignKey });
+    : new FsObjectStorage({ root: config.storageFsDir, fileOrigin: config.recordingDownloadOrigin, presignKey });
+}
+
+/** The limiter follows the presence driver: cluster-wide on Redis, per process on memory (section 6.12). */
+function buildLimiter(presence: Presence, disabled: boolean): Limiter {
+  return presence instanceof RedisPresence ? new RedisLimiter(presence.client, disabled) : new MemoryLimiter(disabled);
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyInstance; ctx: AppContext }> {
@@ -68,12 +75,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
     bodyLimit: 1024 * 1024,
   });
   const presignKey = derivePresignKey(config.sessionCookieSecret);
+  const presence =
+    opts.presence ??
+    buildPresence(config.presenceDriver, config.nodeId, {
+      redisUrl: config.redisUrl,
+      onError: (err, where) => app.log.warn({ err, where }, 'presence driver error'),
+    });
   const ctx: AppContext = {
     config,
     db,
     storage: opts.storage ?? buildStorage(config, presignKey),
-    presence: opts.presence ?? buildPresence(config.presenceDriver, config.nodeId),
-    limiter: new MemoryLimiter(config.rateLimitDisabled),
+    presence,
+    limiter: buildLimiter(presence, config.rateLimitDisabled),
     shortCodes: new ShortCodeBudget(() => app.log.warn({ alert: true }, 'short_code_budget_exhausted')),
     keys: await loadKeySet(config.tokenSigningKey, config.tokenSigningKeysPrevious),
     metrics: opts.metrics ?? createMetrics(),
@@ -104,6 +117,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await iceRoutes(app, ctx);
 
   ctx.hub.attach(app);
+  await ctx.hub.start();
   app.addHook('onClose', async () => {
     await ctx.hub.close();
     await ctx.presence.close();

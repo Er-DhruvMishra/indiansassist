@@ -194,9 +194,9 @@ services:
       STUN_URLS: ${STUN_URLS:-}
       ICE_OWN_HOST_SUFFIXES: ${ICE_OWN_HOST_SUFFIXES:?set ICE_OWN_HOST_SUFFIXES in infra/.env}
       TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-3600}
-      # Single api replica until the redis presence driver ships (infra/HARDENING.md section 10): with the memory
-      # driver a second replica could not see the first one's sockets.
-      PRESENCE_DRIVER: memory
+      # Valkey presence (heartbeats, sweeper lease, token state, Assist registry), the signaling bridge between
+      # api replicas and the cluster-wide rate limits (contracts 7.6 N1, 10.2; infra/HARDENING.md section 10).
+      PRESENCE_DRIVER: redis
       REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
       STORAGE_DRIVER: ${STORAGE_DRIVER:-s3}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs:8333}
@@ -206,6 +206,11 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       STORAGE_FS_DIR: /data/storage
+      RECORDING_DOWNLOAD_ORIGIN: ${RECORDING_DOWNLOAD_ORIGIN:-}
+      ORG_STORAGE_QUOTA_BYTES: ${ORG_STORAGE_QUOTA_BYTES:-53687091200}
+      ORG_MAX_OPEN_UPLOADS: ${ORG_MAX_OPEN_UPLOADS:-10}
+      USER_MAX_OPEN_UPLOADS: ${USER_MAX_OPEN_UPLOADS:-3}
+      RECORDING_UPLOAD_WINDOW_SEC: ${RECORDING_UPLOAD_WINDOW_SEC:-86400}
       AUTH_PROVIDER: ${AUTH_PROVIDER:-local}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}

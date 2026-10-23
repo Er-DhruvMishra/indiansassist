@@ -148,6 +148,12 @@ export class PeerSession {
     if (restart) this.pc.restartIce();
   }
 
+  /** Media path recovery (correctness-F6): new ICE credentials; `negotiationneeded` sends the offer. */
+  restartIce(): void {
+    if (this.closed) return;
+    this.pc.restartIce();
+  }
+
   setTransportPolicy(policy: RTCIceTransportPolicy): void {
     if (this.closed) return;
     this.pc.setConfiguration({ ...this.pc.getConfiguration(), iceTransportPolicy: policy });

@@ -36,7 +36,7 @@ export type EndedSession = { session: SessionRow; previousState: SessionState; o
 
 /** Ends a session; throws SessionAlreadyEndedError (409 already_ended) or InvalidSessionTransitionError. */
 export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: EndOptions): Promise<EndedSession> {
-  const chatCount = ctx.hub.chatCount(sessionId);
+  const chatCount = await ctx.hub.chatCount(sessionId);
   const result = await ctx.db.transaction(async (tx) => {
     const current = await getSession(tx, sessionId);
     if (!current) throw new Error(`session ${sessionId} not found`);

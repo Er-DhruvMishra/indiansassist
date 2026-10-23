@@ -6,7 +6,7 @@
  *   that saw the knock, and closes the Desk socket `4410` except after `denied` or a timeout before accept.
  */
 import { WS_CLOSE, type SessionEndReason } from '@indiansassist/shared';
-import { findTokenByTid } from '@indiansassist/db';
+import { findTokenByTid, InvalidSessionTransitionError } from '@indiansassist/db';
 import { systemActor } from '../lib/audit.js';
 import { userRefs, refOf } from '../lib/lookup.js';
 import { surfaceOf } from '../lib/mappers.js';
@@ -31,17 +31,20 @@ export async function markDeskWaiting(hub: SignalHub, conn: Conn): Promise<void>
   );
 }
 
+/** `token.presence` to every Assist socket that may act on the token, on every node (section 7.3). */
 export async function notifyTokenPresence(hub: SignalHub, tokenId: string): Promise<void> {
   const tok = await findTokenByTid(hub.ctx.db, tokenId);
   if (!tok) return;
   const waitingDesks = hub.deskConnsForToken(tokenId).filter((c) => c.desk && c.desk.sessionId === null);
-  const msg = {
-    t: 'token.presence',
-    tokenId,
-    waiting: waitingDesks.length > 0,
-    held: waitingDesks.some((c) => c.desk!.held),
-  };
-  for (const a of hub.assistsForToken(tok)) a.send(msg);
+  let waiting = waitingDesks.length > 0;
+  let held = waitingDesks.some((c) => c.desk!.held);
+  if (hub.bridge.on) {
+    // A Desk waiting on another node is known through its presence entry.
+    const w = (await hub.ctx.presence.getTokenState(tokenId)).waiting;
+    waiting ||= w !== null;
+    held ||= w?.knockRequested === true;
+  }
+  hub.toAssists(tok, { t: 'token.presence', tokenId, waiting, held });
 }
 
 export async function onConnClosed(hub: SignalHub, conn: Conn): Promise<void> {
@@ -69,24 +72,30 @@ export async function onConnClosed(hub: SignalHub, conn: Conn): Promise<void> {
 
 /** 30 s for the Desk to resume, then `ended (desk_left)` (section 7.5). */
 export function startDeskGrace(hub: SignalHub, live: Live): void {
-  const { ctx } = hub;
-  setTimer(live, 'desk-grace', ctx.timing.graceMs, () => {
-    if (live.deskConnId !== null) return;
-    void endSessionQuietly(ctx, live.id, { reason: 'desk_left', actor: systemActor }).catch((err: unknown) =>
-      ctx.log.error({ err, sessionId: live.id }, 'desk grace end failed'),
-    );
-  });
+  setTimer(live, 'desk-grace', hub.ctx.timing.graceMs, () => graceEnd(hub, live, 'desk'));
 }
 
 /** 30 s for the Assist to resume, then `ended (error)` (section 7.5). */
 export function startAssistGrace(hub: SignalHub, live: Live): void {
+  setTimer(live, 'assist-grace', hub.ctx.timing.graceMs, () => graceEnd(hub, live, 'assist'));
+}
+
+/**
+ * Ends a session whose participant did not come back. The attachment is checked again INSIDE the end transaction,
+ * after the session row is locked (correctness-F9): a resume registers its socket before its own transaction, so if
+ * a resume started while this end was waiting for the row, the end rolls back (swallowed as a lost race).
+ */
+function graceEnd(hub: SignalHub, live: Live, side: 'assist' | 'desk'): void {
   const { ctx } = hub;
-  setTimer(live, 'assist-grace', ctx.timing.graceMs, () => {
-    if (live.assistConnId !== null) return;
-    void endSessionQuietly(ctx, live.id, { reason: 'error', actor: systemActor }).catch((err: unknown) =>
-      ctx.log.error({ err, sessionId: live.id }, 'assist grace end failed'),
-    );
-  });
+  const attached = () => (side === 'desk' ? live.deskConnId : live.assistConnId) !== null;
+  if (attached()) return;
+  void endSessionQuietly(ctx, live.id, {
+    reason: side === 'desk' ? 'desk_left' : 'error',
+    actor: systemActor,
+    before: async (_tx, _org, current) => {
+      if (attached()) throw new InvalidSessionTransitionError(current.state, 'ended', 'participant resumed');
+    },
+  }).catch((err: unknown) => ctx.log.error({ err, sessionId: live.id }, `${side} grace end failed`));
 }
 
 export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promise<void> {
@@ -119,11 +128,13 @@ export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promi
   const assist = hub.conn(live?.assistConnId);
   desk?.send(msg);
   assist?.send(msg);
+  // No live entry here: the sockets of this session (if any) are piped from nodes whose owner is gone.
+  if (!live) hub.bridge.endedWithoutOwner(s.id, msg);
   if (ended.previousState === 'knocked') {
     const tok = await findTokenByTid(ctx.db, s.tokenId);
     if (tok) {
       const closed = { t: 'knock.closed', sessionId: s.id, by: KNOCK_CLOSED_BY[reason] ?? 'ended' };
-      for (const a of hub.assistsForToken(tok)) if (a !== assist) a.send(closed);
+      hub.toAssists(tok, closed, live?.assistConnId ?? null);
     }
   }
   if (desk?.desk) {
@@ -138,9 +149,9 @@ export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promi
   }
 }
 
-/** Waiting Desk sockets on a revoked token learn `token_gone` and are closed `4403`. */
+/** Desk sockets on a revoked token (local, piped or bridged here) learn `token_gone` and are closed `4403`. */
 export function onTokenRevoked(hub: SignalHub, tokenId: string): void {
-  for (const c of hub.deskConnsForToken(tokenId)) {
+  for (const c of hub.deskConnsForToken(tokenId, { includePiped: true })) {
     c.error('token_gone', 'token was revoked', undefined, { status: 'revoked' });
     c.close(WS_CLOSE.forbidden, 'token revoked');
   }

@@ -15,17 +15,19 @@ import { formatBytes } from '../../lib/fileChunker';
 import { fmtDateTime, fmtDuration, humanise } from '../../lib/format';
 import { AuditTable, VerifyBadge } from '../audit/AuditPage';
 import { PathBadge, sessionDuration } from '../SessionsPage';
-import type { RecordingPhase } from './controller';
+import type { RecordingFailure, RecordingPhase } from './consoleRecording';
 
 export function RecordingCard({
   recordingId,
   phase,
+  failure,
   progress,
   result,
   onRetry,
 }: {
   recordingId: string | null;
   phase?: RecordingPhase;
+  failure?: RecordingFailure;
   progress?: number;
   result?: Recording | null;
   onRetry?: () => void;
@@ -63,7 +65,10 @@ export function RecordingCard({
           </div>
         </div>
       )}
-      {phase === 'failed' && (
+      {phase === 'failed' && failure === 'recorder' && (
+        <Alert>The recording failed while capturing, so nothing was uploaded. One recording per session in this version.</Alert>
+      )}
+      {phase === 'failed' && failure !== 'recorder' && (
         <Alert>
           The recording upload failed. <Button size="sm" variant="secondary" onClick={onRetry}>Retry upload</Button>
         </Alert>
@@ -105,7 +110,7 @@ export function EndedView({
   recording,
 }: {
   detail: SessionDetail;
-  recording?: { phase: RecordingPhase; progress: number; result: Recording | null; onRetry: () => void };
+  recording?: { phase: RecordingPhase; failure?: RecordingFailure; progress: number; result: Recording | null; onRetry: () => void };
 }) {
   const { me } = useAuth();
   const role = me?.user.role;
@@ -127,7 +132,7 @@ export function EndedView({
         </dl>
       </Card>
       {can(role, 'recordings') && (
-        <RecordingCard recordingId={detail.recordingId} phase={recording?.phase} progress={recording?.progress} result={recording?.result} onRetry={recording?.onRetry} />
+        <RecordingCard recordingId={detail.recordingId} phase={recording?.phase} failure={recording?.failure} progress={recording?.progress} result={recording?.result} onRetry={recording?.onRetry} />
       )}
       <Card title="File attestations">
         {files.length === 0 ? (

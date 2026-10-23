@@ -117,14 +117,24 @@ quarterly, and back up `infra/.env` (and retired signing seeds) separately in th
       was rebuilt after the last change.
 - [ ] `GET /api/v1/orgs/current/residency` for a test org reports the expected region, bucket and prefix.
 
-## 10. Scaling the api (single replica in this build)
+## 10. Scaling the api (replicas need the redis presence driver)
 
-Run exactly **one** `api` replica per region stack. The shipped presence driver is `memory` (contract 10.2):
-it sees only the sockets of its own process, so a Desk and an Assist on different replicas could never meet
-(a knock would stay `knock.held`), and the cross-node bridging over `session:<id>` / `org:<id>:knocks`
-(contract 7.6 N1) is not implemented yet. The api therefore skips the N4 lost-node sweep with the memory
-driver (it cannot tell a dead node from a live one), so two replicas on one database do not end each other's
-sessions, but they still do not interoperate. Do not add `deploy.replicas`, a second `api` service or a
-load balancer pool in front of `/signal` until the Redis/Valkey presence driver and the hub pub/sub bridge
-ship; `PRESENCE_DRIVER=redis` is refused at boot until then. Valkey stays in the stack for that driver.
-Vertical scaling (CPU, memory, `ulimit -n` for sockets) is the supported way to grow a region today.
+More than one `api` replica per region stack is supported **only with `PRESENCE_DRIVER=redis`** (Valkey, contract
+10.2), which Compose sets. With it, token waiting state, the token -> session pointer, the online-Assist registry,
+node heartbeats (`ia:node:<NODE_ID>`, TTL 90 s) and the `sweeper` lease live in Valkey; the N4 sweep runs on one
+node at a time and only ends sessions of a node whose heartbeat really expired; the signaling bridge (contract 7.6
+N1) pipes a Desk and an Assist on different replicas to the session's owner node over `node:<id>` and fans knocks,
+revocations and sign-outs out over `cluster`; and the HTTP and WS rate limits are counted in Valkey, so they hold
+across replicas (the `signal.forbidden` budget and the per-socket frame bucket stay per replica).
+
+- Give every replica a distinct, stable `NODE_ID` (default `<hostname>:<pid>`; set it explicitly in orchestrators
+  that reuse hostnames), the same `DATABASE_URL`, `REDIS_URL`, `SESSION_COOKIE_SECRET` and `TOKEN_SIGNING_KEY`.
+- Valkey carries signaling frames between replicas: keep it on the private network only (no published port),
+  with `requirepass` / ACLs, exactly like the database.
+- Any load balancer policy works for `/signal` (no sticky sessions needed); keep the WebSocket idle timeout above
+  the 25 s ping interval.
+- With `PRESENCE_DRIVER=memory` run exactly **one** replica: the memory driver cannot see other nodes, so the
+  bridge and the lost-node sweep are off and a Desk and an Assist on different replicas would never meet. The api
+  logs `presence driver is single-node: run one api replica` at boot in that mode.
+- A replica that dies takes its own sockets with it; sessions it owned end `error` within ~100 s (heartbeat TTL +
+  sweep) unless a participant resumes on another replica first (the resume adopts the session).

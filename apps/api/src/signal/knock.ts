@@ -8,12 +8,13 @@
  * - at most one non-ended session per token, enforced by the row lock plus the `session_token_open_unique` index
  *   (correctness-F2); a lost race answers `token_busy`, except when the open session is this Desk's own knock.
  */
-import { sanitiseText, SANITISE_LIMITS, sha256Hex, WS_CLOSE } from '@indiansassist/shared';
+import { sanitiseText, SANITISE_LIMITS, sha256Hex, WS_CLOSE, type UserRole } from '@indiansassist/shared';
 import {
   addParticipant,
   createSession,
   expireTokenIfDue,
   findOpenSessionByToken,
+  findTokenByTid,
   isUniqueViolation,
   lockToken,
   type SessionRow,
@@ -23,6 +24,7 @@ import { deskActor, piiHash, writeAudit } from '../lib/audit.js';
 import { randomSecret } from '../lib/crypto.js';
 import { refOf, userRefs } from '../lib/lookup.js';
 import { effectiveStatus } from '../lib/mappers.js';
+import { canActOnToken } from '../lib/rbac.js';
 import { iso } from '../lib/time.js';
 import type { Conn } from './conn.js';
 import type { SignalHub } from './hub.js';
@@ -113,5 +115,27 @@ export async function performKnock(
     expiresAt: iso(s.knockExpiresAt ?? now),
   });
   const creator = refOf(await userRefs(ctx.db, [tok.createdBy]), tok.createdBy);
-  for (const a of hub.assistsForToken(tok)) a.send(assistKnockMsg(s, tok, creator, true));
+  hub.toAssists(tok, assistKnockMsg(s, tok, creator, true));
+}
+
+/** The fields of an Assist user that "knock accept / deny" depends on. */
+export type KnockUser = { id: string; orgId: string; role: UserRole };
+
+/**
+ * Performs the held knocks of the Desks handled on this node that `user` may act on (section 7.5), after an eligible
+ * `assist.hello` here or on another node. performKnock re-checks, once the Desk's queue reaches it, that the Desk is
+ * still open and held and that the token is still active and unexpired (SEC-03, F4).
+ */
+export async function performHeldKnocks(hub: SignalHub, user: KnockUser): Promise<void> {
+  const { ctx } = hub;
+  for (const desk of hub.deskConns()) {
+    const d = desk.desk;
+    if (desk.closed || !d || !d.held || d.sessionId || d.orgId !== user.orgId) continue;
+    const tok = await findTokenByTid(ctx.db, d.tokenId);
+    if (!tok || !canActOnToken(user, tok)) continue;
+    desk.queue = desk.queue
+      .then(() => performKnock(hub, desk, tok, desk.desk?.heldLabel ?? 'Desk', { onBehalf: true }))
+      .catch((err: unknown) => ctx.log.error({ err, connectionId: desk.id }, 'held knock failed'));
+    await desk.queue;
+  }
 }

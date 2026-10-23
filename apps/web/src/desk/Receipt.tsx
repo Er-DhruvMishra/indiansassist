@@ -4,6 +4,7 @@ import { Button, Card } from '../components/ui';
 import { formatBytes } from '../lib/fileChunker';
 import { fmtDateTime, fmtDuration } from '../lib/format';
 import { buildReceipt, downloadText, receiptToText, type ReceiptFile } from '../lib/receipt';
+import type { DeskBrand } from './brand';
 import type { DeskSnapshot } from './deskController';
 import { DeskLayout } from './DeskLayout';
 
@@ -13,7 +14,7 @@ export function receiptFiles(snap: DeskSnapshot): ReceiptFile[] {
     .map((t) => ({ direction: t.outgoing ? 'sent' : 'received', name: t.name, bytes: t.size, sha256: t.sha256, reported: t.reported }));
 }
 
-export function Receipt({ snap }: { snap: DeskSnapshot }) {
+export function Receipt({ snap, brand }: { snap: DeskSnapshot; brand?: DeskBrand | null }) {
   const ended = snap.ended;
   const receipt = useMemo(
     () =>
@@ -31,7 +32,7 @@ export function Receipt({ snap }: { snap: DeskSnapshot }) {
   if (!receipt) return null;
   const base = `consent-receipt-${receipt.sessionId.slice(0, 8)}`;
   return (
-    <DeskLayout>
+    <DeskLayout brand={brand}>
       <h1 className="mb-2 text-2xl font-semibold">Session ended: your consent receipt</h1>
       <p className="mb-4 text-sm text-slate-700 dark:text-slate-300">Screen sharing has stopped. Keep this receipt for your records.</p>
       <Card>

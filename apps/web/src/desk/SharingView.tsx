@@ -104,6 +104,11 @@ export function SharingView({ ctrl, snap }: { ctrl: DeskController; snap: DeskSn
         </p>
         {snap.notice && <div className="mb-3"><Alert tone="amber">{snap.notice}</Alert></div>}
         {snap.signalStatus === 'reconnecting' && <div className="mb-3"><Alert tone="amber">Connection to the server lost, reconnecting...</Alert></div>}
+        {snap.mediaReconnecting && (
+          <div className="mb-3">
+            <Alert tone="amber">The connection to {tech} was interrupted. Reconnecting... You are still sharing; Stop sharing works at any time.</Alert>
+          </div>
+        )}
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
             <ChatPanel items={snap.chat} peerName={tech} peerTyping={snap.peerTyping} onSend={(t) => ctrl.sendChat(t)} onTyping={(a) => ctrl.setTyping(a)} />

@@ -71,6 +71,8 @@ async function toConsentScreen(): Promise<FakeWebSocket> {
   );
   expect(ws.ofType('desk.knock')).toHaveLength(1);
   expect(await screen.findByText('Waiting for Priya S to accept')).toBeTruthy();
+  // prd-F3: the room chrome is branded from desk.hello.ok.org.
+  expect(screen.getByTestId('desk-brand').textContent).toContain('Acme IT');
   expect(gdm).not.toHaveBeenCalled();
 
   act(() => ws.receive({ t: 'knock.ok', sessionId: IDS.session, resumeKey: 'rk-secret', expiresAt: LATER }));
@@ -124,6 +126,11 @@ describe('Desk consent gate', () => {
     const pc = FakePeerConnection.instances[0]!;
     expect(pc.channels.map((c) => c.label)).toEqual(['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl']);
     expect(pc.tracks).toContain(screenTrack);
+
+    // correctness-F6: a failed media path is visible on the Desk while ICE restarts.
+    act(() => pc.setConnectionState('failed'));
+    expect(await screen.findByText(/The connection to Anil K was interrupted/)).toBeTruthy();
+    expect(pc.restarts).toBe(1);
 
     // D4: Stop sharing => hard rule 2 (tracks stopped, connection closed) then WS session.end.
     await user.click(screen.getByRole('button', { name: 'Stop sharing' }));
@@ -214,6 +221,13 @@ describe('Desk consent gate', () => {
     expect(warn).toHaveBeenCalled();
     expect(screen.queryByText(/is asking to see your screen/)).toBeNull();
     expect(gdm).not.toHaveBeenCalled();
+  });
+
+  it('brands the room from the join lookup before the server answers', async () => {
+    sessionStorage.setItem('ia.join.brand', JSON.stringify({ displayName: 'Globex Help', accentColor: '#1d4ed8', logoData: null }));
+    renderRoom();
+    await socket();
+    expect((await screen.findByTestId('desk-brand')).textContent).toContain('Globex Help');
   });
 
   it('redirects to /join when the room has no stored token', async () => {

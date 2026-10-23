@@ -34,7 +34,7 @@ export async function revalidateConn(hub: SignalHub, conn: Conn): Promise<void> 
 
 /** Called from the hub tick: starts a re-validation for every authenticated socket that is due. */
 export function runAuthChecks(hub: SignalHub, now: number): void {
-  for (const c of hub.conns.values()) {
+  for (const c of hub.allConns()) {
     if (!c.principal || c.closed || c.authCheckInFlight) continue;
     if (now - c.lastAuthCheckAt < hub.ctx.timing.authRecheckMs) continue;
     c.authCheckInFlight = true;
@@ -48,15 +48,15 @@ export function runAuthChecks(hub: SignalHub, now: number): void {
 
 /** Re-validates every socket of a user right away (role / status change). */
 export async function refreshUserSockets(hub: SignalHub, userId: string): Promise<void> {
-  const mine = [...hub.conns.values()].filter((c) => c.principal?.user.id === userId && !c.closed);
+  const mine = hub.allConns().filter((c) => c.principal?.user.id === userId && !c.closed);
   await Promise.all(mine.map((c) => revalidateConn(hub, c)));
 }
 
 /** Waiting / held Desk sockets (no session yet) whose token expired. */
 export function closeExpiredWaitingDesks(hub: SignalHub, now: number): void {
-  for (const c of hub.conns.values()) {
+  for (const c of hub.deskConns()) {
     const d = c.desk;
-    if (c.closed || c.side !== 'desk' || !d || d.sessionId !== null || d.tokenExpiresAt > now) continue;
+    if (c.closed || !d || d.sessionId !== null || d.tokenExpiresAt > now) continue;
     c.error('token_gone', 'token is expired', undefined, { status: 'expired' });
     c.close(WS_CLOSE.forbidden, 'token expired');
   }

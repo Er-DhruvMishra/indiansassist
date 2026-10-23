@@ -8,8 +8,10 @@ import {
   findOpenSessionByToken,
   findTokenByTid,
   getSession,
+  lockSession,
   markTokenUsed,
   replaceParticipant,
+  SessionAlreadyEndedError,
   transitionSession,
   updateSession,
 } from '@indiansassist/db';
@@ -40,13 +42,13 @@ const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
 export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.hello'>): Promise<void> {
   const { ctx } = hub;
-  const lim = ctx.limiter.hit(`desk-hello:${conn.ip}`, 30, 60_000);
+  const lim = await ctx.limiter.hit(`desk-hello:${conn.ip}`, 30, 60_000);
   if (!lim.allowed) {
     ctx.metrics.rateLimited.inc();
     conn.error('rate_limited', 'too many attempts', msg.id, { retryAfterSec: lim.retryAfterSec });
     return conn.close(WS_CLOSE.rateLimited, 'rate limited');
   }
-  const v = await verifyTokenInput(ctx, msg.token, msg.resumeKey ? { resumeKey: msg.resumeKey } : {});
+  const v = await verifyTokenInput(ctx, msg.token, msg.resumeKey ? { resumeKey: msg.resumeKey, ip: conn.ip } : { ip: conn.ip });
   if (!v.ok) {
     conn.error(v.code as SignalErrorCode, v.message, msg.id, v.details);
     return conn.close(v.code === 'rate_limited' ? WS_CLOSE.rateLimited : WS_CLOSE.forbidden, v.code);
@@ -67,7 +69,11 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     heldLabel: null,
     tokenExpiresAt: tok.expiresAt.getTime(),
   };
-  if (v.resumeSession) return deskResume(hub, conn, v, msg.id);
+  if (v.resumeSession) {
+    // A session owned by another live node is resumed there; this node pipes the socket (section 7.6 N1).
+    if (await hub.bridge.forwardDeskResume(conn, v, msg.id)) return;
+    return deskResume(hub, conn, v, msg.id);
+  }
   if (await findOpenSessionByToken(ctx.db, tok.id)) {
     conn.side = null;
     conn.desk = null;
@@ -95,7 +101,7 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
  * a Desk attached and does nothing; on failure the registration is rolled back (and the grace re-armed if the
  * session is still live) and the error reaches the hub, which answers and closes the socket (correctness-F8).
  */
-async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, reId: string | undefined): Promise<void> {
+export async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, reId: string | undefined): Promise<void> {
   const { ctx } = hub;
   const s0 = v.resumeSession!;
   const wasActive = s0.state === 'active';
@@ -107,6 +113,8 @@ async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, reId: st
   conn.desk!.sessionId = s0.id;
   try {
     await ctx.db.transaction(async (tx) => {
+      const locked = await lockSession(tx, s0.id); // session row before its participant rows (lock order, F1)
+      if (!locked || locked.state === 'ended') throw new SessionAlreadyEndedError('ended');
       await replaceParticipant(tx, { sessionId: s0.id, role: 'desk', label: s0.deskLabel ?? 'Desk', connectionId: conn.id });
       if (wasActive) {
         await transitionSession(tx, s0.id, 'consent_pending', {
@@ -176,7 +184,7 @@ function tokenGone(conn: Conn, status: string, reId: string | undefined): void {
 export async function handleDeskPoll(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.poll'>): Promise<void> {
   const d = conn.desk!;
   const tok = await findTokenByTid(hub.ctx.db, d.tokenId);
-  const technicianOnline = tok ? hub.assistsForToken(tok).length > 0 : false;
+  const technicianOnline = tok ? await hub.techOnline(tok) : false;
   const live = d.sessionId ? hub.live.get(d.sessionId) : undefined;
   if (live && live.state !== 'ended') {
     const matched = live.state !== 'knocked';
@@ -204,13 +212,13 @@ export async function handleDeskKnock(hub: SignalHub, conn: Conn, msg: SignalOf<
   const tok = await findTokenByTid(ctx.db, d.tokenId);
   if (!tok || effectiveStatus(tok) !== 'active') return tokenGone(conn, tok ? effectiveStatus(tok) : 'revoked', msg.id);
   if (await findOpenSessionByToken(ctx.db, tok.id)) return conn.error('token_busy', 'token is busy', msg.id);
-  const lim = ctx.limiter.hit(`knock:${tok.id}`, 5, 10 * 60_000);
+  const lim = await ctx.limiter.hit(`knock:${tok.id}`, 5, 10 * 60_000);
   if (!lim.allowed) {
     ctx.metrics.rateLimited.inc();
     return conn.error('rate_limited', 'too many knocks on this token', msg.id, { retryAfterSec: lim.retryAfterSec });
   }
   const label = deskLabelOf(msg.deskLabel ?? d.helloLabel);
-  if (hub.assistsForToken(tok).length === 0) {
+  if (!(await hub.techOnline(tok))) {
     d.held = true;
     d.heldLabel = label;
     await markDeskWaiting(hub, conn);

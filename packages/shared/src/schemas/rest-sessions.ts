@@ -184,13 +184,31 @@ export const auditLastVerifyResponseSchema = auditVerifyResponseSchema.nullable(
 // ---------- recordings (6.10) ----------
 
 /**
- * Recordings are WebM only (contracts section 9). Anything else (e.g. `text/html`, `application/javascript`,
+ * Recording media types (contracts section 9, SEC-01): an allow-list of audio / video container types, each with an
+ * optional `codecs` parameter (quoted or not). Anything else (e.g. `text/html`, `application/javascript`,
  * `image/svg+xml`) is refused, because the stored value is part of the recording row and must never describe an
- * active document type.
+ * active document type. The `/file` route serves only the base type of this list, never the stored string.
  */
-export const RECORDING_MIME_RE = /^video\/webm(;\s*codecs=[A-Za-z0-9,.+\-\s]+)?$/;
+export const RECORDING_MEDIA_TYPES = ['video/webm', 'video/mp4', 'audio/webm', 'audio/ogg'] as const;
+export type RecordingMediaType = (typeof RECORDING_MEDIA_TYPES)[number];
 
-const mimeSchema = z.string().max(255).regex(RECORDING_MIME_RE, 'recordings must be video/webm');
+export const RECORDING_MIME_RE = /^(video\/webm|video\/mp4|audio\/webm|audio\/ogg)(;\s*codecs=("[A-Za-z0-9,.+\-\s]+"|[A-Za-z0-9,.+\-\s]+))?$/;
+
+/** The allow-listed base type of a recording mime, or null when it is not on the list. */
+export function recordingMediaType(mime: string): RecordingMediaType | null {
+  const m = RECORDING_MIME_RE.exec(mime);
+  return m ? (m[1] as RecordingMediaType) : null;
+}
+
+/** File extension for the download filename of a recording of base type `t`. */
+export function recordingFileExtension(t: RecordingMediaType): string {
+  return t === 'video/mp4' ? 'mp4' : t === 'audio/ogg' ? 'ogg' : 'webm';
+}
+
+const mimeSchema = z
+  .string()
+  .max(255)
+  .regex(RECORDING_MIME_RE, `recordings must be one of ${RECORDING_MEDIA_TYPES.join(', ')}`);
 
 export const recordingSchema = z.object({
   id: uuidSchema,

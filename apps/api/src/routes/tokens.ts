@@ -124,7 +124,7 @@ export async function tokenRoutes(app: FastifyInstance, ctx: AppContext): Promis
 
   app.post('/api/v1/tokens/public-lookup', { config: limits.publicLookup }, async (req): Promise<PublicToken> => {
     const body = parseOr400(publicLookupRequestSchema, req.body);
-    const v = await verifyTokenInput(ctx, body.code);
+    const v = await verifyTokenInput(ctx, body.code, { ip: req.ip });
     if (!v.ok) {
       if (v.code === 'rate_limited') ctx.metrics.rateLimited.inc();
       fail(v.code, v.message, v.details);

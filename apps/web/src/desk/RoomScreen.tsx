@@ -1,10 +1,12 @@
 /** Desk room screens: waiting, consent, sharing, ended / receipt, errors (contracts section 12 / 12.1). */
+import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { CopyButton } from '../components/CopyButton';
 import { DESK_SHORTCUTS } from '../components/ShortcutHelp';
 import { Alert, Button, Spinner } from '../components/ui';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { humanise } from '../lib/format';
+import { readJoinBrand, type DeskBrand } from './brand';
 import { ConsentScreen } from './ConsentScreen';
 import type { DeskController, DeskSnapshot } from './deskController';
 import { DeskLayout } from './DeskLayout';
@@ -21,10 +23,10 @@ const ERROR_TEXT: Record<string, string> = {
   join_unsupported: 'The IndiansAssist client for this package is not available yet.',
 };
 
-function WaitingScreen({ snap, token }: { snap: DeskSnapshot; token: string }) {
+function WaitingScreen({ snap, token, brand }: { snap: DeskSnapshot; token: string; brand: DeskBrand | null }) {
   const tech = snap.hello?.technician?.name;
   return (
-    <DeskLayout>
+    <DeskLayout brand={brand}>
       <h1 className="mb-3 text-2xl font-semibold">{tech ? `Waiting for ${tech} to accept` : 'Waiting for your technician'}</h1>
       <div role="status" aria-live="polite" className="mb-4 flex flex-col gap-2 text-sm">
         {snap.phase === 'connecting' && <Spinner label="Connecting" />}
@@ -39,7 +41,7 @@ function WaitingScreen({ snap, token }: { snap: DeskSnapshot; token: string }) {
   );
 }
 
-function EndedPlain({ ctrl, snap }: { ctrl: DeskController; snap: DeskSnapshot }) {
+function EndedPlain({ ctrl, snap, brand }: { ctrl: DeskController; snap: DeskSnapshot; brand: DeskBrand | null }) {
   const reason = snap.ended?.endReason;
   const canRetry = reason === 'denied' || reason === 'timeout';
   const text =
@@ -51,7 +53,7 @@ function EndedPlain({ ctrl, snap }: { ctrl: DeskController; snap: DeskSnapshot }
           ? 'You declined. Nothing was shared.'
           : `The session ended (${humanise(reason ?? 'ended')}). Nothing was shared.`;
   return (
-    <DeskLayout>
+    <DeskLayout brand={brand}>
       <h1 className="mb-3 text-2xl font-semibold">Session ended</h1>
       <p className="mb-4" role="status">{text}</p>
       {snap.notice && <Alert tone="amber">{snap.notice}</Alert>}
@@ -68,11 +70,14 @@ function EndedPlain({ ctrl, snap }: { ctrl: DeskController; snap: DeskSnapshot }
 export function RoomScreen({ ctrl, snap, token }: { ctrl: DeskController; snap: DeskSnapshot; token: string }) {
   // D7: the document title is prefixed "(Sharing) " while sharing.
   usePageTitle(snap.phase === 'sharing' ? '(Sharing) Support session' : 'Support session');
+  // prd-F3: the org's branding from the join lookup until the server's copy arrives.
+  const joinBrand = useMemo(() => readJoinBrand(), []);
+  const brand: DeskBrand | null = snap.created?.org ?? snap.hello?.org ?? joinBrand;
   switch (snap.phase) {
     case 'connecting':
     case 'waiting':
     case 'held':
-      return <WaitingScreen snap={snap} token={token} />;
+      return <WaitingScreen snap={snap} token={token} brand={brand} />;
     case 'consent':
     case 'picking':
     case 'starting':
@@ -81,16 +86,16 @@ export function RoomScreen({ ctrl, snap, token }: { ctrl: DeskController; snap: 
       return <SharingView ctrl={ctrl} snap={snap} />;
     case 'ending':
       return (
-        <DeskLayout>
+        <DeskLayout brand={brand}>
           <Spinner label="Stopping. All sharing has already stopped on this computer." />
         </DeskLayout>
       );
     case 'ended':
-      return snap.ended?.reachedActive ? <Receipt snap={snap} /> : <EndedPlain ctrl={ctrl} snap={snap} />;
+      return snap.ended?.reachedActive ? <Receipt snap={snap} brand={brand} /> : <EndedPlain ctrl={ctrl} snap={snap} brand={brand} />;
     case 'error':
     default:
       return (
-        <DeskLayout shortcuts={DESK_SHORTCUTS}>
+        <DeskLayout shortcuts={DESK_SHORTCUTS} brand={brand}>
           <h1 className="mb-3 text-2xl font-semibold">Cannot join this session</h1>
           <Alert>{(snap.error && ERROR_TEXT[snap.error.code]) ?? snap.error?.message ?? 'The connection was closed.'}</Alert>
           <Link to="/join" className="mt-4 inline-block font-medium text-teal-800 underline dark:text-teal-300">

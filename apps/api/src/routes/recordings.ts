@@ -8,7 +8,9 @@ import {
   isRegionServed,
   LIMITS,
   recordingCompleteRequestSchema,
+  recordingFileExtension,
   recordingFileQuerySchema,
+  recordingMediaType,
   recordingMetaSchema,
   recordingUploadInitRequestSchema,
 } from '@indiansassist/shared';
@@ -36,6 +38,11 @@ import {
 import { requireSessionAssist, scopedSession, UUID_RE } from '../services/scope.js';
 
 const PRESIGN_TTL_SEC = 600;
+
+/** Object content type: the allow-listed base type only (SEC-01), so a direct object GET can never be a document. */
+function storedType(rec: RecordingRow): string {
+  return recordingMediaType(rec.mime) ?? 'application/octet-stream';
+}
 
 async function scopedRecording(ctx: AppContext, p: Principal, id: string): Promise<RecordingRow> {
   const rec = UUID_RE.test(id) ? await getRecording(ctx.db, id) : null;
@@ -92,7 +99,7 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
       const rec = await prepareRecording(ctx, session, p.user.id, meta);
       let result: { bytes: number; sha256: string };
       try {
-        result = await ctx.storage.put(rec.storageKey, part.file, { contentType: rec.mime });
+        result = await ctx.storage.put(rec.storageKey, part.file, { contentType: storedType(rec) });
         if (part.file.truncated) throw new HttpError('payload_too_large', 'recording exceeds 100 MiB');
         if (result.bytes === 0) throw new HttpError('validation_failed', 'the recording is empty');
       } catch (err) {
@@ -132,7 +139,7 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
 
   app.put<{ Params: { uploadId: string; n: string } }>('/api/v1/recordings/uploads/:uploadId/parts/:n', async (req) => {
     const p = await authenticate(ctx, req, TECH_ROLES);
-    const lim = ctx.limiter.hit(`recording-parts:${p.user.id}`, 60, 60_000);
+    const lim = await ctx.limiter.hit(`recording-parts:${p.user.id}`, 60, 60_000);
     if (!lim.allowed) fail('rate_limited', 'too many recording parts', { retryAfterSec: lim.retryAfterSec });
     const rec = await uploadTarget(ctx, p, req.params.uploadId);
     const parts = partsOf(rec.bytes);
@@ -160,7 +167,7 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
       for (let i = 1; i <= parts; i++) for await (const chunk of await storage.get(partKey(rec.storageKey, i))) yield chunk as Buffer;
     }
     const joined = Readable.from(concat());
-    const result = await ctx.storage.put(rec.storageKey, joined, { contentType: rec.mime });
+    const result = await ctx.storage.put(rec.storageKey, joined, { contentType: storedType(rec) });
     if (result.bytes !== rec.bytes) {
       await ctx.storage.delete(rec.storageKey);
       fail('validation_failed', `assembled size ${result.bytes} does not equal declared ${rec.bytes}`);
@@ -178,7 +185,11 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
     const p = await authenticate(ctx, req);
     const rec = await scopedRecording(ctx, p, req.params.id);
     if (rec.status !== 'stored') fail('not_found', 'recording is not stored');
-    const url = await ctx.storage.presignGet(rec.storageKey, PRESIGN_TTL_SEC);
+    const type = recordingMediaType(rec.mime);
+    const url = await ctx.storage.presignGet(rec.storageKey, PRESIGN_TTL_SEC, {
+      contentType: type ?? 'application/octet-stream',
+      filename: `${rec.id}.${type ? recordingFileExtension(type) : 'bin'}`,
+    });
     return { url, expiresAt: iso(new Date(Date.now() + PRESIGN_TTL_SEC * 1000)) };
   });
 
@@ -195,14 +206,18 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
       if (q.data.exp < Math.floor(Date.now() / 1000)) fail('link_expired', 'this download link has expired');
       const head = await ctx.storage.head(rec.storageKey);
       if (!head) fail('not_found', 'not found');
-      // This route is served from API_ORIGIN (= WEB_ORIGIN in production): the bytes are uploaded by a user and
-      // must never render as a document there (SEC-01). Fixed type, download only, no sniffing, sandboxed.
+      // The bytes are uploaded by a user and must never render as a document on an origin that holds a session
+      // cookie (SEC-01): only the allow-listed base type is sent (never the stored string), download only, no
+      // sniffing, sandboxed, not cached. RECORDING_DOWNLOAD_ORIGIN moves the route off the web origin entirely.
+      const type = recordingMediaType(rec.mime);
+      const filename = `${rec.id}.${type ? recordingFileExtension(type) : 'bin'}`;
       void reply
-        .header('Content-Type', 'video/webm')
+        .header('Content-Type', type ?? 'application/octet-stream')
         .header('Content-Length', String(head.bytes))
-        .header('Content-Disposition', `attachment; filename="${rec.id}.webm"`)
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
         .header('X-Content-Type-Options', 'nosniff')
         .header('Content-Security-Policy', "sandbox; default-src 'none'")
+        .header('Cross-Origin-Resource-Policy', 'same-origin')
         .header('Cache-Control', 'private, no-store');
       return reply.send(await ctx.storage.get(rec.storageKey));
     },

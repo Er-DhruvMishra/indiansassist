@@ -9,6 +9,7 @@ import { getOrg, getSession } from '@indiansassist/db';
 import { deskActor, userActor, writeAudit } from '../lib/audit.js';
 import { endSessionFlow } from '../services/session-end.js';
 import type { Conn, Live } from './conn.js';
+import { forbiddenKey } from './forbidden.js';
 import type { SignalHub } from './hub.js';
 
 /** The live entry when `conn` is the registered participant of `sessionId`; otherwise replies forbidden. */
@@ -26,16 +27,10 @@ export async function authorizeSession(
   return null;
 }
 
-/** `signal.forbidden` is written at most once per (connection, session) in this window, carrying `suppressed`. */
-export const FORBIDDEN_COALESCE_MS = 60_000;
-/** More forbidden frames than this within a minute close the socket `4403`. */
-export const FORBIDDEN_CLOSE_AFTER = 20;
-
 /**
- * `error forbidden`, a warn log line and, for an authenticated Assist, `signal.forbidden` (sections 5.3, 7.2).
- * The chain entry is coalesced per (connection, session) (SEC-05): the first attempt writes an entry, repeats within
- * FORBIDDEN_COALESCE_MS are counted and reported as `suppressed` on the next entry; a socket that keeps sending
- * forbidden frames is closed `4403`.
+ * `error forbidden`, a warn log line and, for an authenticated Assist, `signal.forbidden` (sections 5.3, 6.12, 7.2).
+ * Entries and the flood close are budgeted per principal (user / Desk token) on the hub, not per socket, so random
+ * session ids and reconnect loops cannot multiply rows (SEC-05, forbidden.ts).
  */
 export async function refuse(
   hub: SignalHub,
@@ -46,32 +41,24 @@ export async function refuse(
 ): Promise<void> {
   const { ctx } = hub;
   conn.error('forbidden', 'not a participant of this session', re);
-  const now = Date.now();
-  conn.forbiddenTimes = conn.forbiddenTimes.filter((t) => t > now - 60_000);
-  conn.forbiddenTimes.push(now);
-  const p = conn.principal;
-  const key = sessionId ?? '-';
-  const prior = conn.forbidden.get(key);
-  const coalesced = prior !== undefined && now - prior.writtenAt < FORBIDDEN_COALESCE_MS;
-  if (coalesced) prior.suppressed += 1;
-  else ctx.log.warn({ connectionId: conn.id, sessionId, messageType, side: conn.side }, 'signal forbidden');
-  if (conn.forbiddenTimes.length > FORBIDDEN_CLOSE_AFTER) {
-    ctx.log.warn({ connectionId: conn.id, side: conn.side }, 'signal forbidden flood; closing');
+  const key = forbiddenKey(conn);
+  const d = hub.forbidden.record(key, sessionId);
+  if (d.flood) {
+    ctx.log.warn({ connectionId: conn.id, side: conn.side, principal: key, recent: d.recent }, 'signal forbidden flood; closing');
     conn.close(WS_CLOSE.forbidden, 'too many forbidden frames');
+    return;
   }
-  if (conn.side !== 'assist' || !p || coalesced) return;
-  conn.forbidden.set(key, { writtenAt: now, suppressed: 0 });
-  if (conn.forbidden.size > 256) {
-    const oldest = conn.forbidden.keys().next().value;
-    if (oldest !== undefined) conn.forbidden.delete(oldest);
-  }
+  if (!d.write) return;
+  ctx.log.warn({ connectionId: conn.id, sessionId, messageType, side: conn.side, suppressed: d.suppressed }, 'signal forbidden');
+  const p = conn.principal;
+  if (conn.side !== 'assist' || !p) return;
   const s = sessionId ? await getSession(ctx.db, sessionId) : null;
   const org = (await getOrg(ctx.db, p.org.id)) ?? p.org;
   await writeAudit(ctx, ctx.db, org, {
     sessionId: s && s.orgId === org.id ? s.id : null,
     actor: userActor(p.user),
     action: 'signal.forbidden',
-    data: { connectionId: conn.id, messageType, sessionId, ...(prior?.suppressed ? { suppressed: prior.suppressed } : {}) },
+    data: { connectionId: conn.id, messageType, sessionId, ...(d.suppressed > 0 ? { suppressed: d.suppressed } : {}) },
   });
 }
 

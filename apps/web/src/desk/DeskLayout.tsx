@@ -1,13 +1,27 @@
-/** Desk page chrome: no cross-origin resources (contracts section 12), one landmark set. */
+/** Desk page chrome: no cross-origin resources (contracts section 12), one landmark set, org branding. */
 import type { ReactNode } from 'react';
 import { ShortcutHelp, type Shortcut } from '../components/ShortcutHelp';
 import { APP_NAME } from '../config';
+import { safeAccent } from '../lib/contrast';
+import { safeLogo, type DeskBrand } from './brand';
 
-export function DeskLayout({ children, wide, shortcuts }: { children: ReactNode; wide?: boolean; shortcuts?: Shortcut[] }) {
+export function DeskLayout({ children, wide, shortcuts, brand }: { children: ReactNode; wide?: boolean; shortcuts?: Shortcut[]; brand?: DeskBrand | null }) {
+  const logo = safeLogo(brand?.logoData);
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
-        <span className="text-lg font-bold text-teal-800 dark:text-teal-300">{APP_NAME}</span>
+      <header
+        className="flex items-center justify-between border-b border-t-4 border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900"
+        style={{ borderTopColor: safeAccent(brand?.accentColor) }}
+      >
+        {brand ? (
+          <span className="flex items-center gap-2" data-testid="desk-brand">
+            {logo && <img src={logo} alt="" className="h-8 w-8 rounded object-contain" />}
+            <span className="text-lg font-bold">{brand.displayName}</span>
+            <span className="text-xs text-slate-600 dark:text-slate-400">with {APP_NAME}</span>
+          </span>
+        ) : (
+          <span className="text-lg font-bold text-teal-800 dark:text-teal-300">{APP_NAME}</span>
+        )}
         <ShortcutHelp extra={shortcuts} />
       </header>
       <main id="main" className={`mx-auto w-full flex-1 px-4 py-8 ${wide ? 'max-w-6xl' : 'max-w-xl'}`}>

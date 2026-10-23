@@ -1,12 +1,14 @@
 /**
  * CORS for WEB_ORIGIN, the section 6.1 CSRF rule (header `X-Requested-With: IndiansAssist` on every non-GET/HEAD/
  * OPTIONS request under /api/v1, and `Origin === WEB_ORIGIN` when present) and the @fastify/rate-limit setup of
- * section 6.12 (IP keyed, 600 / minute default, tighter per-route limits declared by the routes).
+ * section 6.12 (IP keyed, 600 / minute default, tighter per-route limits declared by the routes). With the redis
+ * presence driver the counters live in Redis (`ia:rl-http:`), so the limits hold across api replicas.
  */
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from '@indiansassist/shared';
 import type { FastifyInstance } from 'fastify';
+import { RedisPresence } from '../adapters/presence-redis.js';
 import type { AppContext } from '../context.js';
 import { HttpError } from '../errors.js';
 
@@ -36,7 +38,9 @@ export async function registerSecurity(app: FastifyInstance, ctx: AppContext): P
   });
 
   if (!ctx.config.rateLimitDisabled) {
+    const redis = ctx.presence instanceof RedisPresence ? ctx.presence.native : null;
     await app.register(rateLimit, {
+      ...(redis ? { redis, nameSpace: 'ia:rl-http:' } : {}),
       global: true,
       max: 600,
       timeWindow: 60_000,

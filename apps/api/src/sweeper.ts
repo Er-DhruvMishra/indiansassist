@@ -1,6 +1,8 @@
 /**
- * Boot cleanup (contracts section 7.6 N3) and the 10 s sweeper (N4): deadline timeouts, sessions owned by lost
- * nodes, login_attempt retention, expired chunked uploads and hourly periodic checkpoints (section 5.6 C2).
+ * Boot cleanup (contracts section 7.6 N3) and the 10 s sweeper (N4): deadline timeouts, sessions left on revoked
+ * tokens, sessions owned by lost nodes, login_attempt retention, expired / abandoned uploads and hourly periodic
+ * checkpoints (section 5.6 C2). Every node starts a sweeper, but a pass runs only on the holder of the `sweeper`
+ * presence lease (one node of the cluster at a time; the memory driver always holds it).
  */
 import {
   deleteLoginAttemptsBefore,
@@ -23,6 +25,8 @@ import { deleteParts, failRecording } from './services/recording-service.js';
 import { endSessionQuietly } from './services/session-end.js';
 
 const HOUR_MS = 60 * 60_000;
+/** Lease TTL: three missed passes before another node takes over. */
+const LEASE_TTL_SEC = 30;
 
 /** N3: a restarted node closes only its own non-ended rows. */
 export async function bootCleanup(ctx: AppContext): Promise<number> {
@@ -52,6 +56,7 @@ export class Sweeper {
     if (this.running) return;
     this.running = true;
     try {
+      if (!(await this.ctx.presence.tryLease('sweeper', this.ctx.config.nodeId, LEASE_TTL_SEC))) return;
       await this.deadlines();
       await this.revokedTokens();
       await this.lostNodes();
@@ -82,9 +87,17 @@ export class Sweeper {
    * N4 lost-node sweep. Only meaningful with a presence driver that sees other nodes; with the single-node
    * `memory` driver every foreign node looks lost, so the sweep is skipped (a second replica on the same database
    * would otherwise end the first one's live sessions, prd-F2). config.ts documents single-replica for `memory`.
+   * When this node's own heartbeat key is missing the presence store lost its state (flush, failover): every node
+   * would look lost, so the pass is skipped and the heartbeat rewritten.
    */
   private async lostNodes(): Promise<void> {
     if (!this.ctx.presence.multiNode) return;
+    const own = this.ctx.config.nodeId;
+    if (!(await this.ctx.presence.isNodeAlive(own))) {
+      await this.ctx.presence.heartbeatNode(own, 90);
+      this.ctx.log.warn({ nodeId: own }, 'own presence heartbeat was missing; lost-node sweep skipped');
+      return;
+    }
     const rows = await this.ctx.db
       .select({ id: sessionTable.id, nodeId: sessionTable.nodeId })
       .from(sessionTable)
@@ -96,12 +109,22 @@ export class Sweeper {
     }
   }
 
+  /**
+   * Expired chunked uploads (24 h) and abandoned single uploads (1 h, a crash mid-stream) are failed and their
+   * objects deleted (SEC-08): storage first, so a failure leaves the row `uploading` for the next pass instead of
+   * a `failed` row whose parts nobody deletes. One bad row does not stop the others.
+   */
   private async expiredUploads(): Promise<void> {
     for (const rec of await listExpiredUploads(this.ctx.db)) {
-      const o = await getOrg(this.ctx.db, rec.orgId);
-      if (!o) continue;
-      await failRecording(this.ctx, o, rec, 'upload_expired');
-      await deleteParts(this.ctx, rec);
+      try {
+        const o = await getOrg(this.ctx.db, rec.orgId);
+        if (!o) continue;
+        await deleteParts(this.ctx, rec);
+        await this.ctx.storage.delete(rec.storageKey);
+        await failRecording(this.ctx, o, rec, 'upload_expired');
+      } catch (err) {
+        this.ctx.log.error({ err, recordingId: rec.id }, 'expired upload cleanup failed; retried next pass');
+      }
     }
   }
 

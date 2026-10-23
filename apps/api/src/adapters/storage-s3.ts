@@ -17,7 +17,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { assertValidKey, HashingStream, ObjectNotFoundError, toReadable, type ObjectStorage } from './storage.js';
+import { assertValidKey, HashingStream, ObjectNotFoundError, toReadable, type ObjectStorage, type PresignOpts } from './storage.js';
 
 export type S3StorageOptions = {
   endpoint: string;
@@ -105,14 +105,14 @@ export class S3ObjectStorage implements ObjectStorage {
     }
   }
 
-  async presignGet(key: string, ttlSeconds: number): Promise<string> {
+  async presignGet(key: string, ttlSeconds: number, opts: PresignOpts = {}): Promise<string> {
     assertValidKey(key);
-    // Download only, fixed type (SEC-01), whatever the object was stored with.
-    const name = key.split('/').pop() ?? 'recording.webm';
+    // Download only, with the caller's allow-listed type (SEC-01), whatever the object was stored with.
+    const name = (opts.filename ?? key.split('/').pop() ?? 'recording.webm').replace(/[^A-Za-z0-9._-]/g, '_');
     const cmd = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
-      ResponseContentType: 'video/webm',
+      ResponseContentType: opts.contentType ?? 'application/octet-stream',
       ResponseContentDisposition: `attachment; filename="${name}"`,
     });
     return getSignedUrl(this.client, cmd, { expiresIn: ttlSeconds });

@@ -17,6 +17,7 @@ const NAV: { to: string; label: string; cap?: Capability; end?: boolean }[] = [
   { to: '/app/audit', label: 'Audit', cap: 'audit.org' },
   { to: '/app/residency', label: 'Residency', cap: 'residency' },
   { to: '/app/users', label: 'Users', cap: 'users.list' },
+  { to: '/app/branding', label: 'Branding', cap: 'branding' },
   { to: '/app/account', label: 'Account' },
 ];
 

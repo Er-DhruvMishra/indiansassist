@@ -97,6 +97,7 @@ const envSchema = z.object({
   OIDC_CLIENT_SECRET: str(''),
   LOG_LEVEL: str('info'),
   RATE_LIMIT_DISABLED: bool(false),
+  RECORDING_DOWNLOAD_ORIGIN: str(''),
   ORG_STORAGE_QUOTA_BYTES: int(50 * 1024 ** 3),
   ORG_MAX_OPEN_UPLOADS: int(10),
   USER_MAX_OPEN_UPLOADS: int(3),
@@ -140,6 +141,8 @@ export type Config = {
   logLevel: string;
   rateLimitDisabled: boolean;
   /** Storage quotas (section 6.10): bytes per org (0 = unlimited), open uploads per org / user, upload window. */
+  /** Origin of the fs driver's signed `/file` URLs (SEC-01); defaults to API_ORIGIN. */
+  recordingDownloadOrigin: string;
   recordingQuota: { orgBytes: number; orgOpenUploads: number; userOpenUploads: number; uploadWindowSec: number };
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
@@ -231,7 +234,14 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
   } catch {
     problems.push('API_ORIGIN is not a URL');
   }
+  const downloadOrigin = e.RECORDING_DOWNLOAD_ORIGIN !== '' ? e.RECORDING_DOWNLOAD_ORIGIN.replace(/\/+$/, '') : apiOrigin;
+  try {
+    if (new URL(downloadOrigin).origin !== downloadOrigin) problems.push('RECORDING_DOWNLOAD_ORIGIN must be an origin (no path)');
+  } catch {
+    problems.push('RECORDING_DOWNLOAD_ORIGIN is not a URL');
+  }
   if (production) {
+    if (!downloadOrigin.startsWith('https:')) problems.push('RECORDING_DOWNLOAD_ORIGIN must be https: in production');
     if (e.DB_APP_ROLE === '') problems.push('DB_APP_ROLE is required in production');
     if (turnUrls.length > 0 && e.TURN_SECRET.length < 32)
       problems.push('TURN_SECRET must be >= 32 chars when TURN_URLS is set');
@@ -288,6 +298,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     authProvider: e.AUTH_PROVIDER,
     logLevel: e.LOG_LEVEL,
     rateLimitDisabled: e.RATE_LIMIT_DISABLED,
+    recordingDownloadOrigin: downloadOrigin,
     recordingQuota: {
       orgBytes: e.ORG_STORAGE_QUOTA_BYTES,
       orgOpenUploads: Math.max(1, e.ORG_MAX_OPEN_UPLOADS),

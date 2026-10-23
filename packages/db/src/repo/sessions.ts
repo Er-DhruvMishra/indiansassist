@@ -36,6 +36,16 @@ export async function getSession(exec: Executor, id: string): Promise<SessionRow
   return row ?? null;
 }
 
+/**
+ * Row-locks a session (`select ... for update`) and returns it. The first statement of any transaction that touches a
+ * session's child rows (participants, files) before transitioning it, so the session row is always locked first
+ * (lock order, see audit.ts).
+ */
+export async function lockSession(exec: Executor, id: string): Promise<SessionRow | null> {
+  const [row] = await exec.select().from(session).where(eq(session.id, id)).limit(1).for('update');
+  return row ?? null;
+}
+
 /** The non-ended session on a token, if any (`token_busy`, resume). */
 export async function findOpenSessionByToken(exec: Executor, tokenId: string): Promise<SessionRow | null> {
   const [row] = await exec

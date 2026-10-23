@@ -27,6 +27,7 @@ import {
   type AuditEntry,
   type AuditVerifyResponse,
   type AuthResponse,
+  type BrandingPatchRequest,
   type CreateTokenResponse,
   type FileEventData,
   type IceResponse,
@@ -75,6 +76,8 @@ export const authApi = {
 export const orgApi = {
   current: () => api.get<Org>('/orgs/current', { schema: orgSchema }),
   residency: () => api.get<ResidencyReport>('/orgs/current/residency', { schema: residencyReportSchema }),
+  /** PRD 12.15 white label (section 6.6, org_admin): `null` clears a field; the logo is a data: URL only. */
+  updateBranding: (patch: BrandingPatchRequest) => api.patch<Org>('/orgs/current/branding', patch, { schema: orgSchema }),
 };
 
 export const usersApi = {

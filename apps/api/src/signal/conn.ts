@@ -1,4 +1,8 @@
-/** One `/signal` socket and the per-session live registry entry (contracts section 7.2). */
+/**
+ * One `/signal` socket and the per-session live registry entry (contracts section 7.2). A Conn talks through a
+ * Transport: the local WebSocket, or (on the node that owns a session) the presence bridge to the node that holds
+ * the real socket (section 7.6 N1, bridge.ts).
+ */
 import { randomUUID } from 'node:crypto';
 import type { SessionPath, SessionState, SignalErrorCode } from '@indiansassist/shared';
 import WebSocket from 'ws';
@@ -20,8 +24,27 @@ export type DeskInfo = {
   tokenExpiresAt: number;
 };
 
+/** Where a Conn's frames go. */
+export interface Transport {
+  isOpen(): boolean;
+  send(frame: string): void;
+  close(code: number, reason: string): void;
+  terminate(): void;
+}
+
+export function wsTransport(ws: WebSocket): Transport {
+  return {
+    isOpen: () => ws.readyState === WebSocket.OPEN,
+    send: (frame) => ws.send(frame),
+    close: (code, reason) => ws.close(code, reason),
+    terminate: () => ws.terminate(),
+  };
+}
+
+/** Most session ids one socket remembers a remote owner for. */
+const MAX_ROUTES = 64;
+
 export class Conn {
-  readonly id = randomUUID();
   side: 'assist' | 'desk' | null = null;
   desk: DeskInfo | null = null;
   readonly openedAt = Date.now();
@@ -41,32 +64,45 @@ export class Conn {
   /** Last time the cookie principal was re-validated against auth_session / user (section 7.2). */
   lastAuthCheckAt = Date.now();
   authCheckInFlight = false;
-  /** `signal.forbidden` coalescing: per session id, when the last entry was written and how many were suppressed. */
-  readonly forbidden = new Map<string, { writtenAt: number; suppressed: number }>();
-  /** Timestamps of forbidden attempts in the last minute (closed `4403` beyond the limit). */
-  forbiddenTimes: number[] = [];
+  /** A proxy, on a session's owner node, for a socket held by another node (bridge.ts). */
+  readonly remote: boolean = false;
+  /** Desk socket resumed onto a session owned by another node: every frame after hello is forwarded there. */
+  pipeTo: string | null = null;
+  /** Nodes this socket's frames were forwarded to (told `closed` when the socket goes). */
+  readonly pipes = new Set<string>();
+  /** Assist socket: session id -> owner node for sessions owned by another node. */
+  readonly routes = new Map<string, string>();
 
   constructor(
-    readonly ws: WebSocket,
+    readonly transport: Transport,
     readonly ip: string,
     readonly userAgent: string | null,
     /** Resolved from the upgrade cookie; required for `assist.hello`. */
     public principal: Principal | null,
+    readonly id: string = randomUUID(),
   ) {}
+
+  route(sessionId: string, nodeId: string): void {
+    if (this.routes.size >= MAX_ROUTES && !this.routes.has(sessionId)) {
+      const oldest = this.routes.keys().next().value;
+      if (oldest !== undefined) this.routes.delete(oldest);
+    }
+    this.routes.set(sessionId, nodeId);
+  }
 
   get helloed(): boolean {
     return this.side !== null;
   }
 
   send(msg: Record<string, unknown>): void {
-    if (this.closed || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify(msg));
+    if (this.closed || !this.transport.isOpen()) return;
+    this.transport.send(JSON.stringify(msg));
   }
 
   /** Forwards an already-serialised frame verbatim (webrtc.* relay). */
   sendRaw(frame: string): void {
-    if (this.closed || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(frame);
+    if (this.closed || !this.transport.isOpen()) return;
+    this.transport.send(frame);
   }
 
   error(code: SignalErrorCode, message: string, re?: string, details?: Record<string, unknown>): void {
@@ -86,9 +122,9 @@ export class Conn {
     if (this.closed) return;
     this.closed = true;
     try {
-      this.ws.close(code, reason);
+      this.transport.close(code, reason);
     } catch {
-      this.ws.terminate();
+      this.transport.terminate();
     }
   }
 }

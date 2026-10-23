@@ -161,8 +161,9 @@ export function checkMainCompose(text, envExample) {
   lit('NODE_ENV', 'production');
   lit('PORT', '4000');
   lit('TRUST_PROXY', 'true');
-  // Single replica until the redis presence driver ships (HARDENING section 10; review finding prd-F2).
-  lit('PRESENCE_DRIVER', 'memory');
+  // Valkey presence (contract 10.2, prd-F2): heartbeats and the sweeper lease need it; still one replica until the
+  // hub pub/sub bridge ships (HARDENING section 10).
+  lit('PRESENCE_DRIVER', 'redis');
   lit('RATE_LIMIT_DISABLED', 'false');
   if (!usesVar(api.API_ORIGIN, 'WEB_ORIGIN') || !usesVar(api.WEB_ORIGIN, 'WEB_ORIGIN')) {
     problems.push('api: API_ORIGIN and WEB_ORIGIN must both come from ${WEB_ORIGIN} (section 11.4)');

@@ -3,6 +3,16 @@
  * the only write path: data is validated and sanitised with the shared per-action zod schema BEFORE hashing, then in
  * one transaction it takes `pg_advisory_xact_lock(hashtext(org_id::text))`, reads the org tail, computes seq /
  * prev_hash / hash with @indiansassist/shared and inserts. Concurrent appends for one org are therefore serialised.
+ *
+ * LOCK ORDER (binding for every transaction in every package, contracts section 4.2; correctness-F1):
+ *   1. the session row   (lockSession, or the UPDATE of transitionSession / updateSession). Its child rows
+ *                        (session_participant, session_file) are touched only while holding it: a transaction that
+ *                        writes children before transitioning the session calls lockSession first
+ *   2. token rows        (lockToken, listActiveTokensByCreator({ forUpdate }), incrementTokenDenied, markTokenUsed)
+ *   3. the org advisory lock `pg_advisory_xact_lock(hashtext(org_id))` (taken only here)
+ * insertAuditEntry enforces step 1 itself when `sessionId` is set, so callers that already touched the session row
+ * and callers that did not both acquire the locks in this order. A transaction must not lock an existing session or
+ * token row after it has appended an entry (rows it inserted itself are exempt). test/lock-order.test.ts guards it.
  */
 import {
   appendEntry,

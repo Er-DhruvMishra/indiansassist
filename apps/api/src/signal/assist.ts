@@ -9,7 +9,9 @@ import {
   findTokenByTid,
   getSession,
   incrementTokenDenied,
+  lockSession,
   replaceParticipant,
+  SessionAlreadyEndedError,
   resetTokenDenied,
   session as sessionTable,
   transitionSession,
@@ -22,7 +24,8 @@ import { canActOnToken, hasRole, TECH_ROLES } from '../lib/rbac.js';
 import { endSessionFlow } from '../services/session-end.js';
 import { afterTokenRevoked, revokeTokenRow } from '../services/token-revoke.js';
 import { clearTimer, type Conn } from './conn.js';
-import { performKnock } from './knock.js';
+import { forbiddenKey } from './forbidden.js';
+import { performHeldKnocks } from './knock.js';
 import type { SignalHub } from './hub.js';
 import { cancelGrace, startAssistGrace } from './lifecycle.js';
 import {
@@ -52,7 +55,15 @@ export async function handleAssistHello(hub: SignalHub, conn: Conn, msg: SignalO
     conn.error('forbidden', 'your role cannot connect as Assist', msg.id);
     return conn.close(WS_CLOSE.forbidden, 'forbidden');
   }
+  const key = forbiddenKey({ id: conn.id, side: 'assist', principal: p, desk: null });
+  if (hub.forbidden.flooding(key)) {
+    // SEC-05 cooldown: a user above the forbidden-frame limit cannot reconnect around it.
+    const retryAfterSec = hub.forbidden.retryAfterSec(key);
+    conn.error('rate_limited', 'too many forbidden frames; try again later', msg.id, { retryAfterSec });
+    return conn.close(WS_CLOSE.rateLimited, 'rate limited');
+  }
   conn.side = 'assist';
+  await hub.bridge.assistOnline(conn).catch((err: unknown) => ctx.log.warn({ err }, 'assist registry write failed'));
   conn.send({
     t: 'assist.hello.ok',
     ...re(msg.id),
@@ -71,18 +82,10 @@ export async function handleAssistHello(hub: SignalHub, conn: Conn, msg: SignalO
     const creator = refOf(await userRefs(ctx.db, [tok.createdBy]), tok.createdBy);
     conn.send(assistKnockMsg(s, tok, creator, true));
   }
-  // Perform held knocks on the Desks' behalf (section 7.5). performKnock re-checks, after the Desk's queue reaches
-  // it, that the Desk is still open and held and that the token is still active and unexpired (SEC-03, F4).
-  for (const desk of [...hub.conns.values()]) {
-    const d = desk.desk;
-    if (desk.closed || desk.side !== 'desk' || !d || !d.held || d.sessionId || d.orgId !== p.org.id) continue;
-    const tok = await findTokenByTid(ctx.db, d.tokenId);
-    if (!tok || !canActOnToken(p.user, tok)) continue;
-    desk.queue = desk.queue
-      .then(() => performKnock(hub, desk, tok, desk.desk?.heldLabel ?? 'Desk', { onBehalf: true }))
-      .catch((err: unknown) => ctx.log.error({ err, connectionId: desk.id }, 'held knock failed'));
-    await desk.queue;
-  }
+  // Perform held knocks on the Desks' behalf (section 7.5), here and on every other node.
+  const user = { id: p.user.id, orgId: p.org.id, role: p.user.role };
+  hub.bridge.broadcast({ e: 'held-knocks', user });
+  await performHeldKnocks(hub, user);
 }
 
 /** Loads the session and token for accept / deny, refusing anything outside the "knock accept / deny" row. */
@@ -130,8 +133,7 @@ export async function handleAssistAccept(hub: SignalHub, conn: Conn, msg: Signal
   const assistRef = { id: p.user.id, name: p.user.name };
   conn.send({ ...sessionCreatedMsg(hub, row, org, assistRef, 'assist'), ...re(msg.id) });
   hub.conn(live.deskConnId)?.send(sessionCreatedMsg(hub, row, org, assistRef, 'desk'));
-  for (const a of hub.assistsForToken(tok))
-    if (a !== conn) a.send({ t: 'knock.closed', sessionId: s.id, by: 'accepted', acceptedBy: assistRef });
+  hub.toAssists(tok, { t: 'knock.closed', sessionId: s.id, by: 'accepted', acceptedBy: assistRef }, conn.id);
   scheduleIceRefresh(hub, live, 'assist');
 }
 
@@ -183,6 +185,8 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
   cancelGrace(hub, s0.id, 'assist');
   try {
     await ctx.db.transaction(async (tx) => {
+      const locked = await lockSession(tx, s0.id); // session row before its participant rows (lock order, F1)
+      if (!locked || locked.state === 'ended') throw new SessionAlreadyEndedError('ended');
       await replaceParticipant(tx, { sessionId: s0.id, role: 'assist', userId: p.user.id, label: p.user.name, connectionId: conn.id });
       await writeAudit(ctx, tx, org, {
         sessionId: s0.id,

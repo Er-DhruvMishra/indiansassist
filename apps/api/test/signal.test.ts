@@ -159,7 +159,7 @@ describe('/signal authorisation and gates', () => {
     expect(await desk.quiet('webrtc.answer', 50)).toBe(true);
     expect((await getSession(t.db, sessionId as string))?.state).toBe('active');
     const forbidden = await listAuditByOrgPaginated(t.db, admin.org.id, { action: 'signal.forbidden' });
-    // Coalesced per (connection, session) (SEC-05): the two attempts of the intruder write one entry.
+    // Coalesced per (user, session) (SEC-05): the two attempts of the intruder write one entry.
     const mine = forbidden.items.filter((e) => (e.data as { sessionId?: string }).sessionId === sessionId);
     expect(mine).toHaveLength(1);
     expect(mine[0]?.data).toMatchObject({ messageType: 'webrtc.offer', sessionId });

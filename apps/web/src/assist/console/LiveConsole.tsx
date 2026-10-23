@@ -25,6 +25,7 @@ const PHASE_TEXT: Record<string, string> = {
   waiting_consent: 'Waiting for consent. The Desk is reviewing what will be shared.',
   connecting: 'Consent granted. Connecting to the Desk...',
   live: 'Live',
+  reconnecting: 'The media connection was interrupted. Reconnecting...',
   ending: 'Ending the session...',
   ended: 'Session ended',
 };
@@ -62,7 +63,8 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
     return () => clearInterval(id);
   }, [signal]);
 
-  const live = snap.phase === 'live' || snap.phase === 'connecting';
+  const live = snap.phase === 'live' || snap.phase === 'connecting' || snap.phase === 'reconnecting';
+  const onFirstFrame = useCallback(() => ctrl.firstFrame(), [ctrl]);
   const peerName = snap.created?.desk.label ?? deskLabel;
 
   const fullscreen = useCallback(() => {
@@ -99,7 +101,7 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
         {detail.data && (
           <EndedView
             detail={detail.data}
-            recording={{ phase: snap.recording, progress: snap.uploadProgress, result: snap.recordingResult, onRetry: () => void ctrl.retryUpload() }}
+            recording={{ phase: snap.recording, failure: snap.recordingFailure, progress: snap.uploadProgress, result: snap.recordingResult, onRetry: () => void ctrl.retryUpload() }}
           />
         )}
       </div>
@@ -122,6 +124,7 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
         <h1 className="text-2xl font-semibold">Session with {peerName}</h1>
         <Badge tone={snap.phase === 'live' ? 'green' : 'amber'}>{humanise(snap.phase)}</Badge>
         {snap.recording === 'recording' && <Badge tone="red">Recording</Badge>}
+        {snap.recording === 'failed' && snap.recordingFailure === 'recorder' && <Badge tone="red">Recording failed</Badge>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {recBtn}
           <ShortcutHelp extra={CONSOLE_SHORTCUTS} />
@@ -131,7 +134,7 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
         </div>
       </div>
       <p className="text-sm" role="status" aria-live="polite">
-        {PHASE_TEXT[snap.phase]} {snap.notice ?? ''}
+        {PHASE_TEXT[snap.phase]} {snap.notice && snap.notice !== PHASE_TEXT[snap.phase] ? snap.notice : ''}
       </p>
       {snap.error && <Alert>{snap.error}</Alert>}
       <div className="grid gap-4 xl:grid-cols-[1fr_22rem]">
@@ -146,6 +149,7 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
             description={describeRemote(snap.net, snap.remoteVideo !== null)}
             onAnnot={(m) => ctrl.sendAnnot(m)}
             onCanvas={onCanvas}
+            onFirstFrame={onFirstFrame}
             fullscreenRef={fsRef}
             emptyText={snap.phase === 'waiting_consent' ? 'Waiting for the Desk to share their screen.' : 'No video yet.'}
             toolbar={
@@ -169,13 +173,14 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
             <RecordingCard
               recordingId={snap.recordingResult?.id ?? null}
               phase={snap.recording}
+              failure={snap.recordingFailure}
               progress={snap.uploadProgress}
               result={snap.recordingResult}
               onRetry={() => void ctrl.retryUpload()}
             />
           )}
           <Card>
-            <NetworkPanel net={snap.net} signalLatency={latency} relayOnly={snap.relayOnly} onRelayOnly={(on) => ctrl.setRelayOnly(on)} />
+            <NetworkPanel net={snap.net} signalLatency={latency} ttffMs={snap.ttffMs} relayOnly={snap.relayOnly} onRelayOnly={(on) => ctrl.setRelayOnly(on)} />
           </Card>
           <Card>
             <VoiceControls on={snap.voiceOn} muted={snap.muted} peerMuted={snap.peerMuted} peerName={peerName} disabled={!live} onToggle={() => void ctrl.toggleVoice()} onMute={() => ctrl.toggleMute()} />

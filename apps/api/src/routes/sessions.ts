@@ -144,7 +144,7 @@ export async function sessionRoutes(app: FastifyInstance, ctx: AppContext): Prom
         if (again) return reply.status(200).send(toAuditEntry(again));
         fail('already_ended', 'recording state changed');
       }
-      ctx.hub.pushRecording(session.id);
+      await ctx.hub.pushRecording(session.id);
       return reply.status(201).send(toAuditEntry(entry));
     }
     // File attestations (SEC-04): only for a session that reached active, once per transfer, bounded fileId.

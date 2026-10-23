@@ -1,15 +1,17 @@
 /**
  * Sliding-window limiter for WS and per-key limits (contracts section 6.12), because `@fastify/rate-limit` does not
- * see WS frames or keys that need an authenticated user. The `memory` backend follows PRESENCE_DRIVER=memory; a
- * Redis backend implements the same interface (sorted set per key) when the redis presence driver lands.
+ * see WS frames or keys that need an authenticated user. The backend follows PRESENCE_DRIVER: `memory` (this
+ * process) or `redis` (adapters/limiter-redis.ts, one sorted set per key, shared by every api replica).
  */
+
+export type LimitResult = { allowed: boolean; retryAfterSec: number };
 
 export interface Limiter {
   /** Records one hit for `key`; returns whether it is allowed within `limit` per `windowMs`. */
-  hit(key: string, limit: number, windowMs: number): { allowed: boolean; retryAfterSec: number };
+  hit(key: string, limit: number, windowMs: number): Promise<LimitResult>;
   /** Hits in the current window without recording one. */
-  count(key: string, windowMs: number): number;
-  reset(key?: string): void;
+  count(key: string, windowMs: number): Promise<number>;
+  reset(key?: string): Promise<void>;
 }
 
 export class MemoryLimiter implements Limiter {
@@ -27,7 +29,7 @@ export class MemoryLimiter implements Limiter {
     return list;
   }
 
-  hit(key: string, limit: number, windowMs: number): { allowed: boolean; retryAfterSec: number } {
+  async hit(key: string, limit: number, windowMs: number): Promise<LimitResult> {
     if (this.disabled) return { allowed: true, retryAfterSec: 0 };
     const list = this.prune(key, windowMs);
     if (list.length >= limit) {
@@ -39,18 +41,18 @@ export class MemoryLimiter implements Limiter {
     return { allowed: true, retryAfterSec: 0 };
   }
 
-  count(key: string, windowMs: number): number {
+  async count(key: string, windowMs: number): Promise<number> {
     return this.prune(key, windowMs).length;
   }
 
-  reset(key?: string): void {
+  async reset(key?: string): Promise<void> {
     if (key === undefined) this.hits.clear();
     else this.hits.delete(key);
   }
 }
 
 /**
- * Short-code failure budget (section 3.3 S3): more than 300 misses in a sliding 60 s window on this node blocks
+ * Short-code failure budget (section 3.3 S3, amended by X12): more than 30 misses in a sliding 60 s window on this node blocks
  * short-code lookups for 5 minutes. Never disabled by RATE_LIMIT_DISABLED (it is an abuse brake, not a rate limit);
  * tests use the `limit` option.
  */
@@ -59,7 +61,7 @@ export class ShortCodeBudget {
   private blockedUntil = 0;
   constructor(
     private readonly onExhausted: () => void,
-    private readonly limit = 300,
+    private readonly limit = 30,
     private readonly windowMs = 60_000,
     private readonly blockMs = 5 * 60_000,
     private readonly now: () => number = Date.now,

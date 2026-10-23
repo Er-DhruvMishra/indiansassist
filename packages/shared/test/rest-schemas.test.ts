@@ -351,15 +351,24 @@ describe('TURN REST credentials', () => {
 });
 
 describe('recording mime allowlist (SEC-01)', () => {
-  it('accepts video/webm with or without a codecs parameter', async () => {
+  it('accepts the four allow-listed media types with or without a codecs parameter', async () => {
     const { recordingMetaSchema, recordingUploadInitRequestSchema } = await import('../src/index.js');
-    for (const mime of ['video/webm', 'video/webm;codecs=vp9,opus', 'video/webm; codecs=vp8, opus', 'video/webm;codecs=avc1.42E01F'])
+    for (const mime of [
+      'video/webm',
+      'video/webm;codecs=vp9,opus',
+      'video/webm; codecs=vp8, opus',
+      'video/webm;codecs=avc1.42E01F',
+      'video/mp4',
+      'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+      'audio/webm;codecs=opus',
+      'audio/ogg; codecs=opus',
+    ])
       expect(recordingMetaSchema.safeParse({ mime }).success).toBe(true);
     expect(recordingUploadInitRequestSchema.safeParse({ mime: 'video/webm', bytes: 10 }).success).toBe(true);
   });
   it('refuses active document types and other media types', async () => {
     const { recordingMetaSchema, recordingUploadInitRequestSchema } = await import('../src/index.js');
-    for (const mime of ['text/html', 'application/javascript', 'image/svg+xml', 'video/mp4', 'video/webm;charset=utf-8', 'video/webm;codecs=vp9"><script>', 'VIDEO/WEBM2'])
+    for (const mime of ['text/html', 'application/javascript', 'image/svg+xml', 'video/quicktime', 'audio/mpeg', 'video/webm;charset=utf-8', 'video/webm;codecs=vp9"><script>', 'video/mp4;codecs="avc1', 'VIDEO/WEBM2'])
       expect(recordingMetaSchema.safeParse({ mime }).success).toBe(false);
     expect(recordingUploadInitRequestSchema.safeParse({ mime: 'text/html', bytes: 10 }).success).toBe(false);
   });

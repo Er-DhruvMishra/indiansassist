@@ -18,6 +18,7 @@ import { fmtTier, regionLabel } from '../lib/format';
 import { parseJoinInput, readTokenParam, type JoinCode } from '../lib/joinInput';
 import { navigateTo, regionDecision } from '../lib/region';
 import { JOIN_LABEL_KEY, readStore, writeStore } from '../lib/storage';
+import { saveJoinBrand } from './brand';
 import { DeskLayout } from './DeskLayout';
 
 type LookupError = { message: string; retry?: boolean };
@@ -110,6 +111,7 @@ export function JoinPage() {
     writeStore('session', STORAGE_KEYS.joinToken, code.value);
     writeStore('session', STORAGE_KEYS.joinSignal, info.signalUrl);
     writeStore('session', JOIN_LABEL_KEY, label.trim());
+    saveJoinBrand(info.org);
     navigate('/room/new');
   };
 
@@ -118,7 +120,7 @@ export function JoinPage() {
   const showManual = !info && !busy;
 
   return (
-    <DeskLayout>
+    <DeskLayout brand={info?.org ?? null}>
       <h1 className="mb-4 text-2xl font-semibold">Join a support session</h1>
       {busy && <Spinner label="Checking your link" />}
       {error && (
@@ -158,7 +160,7 @@ export function JoinPage() {
               <Field label="Your name (optional, shown to the technician)">
                 {(p) => <Input id={p.id} value={label} maxLength={80} onChange={(e) => setLabel(e.target.value)} autoComplete="name" />}
               </Field>
-              <Button size="lg" onClick={() => void join()} disabled={secondsLeft === 0}>
+              <Button size="lg" onClick={() => void join()} disabled={secondsLeft === 0} style={secondsLeft > 0 ? { backgroundColor: accent } : undefined}>
                 Join support session
               </Button>
               <p className="text-xs text-slate-600 dark:text-slate-400">Nothing is shared yet. You will see exactly what is requested and choose what to share.</p>
@@ -170,7 +172,7 @@ export function JoinPage() {
       )}
       {showManual && (
         <form onSubmit={onManual} className="flex flex-col gap-3" aria-label="Enter a support code">
-          <Field label="Paste your support code or link" hint="The 12-digit code (for example 4821 9365 7710), the full token, or the whole link." error={manualError}>
+          <Field label="Paste your support code or link" hint="The 12-digit code (for example 4821 9365 7715), the full token, or the whole link." error={manualError}>
             {(p) => (
               <Input id={p.id} aria-describedby={p.describedBy} aria-invalid={p.invalid} value={manual} onChange={(e) => setManual(e.target.value)} autoComplete="off" spellCheck={false} />
             )}

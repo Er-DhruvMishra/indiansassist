@@ -1,7 +1,7 @@
 /**
  * Filesystem ObjectStorage driver (dev default, contracts section 10.1). Objects live under STORAGE_FS_DIR; a
  * `<file>.meta.json` sidecar keeps the content type. Writes go to a temp file renamed into place, hashed in flight.
- * `presignGet` returns `${API_ORIGIN}/api/v1/recordings/<id>/file?exp=&sig=` (section 6.10).
+ * `presignGet` returns `${RECORDING_DOWNLOAD_ORIGIN or API_ORIGIN}/api/v1/recordings/<id>/file?exp=&sig=` (section 6.10).
  */
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -24,7 +24,7 @@ export class FsObjectStorage implements ObjectStorage {
   readonly bucket: string;
   private readonly root: string;
 
-  constructor(private readonly opts: { root: string; apiOrigin: string; presignKey: Buffer }) {
+  constructor(private readonly opts: { root: string; fileOrigin: string; presignKey: Buffer }) {
     this.root = resolve(opts.root);
     this.bucket = this.root;
   }
@@ -90,7 +90,7 @@ export class FsObjectStorage implements ObjectStorage {
     const id = recordingIdOfKey(key);
     const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
     const sig = presignSignature(this.opts.presignKey, id, key, exp);
-    return `${this.opts.apiOrigin}/api/v1/recordings/${id}/file?exp=${exp}&sig=${sig}`;
+    return `${this.opts.fileOrigin}/api/v1/recordings/${id}/file?exp=${exp}&sig=${sig}`;
   }
 
   async delete(key: string): Promise<void> {

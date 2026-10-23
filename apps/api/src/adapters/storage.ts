@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { Readable, Transform, type TransformCallback } from 'node:stream';
 
+export type PresignOpts = { contentType?: string; filename?: string };
+
 export interface ObjectStorage {
   readonly driver: 'fs' | 's3';
   /** Bucket name (s3) or root directory (fs), for the residency report. */
@@ -14,7 +16,11 @@ export interface ObjectStorage {
   /** Throws ObjectNotFoundError. */
   get(key: string): Promise<Readable>;
   head(key: string): Promise<{ bytes: number; contentType: string; lastModified: Date } | null>;
-  presignGet(key: string, ttlSeconds: number): Promise<string>;
+  /**
+   * Download URL valid `ttlSeconds`. `opts` names the response type and filename the download must carry (the
+   * caller passes an allow-listed media type, SEC-01); drivers that serve through the api's `/file` route ignore it.
+   */
+  presignGet(key: string, ttlSeconds: number, opts?: PresignOpts): Promise<string>;
   /** Idempotent. */
   delete(key: string): Promise<void>;
 }

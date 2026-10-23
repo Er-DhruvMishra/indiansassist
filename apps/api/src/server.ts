@@ -32,9 +32,11 @@ async function main(): Promise<void> {
   if (ended > 0) app.log.warn({ ended, nodeId: config.nodeId }, 'ended sessions orphaned by a previous run of this node');
   const sweeper = new Sweeper(ctx);
   sweeper.start();
-  const heartbeat = setInterval(() => void ctx.presence.heartbeatNode(config.nodeId, 90), 30_000);
+  const beat = (): Promise<void> =>
+    ctx.presence.heartbeatNode(config.nodeId, 90).catch((err: unknown) => app.log.warn({ err }, 'presence heartbeat failed'));
+  const heartbeat = setInterval(() => void beat(), 30_000);
   heartbeat.unref();
-  await ctx.presence.heartbeatNode(config.nodeId, 90);
+  await beat();
 
   await app.listen({ port: config.port, host: config.host });
 

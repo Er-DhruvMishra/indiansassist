@@ -1,12 +1,17 @@
 /**
  * Presence adapter (contracts section 10.2). The in-memory driver is the single-node dev default: token waiting
- * entries with TTL, the token -> session pointer, node heartbeats (`isNodeAlive` is true only for the own node) and
- * synchronous local pub/sub. A Redis/Valkey driver implements the same interface with keys `ia:tok:<tokenId>` and
- * `ia:node:<id>` (TTL) and pub/sub on the same channel names; it is not shipped in this step (no Redis on the build
- * box), and `buildPresence` refuses `redis` until it is.
+ * entries with TTL, the token -> session pointer, the online Assist registry, node heartbeats (`isNodeAlive` is true
+ * only for the own node), a lease that is always held and synchronous local pub/sub. The Redis/Valkey driver
+ * (`presence-redis.ts`) implements the same interface across nodes, and the signaling bridge (signal/bridge.ts) runs
+ * on top of it (prd-F2).
  */
+import type { UserRole } from '@indiansassist/shared';
+import { createRedisPresence } from './presence-redis.js';
 
 export type TokenWaiting = { connectionId: string; nodeId: string; knockRequested: boolean };
+
+/** One helloed Assist socket, enough to evaluate "knock accept / deny" (`canActOnToken`) on any node. */
+export type AssistOnline = { connectionId: string; userId: string; orgId: string; role: UserRole; nodeId: string };
 
 export interface Presence {
   /** True when the driver sees every node of the cluster (heartbeats); false for the single-node memory driver. */
@@ -15,25 +20,39 @@ export interface Presence {
   clearTokenWaiting(tokenId: string, connectionId: string): Promise<void>;
   getTokenState(tokenId: string): Promise<{ waiting: TokenWaiting | null; sessionId: string | null }>;
   setTokenSession(tokenId: string, sessionId: string | null): Promise<void>;
+  /** Registers (or refreshes) a helloed Assist socket for `ttlSeconds`. */
+  setAssistOnline(info: AssistOnline, ttlSeconds: number): Promise<void>;
+  clearAssistOnline(orgId: string, connectionId: string): Promise<void>;
+  /** Every unexpired Assist socket of the org, on every node. */
+  listAssistsOnline(orgId: string): Promise<AssistOnline[]>;
   heartbeatNode(nodeId: string, ttlSeconds: number): Promise<void>;
   isNodeAlive(nodeId: string): Promise<boolean>;
+  /**
+   * Single-holder lease `name` for `ttlSeconds` (taken when free, refreshed when `holder` already has it). The
+   * sweeper runs only on the lease holder (section 7.6 N4). The memory driver always grants it.
+   */
+  tryLease(name: string, holder: string, ttlSeconds: number): Promise<boolean>;
   publish(channel: string, message: object): Promise<void>;
   /** Returns the unsubscribe function. */
   subscribe(channel: string, handler: (message: object) => void): Promise<() => Promise<void>>;
   close(): Promise<void>;
 }
 
-/** Channel names of section 10.2. */
+/**
+ * Channel names of section 10.2: `cluster` carries org / user / token scoped events to every node, `node:<nodeId>`
+ * the frames between a session's owner node and the node holding a participant's socket (section 7.6 N1). Both are
+ * subscribed once at boot, so no message can race a subscription.
+ */
 export const channels = {
-  orgKnocks: (orgId: string) => `org:${orgId}:knocks`,
-  session: (sessionId: string) => `session:${sessionId}`,
-  user: (userId: string) => `user:${userId}`,
+  cluster: 'cluster',
+  node: (nodeId: string) => `node:${nodeId}`,
 };
 
 export class MemoryPresence implements Presence {
   readonly multiNode: boolean = false;
   private readonly waiting = new Map<string, { info: TokenWaiting; expiresAt: number }>();
   private readonly tokenSession = new Map<string, string>();
+  private readonly assists = new Map<string, Map<string, { info: AssistOnline; expiresAt: number }>>();
   private readonly subs = new Map<string, Set<(m: object) => void>>();
 
   constructor(
@@ -63,12 +82,40 @@ export class MemoryPresence implements Presence {
     else this.tokenSession.set(tokenId, sessionId);
   }
 
+  async setAssistOnline(info: AssistOnline, ttlSeconds: number): Promise<void> {
+    let org = this.assists.get(info.orgId);
+    if (!org) this.assists.set(info.orgId, (org = new Map()));
+    org.set(info.connectionId, { info: { ...info }, expiresAt: this.now() + ttlSeconds * 1000 });
+  }
+
+  async clearAssistOnline(orgId: string, connectionId: string): Promise<void> {
+    const org = this.assists.get(orgId);
+    org?.delete(connectionId);
+    if (org && org.size === 0) this.assists.delete(orgId);
+  }
+
+  async listAssistsOnline(orgId: string): Promise<AssistOnline[]> {
+    const org = this.assists.get(orgId);
+    if (!org) return [];
+    const now = this.now();
+    const out: AssistOnline[] = [];
+    for (const [id, e] of org) {
+      if (e.expiresAt > now) out.push({ ...e.info });
+      else org.delete(id);
+    }
+    return out;
+  }
+
   async heartbeatNode(): Promise<void> {
     // Single node: the own node is alive while the process runs.
   }
 
   async isNodeAlive(nodeId: string): Promise<boolean> {
     return nodeId === this.ownNodeId;
+  }
+
+  async tryLease(): Promise<boolean> {
+    return true;
   }
 
   async publish(channel: string, message: object): Promise<void> {
@@ -100,12 +147,19 @@ export class MemoryPresence implements Presence {
   async close(): Promise<void> {
     this.waiting.clear();
     this.tokenSession.clear();
+    this.assists.clear();
     this.subs.clear();
   }
 }
 
-export function buildPresence(driver: 'memory' | 'redis', nodeId: string): Presence {
-  if (driver === 'redis')
-    throw new Error('PRESENCE_DRIVER=redis is not implemented in this build; use memory (single node)');
+export function buildPresence(
+  driver: 'memory' | 'redis',
+  nodeId: string,
+  opts: { redisUrl?: string; onError?: (err: unknown, where: string) => void } = {},
+): Presence {
+  if (driver === 'redis') {
+    if (!opts.redisUrl) throw new Error('PRESENCE_DRIVER=redis needs REDIS_URL');
+    return createRedisPresence(opts.redisUrl, opts.onError);
+  }
   return new MemoryPresence(nodeId);
 }

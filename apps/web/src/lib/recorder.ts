@@ -2,6 +2,12 @@
  * Assist-side recording (contracts section 9): the console renders the remote frame through a canvas
  * carrying the technician watermark, and records `canvas.captureStream()` mixed (AudioContext) with the
  * remote audio and the local microphone using MediaRecorder, timeslice 1000 ms, parts kept in memory.
+ *
+ * The audio graph lives for the whole recording (prd-F4 / correctness-F7): the destination's track is in
+ * the recorded stream from the first frame, and `setAudioSources()` connects / disconnects sources as voice
+ * is turned on, a remote track is replaced or a link is rebuilt. A MediaRecorder error or an unexpected stop
+ * marks the recording failed (correctness-F10); `stop()` then resolves `ok: false` and never hands back an
+ * empty or broken blob for upload.
  */
 
 export const RECORDER_MIME_PREFERENCE = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
@@ -49,62 +55,141 @@ export function drawWatermark(ctx: CanvasRenderingContext2D, w: number, h: numbe
 }
 
 export type RecordingResult = { blob: Blob; mime: string; durationMs: number };
+export type RecordingOutcome = ({ ok: true } & RecordingResult) | { ok: false; error: string; durationMs: number };
+
+/** Browser constructors, injectable in tests. */
+export type RecorderEnv = {
+  AudioContextImpl?: typeof AudioContext;
+  MediaRecorderImpl?: typeof MediaRecorder;
+  MediaStreamImpl?: typeof MediaStream;
+  isTypeSupported?: (mime: string) => boolean;
+};
+
+export type RecorderOptions = {
+  /** Fired once when the recorder fails asynchronously (error event or unexpected stop). */
+  onError?: (message: string) => void;
+  env?: RecorderEnv;
+};
 
 type CaptureCanvas = HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream };
+
+function errorText(ev: Event): string {
+  const err = (ev as Event & { error?: { message?: string; name?: string } }).error;
+  return err?.message || err?.name || 'the browser stopped the recorder';
+}
 
 export class SessionRecorder {
   private recorder: MediaRecorder | null = null;
   private parts: Blob[] = [];
   private audioCtx: AudioContext | null = null;
+  private dest: MediaStreamAudioDestinationNode | null = null;
+  private sources = new Map<MediaStream, MediaStreamAudioSourceNode>();
+  private videoTracks: MediaStreamTrack[] = [];
   private startedAt = 0;
   private mime = 'video/webm';
-  private stopPromise: Promise<RecordingResult> | null = null;
+  private stopping = false;
+  private failure: string | null = null;
+  private stopPromise: Promise<RecordingOutcome> | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly audioStreams: () => MediaStream[],
+    private readonly opts: RecorderOptions = {},
   ) {}
 
   get recording(): boolean {
-    return this.recorder !== null && this.recorder.state === 'recording';
+    return this.recorder !== null && this.recorder.state === 'recording' && this.failure === null;
+  }
+
+  /** The failure message once the recorder failed, else null. */
+  get failed(): string | null {
+    return this.failure;
   }
 
   /** Throws when the browser cannot record (no captureStream or MediaRecorder). */
   start(): void {
     const c = this.canvas as CaptureCanvas;
-    if (typeof c.captureStream !== 'function' || typeof MediaRecorder === 'undefined')
-      throw new Error('This browser cannot record the session.');
+    const Rec = this.opts.env?.MediaRecorderImpl ?? (typeof MediaRecorder === 'undefined' ? undefined : MediaRecorder);
+    if (typeof c.captureStream !== 'function' || !Rec) throw new Error('This browser cannot record the session.');
     const video = c.captureStream(15);
-    const tracks: MediaStreamTrack[] = [...video.getVideoTracks()];
-    const audio = this.audioStreams().filter((s) => s.getAudioTracks().length > 0);
-    if (audio.length > 0 && typeof AudioContext !== 'undefined') {
-      const ctx = new AudioContext();
-      const dest = ctx.createMediaStreamDestination();
-      for (const s of audio) ctx.createMediaStreamSource(s).connect(dest);
+    this.videoTracks = [...video.getVideoTracks()];
+    const tracks: MediaStreamTrack[] = [...this.videoTracks];
+    const Ctx = this.opts.env?.AudioContextImpl ?? (typeof AudioContext === 'undefined' ? undefined : AudioContext);
+    if (Ctx) {
+      // Always present, even silent: MediaRecorder never records a track added after start().
+      const ctx = new Ctx();
       this.audioCtx = ctx;
-      tracks.push(...dest.stream.getAudioTracks());
+      this.dest = ctx.createMediaStreamDestination();
+      tracks.push(...this.dest.stream.getAudioTracks());
     }
-    this.mime = pickRecorderMime();
-    const rec = new MediaRecorder(new MediaStream(tracks), { mimeType: this.mime });
+    this.mime = pickRecorderMime(this.opts.env?.isTypeSupported);
+    const Stream = this.opts.env?.MediaStreamImpl ?? MediaStream;
+    const rec = new Rec(new Stream(tracks), { mimeType: this.mime });
     rec.ondataavailable = (ev) => {
       if (ev.data && ev.data.size > 0) this.parts.push(ev.data);
+    };
+    rec.onerror = (ev) => this.fail(errorText(ev));
+    rec.onstop = () => {
+      if (!this.stopping) this.fail('the recorder stopped unexpectedly');
     };
     this.recorder = rec;
     this.startedAt = Date.now();
     rec.start(1000);
   }
 
-  /** Stops (idempotent) and resolves with every recorded part joined. */
-  stop(): Promise<RecordingResult> {
+  /** Makes the mix exactly `streams` (remote audio, microphone); safe to call any number of times. */
+  setAudioSources(streams: readonly MediaStream[]): void {
+    const ctx = this.audioCtx;
+    const dest = this.dest;
+    if (!ctx || !dest || this.stopping) return;
+    const wanted = new Set(streams.filter((s) => s.getAudioTracks().length > 0));
+    for (const [stream, node] of this.sources) {
+      if (wanted.has(stream)) continue;
+      node.disconnect();
+      this.sources.delete(stream);
+    }
+    for (const stream of wanted) {
+      if (this.sources.has(stream)) continue;
+      try {
+        const node = ctx.createMediaStreamSource(stream);
+        node.connect(dest);
+        this.sources.set(stream, node);
+      } catch (e) {
+        console.warn('[recorder] could not mix an audio source', e);
+      }
+    }
+  }
+
+  private fail(message: string): void {
+    if (this.failure !== null) return;
+    this.failure = message;
+    this.opts.onError?.(message);
+  }
+
+  private release(): void {
+    for (const node of this.sources.values()) node.disconnect();
+    this.sources.clear();
+    void this.audioCtx?.close().catch(() => undefined);
+    this.audioCtx = null;
+    this.dest = null;
+    for (const t of this.videoTracks) t.stop();
+    this.videoTracks = [];
+  }
+
+  /** Stops (idempotent). `ok: false` when the recorder failed or nothing was recorded. */
+  stop(): Promise<RecordingOutcome> {
     if (this.stopPromise) return this.stopPromise;
+    this.stopping = true;
     const rec = this.recorder;
-    const finish = (): RecordingResult => {
-      void this.audioCtx?.close().catch(() => undefined);
-      this.audioCtx = null;
+    const finish = (): RecordingOutcome => {
+      this.release();
+      const durationMs = Date.now() - this.startedAt;
+      if (this.failure !== null) return { ok: false, error: this.failure, durationMs };
+      const bytes = this.parts.reduce((n, p) => n + p.size, 0);
+      if (bytes === 0) return { ok: false, error: 'nothing was recorded', durationMs };
       const mime = this.mime.split(';')[0] ?? 'video/webm';
-      return { blob: new Blob(this.parts, { type: mime }), mime, durationMs: Date.now() - this.startedAt };
+      return { ok: true, blob: new Blob(this.parts, { type: mime }), mime, durationMs };
     };
-    this.stopPromise = new Promise<RecordingResult>((resolve) => {
+    this.stopPromise = new Promise<RecordingOutcome>((resolve) => {
       if (!rec || rec.state === 'inactive') return resolve(finish());
       rec.onstop = () => resolve(finish());
       try {

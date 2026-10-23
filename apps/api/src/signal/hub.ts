@@ -1,7 +1,9 @@
 /**
  * WS `/signal` (contracts section 7): `ws` attached to the Fastify HTTP server. The hub owns the sockets, the
  * per-session registry (which connection is the `assist` / `desk` participant), heartbeats, frame limits and the
- * dispatch of every client message to the handlers in desk.ts, assist.ts and relay.ts.
+ * dispatch of every client message to the handlers in desk.ts, assist.ts and relay.ts. With a multi-node presence
+ * driver the bridge (bridge.ts) forwards frames of sessions owned by another node and fans org / user events out to
+ * every node (section 7.6 N1); the REST-facing API is in hub-api.ts.
  */
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -20,7 +22,6 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import type { AppContext } from '../context.js';
 import { canActOnToken } from '../lib/rbac.js';
 import { principalFromCookieValue, unsignSessionCookie, type Principal } from '../plugins/auth.js';
-import type { EndedSession } from '../services/session-end.js';
 import {
   handleAssistAccept,
   handleAssistDeny,
@@ -29,10 +30,13 @@ import {
   handleChatChannelOpen,
   handleSessionStats,
 } from './assist.js';
-import { closeExpiredWaitingDesks, refreshUserSockets, runAuthChecks } from './auth-watch.js';
-import { Conn, type Live } from './conn.js';
+import { closeExpiredWaitingDesks, runAuthChecks } from './auth-watch.js';
+import { Bridge } from './bridge.js';
+import { Conn, wsTransport, type Live } from './conn.js';
 import { handleDeskConsent, handleDeskEvent, handleDeskHello, handleDeskKnock, handleDeskPoll } from './desk.js';
-import { onConnClosed, onSessionEnded, onTokenRevoked } from './lifecycle.js';
+import { ForbiddenGuard } from './forbidden.js';
+import { HubApi } from './hub-api.js';
+import { onConnClosed } from './lifecycle.js';
 import { handleChatMessage, handleSessionEnd, handleWebrtc } from './relay.js';
 
 type Handler = (hub: SignalHub, conn: Conn, msg: never) => Promise<void>;
@@ -57,14 +61,27 @@ const HANDLERS: Partial<Record<ClientSignalMessage['t'], Handler>> = {
 const ASSIST_TYPES = new Set<string>(ASSIST_CLIENT_TYPES);
 const DESK_TYPES = new Set<string>(DESK_CLIENT_TYPES);
 
-export class SignalHub {
+type Tok = Pick<TokenRow, 'orgId' | 'createdBy'>;
+
+export class SignalHub extends HubApi {
   readonly conns = new Map<string, Conn>();
   readonly live = new Map<string, Live>();
+  /** `signal.forbidden` budget per principal (SEC-05). */
+  readonly forbidden = new ForbiddenGuard();
+  readonly bridge: Bridge;
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   private tickTimer: NodeJS.Timeout | null = null;
   private app: FastifyInstance | null = null;
 
-  constructor(readonly ctx: AppContext) {}
+  constructor(readonly ctx: AppContext) {
+    super();
+    this.bridge = new Bridge(this);
+  }
+
+  /** Subscribes the bridge channels (multi-node presence only); awaited by buildApp before serving. */
+  async start(): Promise<void> {
+    await this.bridge.start();
+  }
 
   attach(app: FastifyInstance): void {
     this.app = app;
@@ -90,7 +107,7 @@ export class SignalHub {
     const origin = req.headers['origin'];
     if (origin !== undefined && origin !== this.ctx.config.webOrigin) return reject(socket, 403, 'Forbidden');
     const ip = this.clientIp(req);
-    const lim = this.ctx.limiter.hit(`ws-upgrade:${ip}`, 60, 60_000);
+    const lim = await this.ctx.limiter.hit(`ws-upgrade:${ip}`, 60, 60_000);
     const pending = [...this.conns.values()].filter((c) => c.ip === ip && !c.helloed).length;
     if (!lim.allowed || (!this.ctx.config.rateLimitDisabled && pending >= 20)) {
       this.ctx.metrics.rateLimited.inc();
@@ -107,7 +124,7 @@ export class SignalHub {
       }
     }
     const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null;
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(new Conn(ws, ip, ua, principal), ws));
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(new Conn(wsTransport(ws), ip, ua, principal), ws));
   }
 
   private onConnection(conn: Conn, ws: WebSocket): void {
@@ -118,6 +135,7 @@ export class SignalHub {
       conn.closed = true;
       if (!this.conns.delete(conn.id)) return;
       this.ctx.metrics.wsConnections.dec();
+      this.bridge.socketClosed(conn);
       conn.queue = conn.queue.then(() => onConnClosed(this, conn)).catch((err: unknown) => this.logErr(conn, err));
     });
     ws.on('error', (err) => this.ctx.log.warn({ connectionId: conn.id, err }, 'ws error'));
@@ -147,7 +165,8 @@ export class SignalHub {
     this.ctx.log.error({ connectionId: conn.id, err }, 'signal handler failed');
   }
 
-  private async dispatch(conn: Conn, text: string): Promise<void> {
+  /** Handles one frame of a local socket, or of a RemoteConn on its session's owner node (bridge.ts). */
+  async dispatch(conn: Conn, text: string): Promise<void> {
     // Frames received before a peer-initiated close are still handled (the Desk's last `session.end`); only a
     // connection the server terminated drops what is queued. Replies to a closed socket are no-ops.
     if (conn.terminated) return;
@@ -169,23 +188,30 @@ export class SignalHub {
       handler = HANDLERS[msg.t];
     }
     if (!handler) return conn.error('unknown_type', 'unknown message type', re);
+    if (!hello && this.bridge.on) {
+      const owner = await this.bridge.ownerFor(conn, 'sessionId' in msg ? msg.sessionId : undefined);
+      if (owner) return this.bridge.forward(owner, conn, text);
+    }
     try {
       await handler(this, conn, msg as never);
     } catch (err) {
       const code = (err as { code?: string }).code;
-      if (hello) {
-        // A failed hello must never leave a helloed socket without a reply (it would sit on "Connecting").
-        if (code !== 'invalid_transition' && code !== 'already_ended') this.logErr(conn, err);
-        conn.side = null;
-        conn.desk = null;
-        conn.error('session_not_found', 'the session could not be joined; open the link again', re);
-        return conn.close(WS_CLOSE.forbidden, 'hello failed');
-      }
+      if (hello) return this.helloFailed(conn, err, re);
       if (code === 'invalid_transition' || code === 'already_ended')
         return conn.error('bad_state', 'session state changed', re);
       this.logErr(conn, err);
       conn.error('bad_state', 'request could not be processed', re);
     }
+  }
+
+  /** A failed hello must never leave a helloed socket without a reply (it would sit on "Connecting"). */
+  helloFailed(conn: Conn, err: unknown, re: string | undefined): void {
+    const code = (err as { code?: string }).code;
+    if (code !== 'invalid_transition' && code !== 'already_ended') this.logErr(conn, err);
+    conn.side = null;
+    conn.desk = null;
+    conn.error('session_not_found', 'the session could not be joined; open the link again', re);
+    conn.close(WS_CLOSE.forbidden, 'hello failed');
   }
 
   /** Hello timeout, heartbeat pings and the 60 s idle close (section 7.2). */
@@ -194,6 +220,8 @@ export class SignalHub {
     const t = this.ctx.timing;
     runAuthChecks(this, now);
     closeExpiredWaitingDesks(this, now);
+    this.bridge.tick(now);
+    this.forbidden.prune(now);
     for (const c of this.conns.values()) {
       if (c.closed) continue;
       if (!c.helloed && now - c.openedAt > t.helloTimeoutMs) {
@@ -213,82 +241,67 @@ export class SignalHub {
 
   // ---------- registry helpers ----------
 
+  /** Helloed Assist sockets of this node (knock fan-out goes to the real sockets, never to RemoteConns). */
   assistConns(): Conn[] {
     return [...this.conns.values()].filter((c) => c.side === 'assist' && c.principal !== null && !c.closed);
   }
 
-  /** Helloed Assist sockets that may act on (and are subscribed to knocks of) a token. */
-  assistsForToken(tok: Pick<TokenRow, 'orgId' | 'createdBy'>): Conn[] {
+  /** Helloed Assist sockets of this node that may act on (and are subscribed to knocks of) a token. */
+  assistsForToken(tok: Tok): Conn[] {
     return this.assistConns().filter((c) => canActOnToken(c.principal!.user, tok));
   }
 
-  deskConnsForToken(tokenId: string): Conn[] {
-    return [...this.conns.values()].filter((c) => c.side === 'desk' && c.desk?.tokenId === tokenId && !c.closed);
+  /** Sends to every Assist socket of the cluster that may act on the token, except connection `except`. */
+  toAssists(tok: Tok, frame: Record<string, unknown>, except: string | null = null): void {
+    this.deliverToAssists(tok, frame, except);
+    this.bridge.broadcast({ e: 'assists', tok: { orgId: tok.orgId, createdBy: tok.createdBy }, frame, except });
   }
 
+  deliverToAssists(tok: Tok, frame: Record<string, unknown>, except: string | null): void {
+    for (const a of this.assistsForToken(tok)) if (a.id !== except) a.send(frame);
+  }
+
+  /** "Eligible Assist online" (section 7.5): on this node, or on another live node per the presence registry. */
+  async techOnline(tok: Tok): Promise<boolean> {
+    return this.assistsForToken(tok).length > 0 || (await this.bridge.remoteAssistFor(tok));
+  }
+
+  /** Local sockets and the RemoteConns of sessions owned here. */
+  allConns(): Conn[] {
+    return [...this.conns.values(), ...this.bridge.remotes.values()];
+  }
+
+  /** Desk sockets whose logic runs on this node: local ones not piped elsewhere, and bridged ones owned here. */
+  deskConns(): Conn[] {
+    return this.allConns().filter((c) => c.side === 'desk' && !c.closed && (c.remote || c.pipeTo === null));
+  }
+
+  deskConnsForToken(tokenId: string, opts: { includePiped?: boolean } = {}): Conn[] {
+    const pool = opts.includePiped ? this.allConns().filter((c) => c.side === 'desk' && !c.closed) : this.deskConns();
+    return pool.filter((c) => c.desk?.tokenId === tokenId);
+  }
+
+  /** A participant by connection id: a local socket or a RemoteConn. */
   conn(id: string | null | undefined): Conn | null {
     if (!id) return null;
+    const c = this.conns.get(id) ?? this.bridge.remotes.get(id);
+    return c && !c.closed ? c : null;
+  }
+
+  localConn(id: string): Conn | null {
     const c = this.conns.get(id);
     return c && !c.closed ? c : null;
   }
 
-  // ---------- API used by REST services ----------
-
-  chatCount(sessionId: string): number {
-    return this.live.get(sessionId)?.chatCount ?? 0;
-  }
-
-  async sessionEnded(ended: EndedSession): Promise<void> {
-    await onSessionEnded(this, ended);
-  }
-
-  tokenRevoked(tokenId: string): void {
-    onTokenRevoked(this, tokenId);
-  }
-
-  /** Pushes `session.recording { recording: true }` to the Desk of a session (section 6.8). */
-  pushRecording(sessionId: string): void {
-    const live = this.live.get(sessionId);
-    this.conn(live?.deskConnId)?.send({ t: 'session.recording', sessionId, recording: true });
-  }
-
-  /**
-   * Closes every authenticated socket of a user (disabled mid-session, password change: 4401), optionally keeping
-   * the sockets opened with one cookie session (the one that changed the password).
-   */
-  closeUserSockets(userId: string, code: number, opts: { exceptAuthSessionId?: string } = {}): void {
-    for (const c of [...this.conns.values()]) {
-      const p = c.principal;
-      if (!p || p.user.id !== userId || c.closed) continue;
-      if (opts.exceptAuthSessionId !== undefined && p.authSession.id === opts.exceptAuthSessionId) continue;
-      c.error('not_authenticated', 'your sign-in is no longer valid');
-      c.close(code, 'signed out');
-    }
-  }
-
-  /** Closes the sockets opened with the given cookie sessions (logout: 4401). */
-  closeSocketsForAuthSessions(authSessionIds: readonly string[], code: number): void {
-    const ids = new Set(authSessionIds);
-    for (const c of [...this.conns.values()]) {
-      if (!c.principal || c.closed || !ids.has(c.principal.authSession.id)) continue;
-      c.error('not_authenticated', 'you signed out');
-      c.close(code, 'signed out');
-    }
-  }
-
-  /** Re-reads the principal of every socket of a user now (a role change applies before the reply). */
-  async refreshUser(userId: string): Promise<void> {
-    await refreshUserSockets(this, userId);
-  }
-
   async close(): Promise<void> {
     if (this.tickTimer) clearInterval(this.tickTimer);
+    await this.bridge.stop();
     for (const l of this.live.values()) for (const t of l.timers.values()) clearTimeout(t);
     this.live.clear();
     for (const c of this.conns.values()) {
       c.closed = true;
       c.terminated = true;
-      c.ws.terminate();
+      c.transport.terminate();
     }
     this.conns.clear();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));

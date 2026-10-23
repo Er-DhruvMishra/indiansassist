@@ -78,8 +78,12 @@ describe('join page', () => {
   it('moves the token out of the URL, looks it up, and copies it on click and again', async () => {
     const user = setupUser();
     renderAt(`/join#t=${COMPACT}`);
-    expect(await screen.findByText('Acme IT')).toBeTruthy();
+    expect(await screen.findByText('Acme IT', { selector: 'p' })).toBeTruthy();
     expect(screen.getByText('Priya S wants to help you')).toBeTruthy();
+    // prd-F3: the page chrome carries the org's display name and accent from the public lookup.
+    const brand = screen.getByTestId('desk-brand');
+    expect(brand.textContent).toContain('Acme IT');
+    expect((brand.closest('header') as HTMLElement).style.borderTopColor).toBe('rgb(15, 118, 110)');
     expect(lookups).toEqual([COMPACT]);
     expect(screen.getByTestId('where').textContent).toBe('/join');
 
@@ -95,7 +99,7 @@ describe('join page', () => {
 
   it('accepts the compatibility ?t= query and removes it too', async () => {
     renderAt(`/join?t=${COMPACT}`);
-    expect(await screen.findByText('Acme IT')).toBeTruthy();
+    expect(await screen.findByText('Acme IT', { selector: 'p' })).toBeTruthy();
     expect(lookups).toEqual([COMPACT]);
     expect(screen.getByTestId('where').textContent).toBe('/join');
   });
@@ -137,7 +141,7 @@ describe('join page', () => {
     renderAt('/join');
     await user.type(screen.getByLabelText('Paste your support code or link'), `https://in.example.com/join#t=${COMPACT}`);
     await user.click(screen.getByRole('button', { name: 'Continue' }));
-    await screen.findByText('Acme IT');
+    await screen.findByText('Acme IT', { selector: 'p' });
     expect(lookups).toEqual([COMPACT]);
   });
 
@@ -179,6 +183,6 @@ describe('join page', () => {
     await act(async () => {
       await user.click(screen.getByRole('button', { name: 'Retry' }));
     });
-    await waitFor(() => expect(screen.getByText('Acme IT')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Acme IT', { selector: 'p' })).toBeTruthy());
   });
 });

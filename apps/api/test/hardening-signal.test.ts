@@ -1,7 +1,7 @@
 /** Regression tests: live socket authority (SEC-02) and token expiry on held knocks (SEC-03 / correctness-F5). */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { listOpenSessionsByToken, revokeAuthSession } from '@indiansassist/db';
-import { addMember, call, cookieOf, createToken, listen, makeApp, PASSWORD, signup, type Account, type TestApp } from './helpers.js';
+import { addMember, call, cookieOf, createToken, listen, makeApp, PASSWORD, signup, type TestApp } from './helpers.js';
 import { Kit, sleep } from './signal-kit.js';
 
 let t: TestApp;

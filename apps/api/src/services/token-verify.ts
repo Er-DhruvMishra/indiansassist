@@ -120,8 +120,8 @@ async function verifyShortCode(ctx: AppContext, code: string, resumeKey?: string
   if (blocked > 0)
     return { ok: false, code: 'rate_limited', message: 'too many attempts', details: { retryAfterSec: blocked } };
   const miss: TokenVerifyFail = { ...NOT_FOUND, shortCodeMiss: true };
-  // Every issued code carries a Luhn check digit (section 15 X12): an invalid one can never match, so it is
-  // answered without touching the database, and it still counts as a miss towards the S3 budget.
+  // Every issued code carries a Luhn check digit (section 3.3, 15 X12): an invalid one can never match, so it is
+  // answered without touching the database, and it still counts as a miss towards the S3 budgets.
   if (!luhnValid(code)) return miss;
   let row = await findTokenByShortCode(ctx.db, code);
   let resumeSession: SessionRow | null = null;
@@ -154,14 +154,24 @@ async function verifyShortCode(ctx: AppContext, code: string, resumeKey?: string
   return { ok: true, token: row, org, via: 'short_code', resumeSession };
 }
 
+/**
+ * Per-IP short-code miss budget (section 3.3 S3, SEC-11): the Luhn digit leaves 9 x 10^10 issued codes, so the
+ * guessing budgets are a tenth of what a full 12-digit space would allow. With 3 misses per IP and minute it also
+ * takes at least 11 addresses to trip the node budget of 30.
+ */
+export const SHORT_CODE_IP_MISSES = { limit: 3, windowMs: 60_000 };
+
 /** Runs section 3.5 on a compact token or a 12-digit short code (raw user input is normalised first). */
 export async function verifyTokenInput(
   ctx: AppContext,
   input: string,
-  opts: { resumeKey?: string } = {},
+  opts: { resumeKey?: string; ip?: string } = {},
 ): Promise<TokenVerifyResult> {
   const norm = normaliseTokenInput(input);
   if (!norm) return { ok: false, code: 'token_malformed', message: 'not a token or 12-digit code' };
+  const ipKey = opts.ip !== undefined ? `short-code-miss:${opts.ip}` : null;
+  if (norm.kind === 'short_code' && ipKey && (await ctx.limiter.count(ipKey, SHORT_CODE_IP_MISSES.windowMs)) >= SHORT_CODE_IP_MISSES.limit)
+    return { ok: false, code: 'rate_limited', message: 'too many attempts', details: { retryAfterSec: 60 } };
   const res =
     norm.kind === 'compact'
       ? await verifyCompact(ctx, norm.value, opts.resumeKey)
@@ -169,6 +179,7 @@ export async function verifyTokenInput(
   if (!res.ok && res.shortCodeMiss) {
     ctx.metrics.shortCodeMisses.inc();
     ctx.shortCodes.recordMiss();
+    if (ipKey) await ctx.limiter.hit(ipKey, Number.MAX_SAFE_INTEGER, SHORT_CODE_IP_MISSES.windowMs);
   }
   return res;
 }

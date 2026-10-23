@@ -234,4 +234,10 @@ describe('short code check digit', () => {
     expect(formatShortCode('482193657710')).toBe('4821 9365 7710');
     expect(() => formatShortCode('48219365771')).toThrow();
   });
+
+  it('the example code shown in the contracts and on the join page is Luhn-valid', () => {
+    // contracts 3.3 and the JoinPage hint use `4821 9365 7715`; a user typing it must pass the local check.
+    expect(isValidShortCode('482193657715')).toBe(true);
+    expect(isValidShortCode('482193657710')).toBe(false);
+  });
 });

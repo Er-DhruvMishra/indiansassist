@@ -7,18 +7,18 @@ import type { DcAnnot, Recording, SessionCreated, SessionEnded } from '@indiansa
 import { EMPTY_ANNOT, applyAnnot, pruneAnnot, type AnnotState } from '../../lib/annotation';
 import { errorMessage } from '../../lib/api';
 import { sessionsApi } from '../../lib/endpoints';
+import { IceRecovery } from '../../lib/iceRecovery';
 import { PeerLink, type ChatItem } from '../../lib/link';
 import type { Transfer } from '../../lib/fileTransfer';
 import { toRtcIceServers } from '../../lib/peer';
-import { SessionRecorder } from '../../lib/recorder';
 import { SessionControllerBase, type GetUserMedia } from '../../lib/sessionBase';
 import type { SignalClient } from '../../lib/signal';
 import { EMPTY_STATS, computeNetStats, type NetStats } from '../../lib/stats';
-import { uploadRecording } from '../../lib/upload';
 import { asClient } from '../../lib/wire';
+import { ConsoleRecording, type RecorderFactory, type RecordingFailure, type RecordingPhase } from './consoleRecording';
 
-export type ConsolePhase = 'resuming' | 'waiting_consent' | 'connecting' | 'live' | 'ending' | 'ended';
-export type RecordingPhase = 'idle' | 'recording' | 'uploading' | 'stored' | 'failed';
+export type { RecordingPhase } from './consoleRecording';
+export type ConsolePhase = 'resuming' | 'waiting_consent' | 'connecting' | 'live' | 'reconnecting' | 'ending' | 'ended';
 
 export type ConsoleSnapshot = {
   phase: ConsolePhase;
@@ -35,9 +35,12 @@ export type ConsoleSnapshot = {
   peerMuted: boolean | null;
   recording: RecordingPhase;
   recordingUsed: boolean;
+  recordingFailure: RecordingFailure;
   uploadProgress: number;
   recordingResult: Recording | null;
   net: NetStats;
+  /** Time to first frame (section 13.2): `consent.changed granted` to the first drawn remote frame. */
+  ttffMs: number | null;
   relayOnly: boolean;
   ended: SessionEnded | null;
   notice: string | null;
@@ -59,9 +62,11 @@ const INITIAL: ConsoleSnapshot = {
   peerMuted: null,
   recording: 'idle',
   recordingUsed: false,
+  recordingFailure: null,
   uploadProgress: 0,
   recordingResult: null,
   net: EMPTY_STATS,
+  ttffMs: null,
   relayOnly: false,
   ended: null,
   notice: null,
@@ -73,20 +78,37 @@ export type ControllerDeps = {
   sessionId: string;
   getUserMedia?: GetUserMedia;
   RTCPeerConnectionImpl?: typeof RTCPeerConnection;
+  createRecorder?: RecorderFactory;
 };
 
 const SHOWN_ERRORS = ['forbidden', 'session_not_found', 'bad_state', 'consent_required', 'relay_closed'];
 
+/** getStats() sampling for the network panel; every second sample is reported, i.e. every 5 s (13.2). */
+export const STATS_SAMPLE_MS = 2500;
+export const STATS_REPORT_EVERY = 2;
+/** The server drops `session.stats` closer than 4 s to the previous one (section 7.3). */
+const STATS_MIN_GAP_MS = 4000;
+
 export class AssistConsoleController extends SessionControllerBase<ConsoleSnapshot> {
   private offs: (() => void)[] = [];
   private iceServers: RTCIceServer[] = [];
-  private recorder: SessionRecorder | null = null;
-  private lastBlob: { blob: Blob; mime: string; durationMs: number } | null = null;
+  private readonly rec: ConsoleRecording;
+  private recovery: IceRecovery | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private statTick = 0;
+  private lastStatsSentAt = 0;
+  private consentGrantedAt: number | null = null;
 
   constructor(private readonly deps: ControllerDeps) {
     super(INITIAL, 'assist', deps.getUserMedia);
+    this.rec = new ConsoleRecording({
+      sessionId: deps.sessionId,
+      set: (p) => this.set(p),
+      isUsed: () => this.snap.recordingUsed,
+      sendCtrl: (recording) => void this.link?.send({ t: 'recording.state', recording, ts: Date.now() }),
+      audioSources: () => [this.snap.remoteAudio, this.mic].filter((s): s is MediaStream => s !== null),
+      createRecorder: deps.createRecorder,
+    });
   }
 
   protected signalClient(): SignalClient {
@@ -112,7 +134,8 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
       s.on('session.created', mine((m: SessionCreated) => this.onCreated(m))),
       s.on('consent.changed', mine((m) => {
         if (m.state === 'granted') {
-          this.set({ phase: 'connecting', notice: null });
+          this.consentGrantedAt = Date.now();
+          this.set({ phase: 'connecting', notice: null, ttffMs: null });
           this.ensureLink();
         } else if (m.state === 'revoked') {
           this.teardown();
@@ -149,7 +172,7 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
         const next = pruneAnnot(this.snap.annot);
         if (next !== this.snap.annot) this.set({ annot: next });
       }, 500),
-      setInterval(() => void this.sampleStats(), 2000),
+      setInterval(() => void this.sampleStats(), STATS_SAMPLE_MS),
     );
     if (cached) this.onCreated(cached);
     else if (helloReady) this.resume();
@@ -194,12 +217,21 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
       events: {
         onTrack: (track, streams) => {
           if (track.kind === 'video') this.set({ remoteVideo: streams[0] ?? new MediaStream([track]) });
-          else this.set({ remoteAudio: new MediaStream([track]) });
+          else {
+            this.set({ remoteAudio: new MediaStream([track]) });
+            this.rec.syncAudio();
+          }
         },
-        onConnectionState: (st) => this.set({ connectionState: st, ...(st === 'connected' ? { phase: 'live' as const } : {}) }),
+        onConnectionState: (st) => {
+          this.recovery?.update(st);
+          this.set({ connectionState: st, ...(st === 'connected' ? { phase: 'live' as const } : {}) });
+        },
         onChannelOpen: (label) => {
           if (label === 'ia.chat') this.deps.signal.send({ t: 'chat.channel_open', sessionId: this.id });
-          if (label === 'ia.ctrl' && this.mic) this.sendVoiceState();
+          if (label !== 'ia.ctrl') return;
+          if (this.mic) this.sendVoiceState();
+          // correctness-F11: every new ia.ctrl learns the current recorder state.
+          link.send({ t: 'recording.state', recording: this.rec.active, ts: Date.now() });
         },
         onChat: (m) => this.receiveChat(m),
         onTyping: (active) => this.set({ peerTyping: active }),
@@ -212,21 +244,53 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
       },
     });
     this.link = link;
+    this.recovery = this.makeRecovery(link);
     const track = this.mic?.getAudioTracks()[0];
     if (track && this.mic) link.addTrack(track, this.mic);
   }
 
+  /**
+   * correctness-F6: the impolite Desk restarts ICE first; from the second attempt the Assist forces relay
+   * (a direct path that keeps failing usually needs TURN), then restarts ICE itself.
+   */
+  private makeRecovery(link: PeerLink): IceRecovery {
+    return new IceRecovery({
+      onRestart: (attempt) => {
+        if (attempt < 2) return;
+        if (!this.snap.relayOnly) this.setRelayOnly(true);
+        else link.peer.restartIce();
+      },
+      onReconnecting: (on) => {
+        if (on && (this.snap.phase === 'live' || this.snap.phase === 'connecting'))
+          this.set({ phase: 'reconnecting', notice: 'The media connection was interrupted. Reconnecting...' });
+        else if (!on) this.set({ notice: null });
+      },
+      onGiveUp: () => this.set({ notice: 'The media connection could not be restored. Wait for the Desk to rejoin or end the session.' }),
+    });
+  }
+
   protected override closeLink(): void {
     const had = this.link !== null;
+    this.recovery?.dispose();
+    this.recovery = null;
     super.closeLink();
-    if (had) this.set({ remoteVideo: null, connectionState: 'closed' });
+    if (had) {
+      this.set({ remoteVideo: null, connectionState: 'closed', ...(this.snap.phase === 'reconnecting' ? { phase: 'connecting' as const } : {}) });
+      this.rec.syncAudio();
+    }
+  }
+
+  override async toggleVoice(): Promise<void> {
+    await super.toggleVoice();
+    this.rec.syncAudio();
   }
 
   /** Hard rule 2: stop the recorder (keeping its chunks for upload), stop local tracks, close everything. */
   teardown(): void {
-    if (this.recorder) void this.stopRecording(false);
+    if (this.rec.active) void this.rec.stop(false);
     this.closeLink();
     this.stopMic();
+    this.consentGrantedAt = null;
     this.set({ annot: EMPTY_ANNOT });
   }
 
@@ -236,28 +300,38 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
     try {
       const net = computeNetStats(await link.peer.getStats(), this.snap.net);
       this.set({ net });
-      // Displayed every 2 s; reported to the server every 10 s (the server keeps one per >= 4 s).
-      if (++this.statTick % 5 === 0) {
-        const int = (n: number | null) => (n === null ? null : Math.round(n));
-        this.deps.signal.send(
-          asClient({
-            t: 'session.stats',
-            sessionId: this.id,
-            path: net.path,
-            rttMs: net.rttMs,
-            codec: net.codec,
-            bitrateKbps: net.bitrateKbps,
-            fps: net.fps,
-            width: int(net.width),
-            height: int(net.height),
-            packetsLost: int(net.packetsLost),
-            ts: Date.now(),
-          }),
-        );
-      }
+      // prd-F9: displayed every 2.5 s, reported every 5 s (the server keeps one per >= 4 s).
+      if (++this.statTick % STATS_REPORT_EVERY === 0) this.sendStats(net);
     } catch {
       /* the connection closed between ticks */
     }
+  }
+
+  private sendStats(net: NetStats): void {
+    const int = (n: number | null) => (n === null ? null : Math.round(n));
+    const sent = this.deps.signal.send(
+      asClient({
+        t: 'session.stats',
+        sessionId: this.id,
+        path: net.path,
+        rttMs: net.rttMs,
+        codec: net.codec,
+        bitrateKbps: net.bitrateKbps,
+        fps: net.fps,
+        width: int(net.width),
+        height: int(net.height),
+        packetsLost: int(net.packetsLost),
+        ts: Date.now(),
+      }),
+    );
+    if (sent) this.lastStatsSentAt = Date.now();
+  }
+
+  /** RemoteView's first drawn frame (prd-F8); measured once per consent grant. */
+  firstFrame(): void {
+    if (this.consentGrantedAt === null) return;
+    this.set({ ttffMs: Math.max(0, Date.now() - this.consentGrantedAt) });
+    this.consentGrantedAt = null;
   }
 
   sendAnnot(msg: DcAnnot): void {
@@ -268,50 +342,27 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
   // ---------- recording (section 9) ----------
 
   startRecording(canvas: HTMLCanvasElement | null): void {
-    if (!canvas || this.recorder || this.snap.recordingUsed) return;
-    const rec = new SessionRecorder(canvas, () => [this.snap.remoteAudio, this.mic].filter((s): s is MediaStream => s !== null));
-    try {
-      rec.start();
-    } catch (e) {
-      this.set({ error: errorMessage(e) });
-      return;
-    }
-    this.recorder = rec;
-    this.set({ recording: 'recording', recordingUsed: true, error: null });
-    this.link?.send({ t: 'recording.state', recording: true, ts: Date.now() });
-    sessionsApi.recordingStarted(this.id).catch((e: unknown) => this.set({ error: `Could not report the recording: ${errorMessage(e)}` }));
+    this.rec.start(canvas);
   }
 
   /** Stops and uploads. `notifyPeer` is false during teardown (nothing more is sent on ia.ctrl). */
-  async stopRecording(notifyPeer = true): Promise<void> {
-    const rec = this.recorder;
-    if (!rec) return;
-    this.recorder = null;
-    if (notifyPeer) this.link?.send({ t: 'recording.state', recording: false, ts: Date.now() });
-    this.lastBlob = await rec.stop();
-    await this.retryUpload();
+  stopRecording(notifyPeer = true): Promise<void> {
+    return this.rec.stop(notifyPeer);
   }
 
-  async retryUpload(): Promise<void> {
-    const b = this.lastBlob;
-    if (!b) return;
-    this.set({ recording: 'uploading', uploadProgress: 0 });
-    try {
-      const result = await uploadRecording(this.id, b.blob, { mime: b.mime, durationMs: Math.round(b.durationMs) }, (sent, total) =>
-        this.set({ uploadProgress: total > 0 ? sent / total : 1 }),
-      );
-      this.set({ recording: 'stored', recordingResult: result, uploadProgress: 1 });
-    } catch (e) {
-      this.set({ recording: 'failed', error: `Recording upload failed: ${errorMessage(e)}` });
-    }
+  retryUpload(): Promise<void> {
+    return this.rec.retryUpload();
   }
 
   // ---------- session ----------
 
   async endSession(note?: string): Promise<void> {
+    const net = this.snap.net;
     this.teardown();
     this.set({ phase: 'ending' });
     if (this.deps.signal.isOpen) {
+      // prd-F9: a short session still records its path; the last sample is sent before the end.
+      if (net.ts > 0 && Date.now() - this.lastStatsSentAt >= STATS_MIN_GAP_MS) this.sendStats(net);
       this.deps.signal.send({ t: 'session.end', sessionId: this.id, ...(note ? { note } : {}) });
       return;
     }

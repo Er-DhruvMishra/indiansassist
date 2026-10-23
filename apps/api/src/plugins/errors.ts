@@ -4,6 +4,7 @@ import { DbError, InvalidCursorError, NotFoundError, SessionAlreadyEndedError } 
 import type { FastifyError, FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { HttpError } from '../errors.js';
+import { CREDENTIAL_ROUTE_RE, pathOnly, serializeErrorWithoutMessages } from '../lib/logger.js';
 
 type Mapped = { status: number; code: ApiErrorCode; message: string; details?: Record<string, unknown> };
 
@@ -39,7 +40,11 @@ export function mapError(err: unknown): Mapped {
 export function registerErrorHandlers(app: FastifyInstance): void {
   app.setErrorHandler((err, req, reply) => {
     const m = mapError(err);
-    if (m.status >= 500) req.log.error({ err }, 'request failed');
+    if (m.status >= 500) {
+      // Auth and token routes: no message of any kind, it might quote the credential-bearing body (SEC-07).
+      if (CREDENTIAL_ROUTE_RE.test(pathOnly(req.url))) req.log.error({ error: serializeErrorWithoutMessages(err) }, 'request failed');
+      else req.log.error({ err }, 'request failed');
+    }
     else req.log.info({ code: m.code, status: m.status }, 'request rejected');
     if (m.code === 'rate_limited' && m.details?.['retryAfterSec'] !== undefined)
       void reply.header('Retry-After', String(m.details['retryAfterSec']));

@@ -13,6 +13,7 @@ import {
 import {
   createAuthSession,
   findValidAuthSession,
+  findValidAuthSessionById,
   getOrg,
   getSeatByUser,
   touchAuthSession,
@@ -57,6 +58,19 @@ export async function principalFromCookieValue(ctx: AppContext, raw: string | nu
   const found = await findValidAuthSession(ctx.db, hash);
   if (!found || !safeEqual(found.session.tokenHash, hash)) return null;
   if (found.user.status !== 'active') return null;
+  const org = await getOrg(ctx.db, found.user.orgId);
+  if (!org) return null;
+  const seat = await getSeatByUser(ctx.db, found.user.id);
+  return { user: found.user, org, seat, authSession: found.session };
+}
+
+/**
+ * The principal of a cookie session by its id (not revoked, not expired, user active). Used by a session's owner
+ * node for an Assist socket held by another node, which forwards only the cookie session id (section 7.6 N1).
+ */
+export async function principalFromAuthSessionId(ctx: AppContext, authSessionId: string): Promise<Principal | null> {
+  const found = await findValidAuthSessionById(ctx.db, authSessionId);
+  if (!found || found.user.status !== 'active') return null;
   const org = await getOrg(ctx.db, found.user.orgId);
   if (!org) return null;
   const seat = await getSeatByUser(ctx.db, found.user.id);

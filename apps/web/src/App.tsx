@@ -21,6 +21,7 @@ const ConsolePage = lazy(() => import('./assist/console/ConsolePage').then((m) =
 const AuditPage = lazy(() => import('./assist/audit/AuditPage').then((m) => ({ default: m.AuditPage })));
 const ResidencyPage = lazy(() => import('./assist/ResidencyPage').then((m) => ({ default: m.ResidencyPage })));
 const UsersPage = lazy(() => import('./assist/UsersPage').then((m) => ({ default: m.UsersPage })));
+const BrandingPage = lazy(() => import('./assist/BrandingPage').then((m) => ({ default: m.BrandingPage })));
 const AccountPage = lazy(() => import('./assist/AccountPage').then((m) => ({ default: m.AccountPage })));
 
 function RootRedirect() {
@@ -75,6 +76,7 @@ export function App() {
           <Route path="audit" element={<Allow cap="audit.org"><AuditPage /></Allow>} />
           <Route path="residency" element={<Allow cap="residency"><ResidencyPage /></Allow>} />
           <Route path="users" element={<Allow cap="users.list"><UsersPage /></Allow>} />
+          <Route path="branding" element={<Allow cap="branding"><BrandingPage /></Allow>} />
           <Route path="account" element={<AccountPage />} />
         </Route>
         <Route path="*" element={<NotFound />} />

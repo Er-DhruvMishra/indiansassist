@@ -48,6 +48,7 @@ export type SerializedError = { [key: string]: unknown; type: string; message: s
 
 export function serializeError(err: unknown): SerializedError {
   if (!err || typeof err !== 'object') return { type: typeof err, message: truncate(String(err)), stack: '' };
+  if (Array.isArray(err)) return { type: 'Array', message: 'non-error value', stack: '' };
   const e = err as ErrLike;
   if (isQueryError(e)) {
     const cause = e.cause as ErrLike | undefined;
@@ -72,7 +73,35 @@ export function serializeError(err: unknown): SerializedError {
   };
 }
 
+/**
+ * Variant for routes whose request bodies carry credentials (auth: passwords, invite tokens; tokens: compact tokens
+ * and short codes): every message is replaced, because a parser or driver message can quote the body it failed on
+ * (e.g. `Unexpected token ... "{"password":...` from JSON.parse). Type, code, constraint and frames are kept.
+ */
+export function serializeErrorWithoutMessages(err: unknown): SerializedError {
+  const out = serializeError(err);
+  const hidden = '[message withheld: credential route]';
+  const strip = (o: Record<string, unknown>): Record<string, unknown> => {
+    const c = o['cause'];
+    return { ...o, message: hidden, ...(c && typeof c === 'object' ? { cause: strip(c as Record<string, unknown>) } : {}) };
+  };
+  return { ...(strip(out) as SerializedError), stack: frames(out.stack, `${out.type}: ${hidden}`) };
+}
+
+/** Request paths whose bodies are never logged in any form (SEC-07). */
+export const CREDENTIAL_ROUTE_RE = /^\/api\/v1\/(auth|tokens)(\/|$)/;
+
 export const REDACT_PATHS = [
+  'body',
+  'req.body',
+  '*.body',
+  '*.passwordHash',
+  '*.inviteTokenHash',
+  '*.tokenHash',
+  '*.resumeKeyHash',
+  '*.signature',
+  '*.nonce',
+  '*.shortCode',
   'req.headers.cookie',
   'req.headers.authorization',
   'req.query',

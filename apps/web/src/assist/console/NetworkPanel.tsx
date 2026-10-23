@@ -18,11 +18,14 @@ const v = (n: number | null, unit = '') => (n === null ? '-' : `${Math.round(n)}
 export function NetworkPanel({
   net,
   signalLatency,
+  ttffMs = null,
   relayOnly,
   onRelayOnly,
 }: {
   net: NetStats;
   signalLatency: number | null;
+  /** Time to first frame (section 13.2, target < 3 s on LAN). */
+  ttffMs?: number | null;
   relayOnly: boolean;
   onRelayOnly: (on: boolean) => void;
 }) {
@@ -49,6 +52,7 @@ export function NetworkPanel({
         <Row label="FPS" value={net.fps === null ? '-' : net.fps.toFixed(0)} />
         <Row label="Packets lost" value={v(net.packetsLost)} />
         <Row label="Signaling" value={v(signalLatency, ' ms')} />
+        <Row label="First frame" value={ttffMs === null ? '-' : `${(ttffMs / 1000).toFixed(1)} s`} />
       </dl>
       {IS_DEV && (
         <label className="mt-2 flex items-center gap-2 text-xs">

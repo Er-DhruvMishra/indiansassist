@@ -12,6 +12,7 @@ export type Capability =
   | 'residency'
   | 'users.list'
   | 'users.manage'
+  | 'branding'
   | 'ws.assist'
   | 'recordings';
 
@@ -26,6 +27,7 @@ const MATRIX: Record<Capability, readonly UserRole[]> = {
   residency: ['org_admin', 'auditor'],
   'users.list': ['senior_technician', 'org_admin', 'auditor'],
   'users.manage': ['org_admin'],
+  branding: ['org_admin'],
   'ws.assist': ['technician', 'senior_technician', 'org_admin'],
   recordings: ['technician', 'senior_technician', 'org_admin', 'auditor'],
 };

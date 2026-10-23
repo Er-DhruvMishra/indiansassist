@@ -83,7 +83,9 @@ export async function prepareRecording(
     bytes: input.bytes ?? 0,
     durationMs: input.durationMs ?? null,
     uploadId: input.uploadId ?? null,
-    uploadExpiresAt: input.uploadId ? new Date(Date.now() + 24 * 60 * 60_000) : null,
+    // Chunked uploads stay open 24 h; a single upload streams in one request, so a row still `uploading` after
+    // 1 h was abandoned (crash mid-stream) and the sweeper fails it, freeing the open-upload quota (SEC-08).
+    uploadExpiresAt: new Date(Date.now() + (input.uploadId ? 24 * 60 * 60_000 : STALE_UPLOAD_MS)),
   };
   if (existing) {
     if (existing.status === 'stored') fail('recording_exists', 'this session already has a stored recording');

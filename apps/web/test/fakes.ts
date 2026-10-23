@@ -93,8 +93,19 @@ export class FakePeerConnection {
   getConfiguration(): RTCConfiguration {
     return this.config;
   }
-  setConfiguration(): void {}
-  restartIce(): void {}
+  setConfiguration(config: RTCConfiguration): void {
+    this.lastConfig = config;
+  }
+  lastConfig: RTCConfiguration | null = null;
+  restarts = 0;
+  restartIce(): void {
+    this.restarts += 1;
+  }
+  /** Test helper: drive `connectionState` and fire the change event. */
+  setConnectionState(s: RTCPeerConnectionState): void {
+    this.connectionState = s;
+    this.onconnectionstatechange?.();
+  }
   async getStats(): Promise<Map<string, unknown>> {
     return new Map();
   }

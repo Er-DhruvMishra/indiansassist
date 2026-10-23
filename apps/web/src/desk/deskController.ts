@@ -3,17 +3,31 @@
  * snapshots. Consent gate (D2): `getDisplayMedia` runs only from `share()`, which is reachable only in the
  * `consent` phase (after `session.created`); the peer connection is built only after `consent.ok`.
  * Hard rule 2 is `teardown()`, applied before every screen change caused by an end or a resume (D9).
+ *
+ * Local end (prd-F1): Stop / Revoke / Decline end the session on this computer at once and for good. The
+ * end frame is sent now or, while the socket reconnects, right after the next `desk.hello.ok` re-registers
+ * this Desk (the in-memory `resumeKey` is kept for exactly that); the stored key is dropped immediately so a
+ * reload never resumes, and a re-sent `session.created` never brings the consent screen back.
  */
-import { STORAGE_KEYS, type DcAnnot, type FileEventData, type SessionCreated, type SessionEnded } from '@indiansassist/shared';
+import {
+  STORAGE_KEYS,
+  type ClientSignalMessage,
+  type DcAnnot,
+  type DeskHelloOk,
+  type SessionCreated,
+  type SessionEnded,
+} from '@indiansassist/shared';
 import { EMPTY_ANNOT, applyAnnot, pruneAnnot } from '../lib/annotation';
 import { errorMessage } from '../lib/api';
+import { IceRecovery } from '../lib/iceRecovery';
 import { PeerLink } from '../lib/link';
 import { toRtcIceServers } from '../lib/peer';
 import { SessionControllerBase, type GetUserMedia } from '../lib/sessionBase';
 import { SignalClient, type SignalStatus } from '../lib/signal';
 import { removeStore, writeStore } from '../lib/storage';
+import { DeskAttestations } from './deskAttest';
 import { displayMediaOptions, localEnded, surfaceOf } from './deskMedia';
-import type { DeskPhase, DeskSnapshot } from './deskTypes';
+import { DESK_INITIAL, type DeskPhase, type DeskSnapshot } from './deskTypes';
 
 export type { DeskPhase, DeskSnapshot } from './deskTypes';
 export { displayMediaOptions, surfaceOf } from './deskMedia';
@@ -31,44 +45,26 @@ export type DeskDeps = {
   pollMs?: number;
 };
 
-const INITIAL: DeskSnapshot = {
-  phase: 'connecting',
-  signalStatus: 'idle',
-  hello: null,
-  sessionId: null,
-  created: null,
-  surface: null,
-  localStream: null,
-  sharingSince: null,
-  recording: false,
-  recordingSeen: false,
-  chat: [],
-  peerTyping: false,
-  transfers: [],
-  annot: EMPTY_ANNOT,
-  voiceOn: false,
-  muted: false,
-  peerMuted: null,
-  remoteAudio: null,
-  ended: null,
-  error: null,
-  notice: null,
-  technicianOnline: false,
-};
-
 const FATAL = new Set(['token_malformed', 'token_bad_signature', 'token_not_found', 'token_gone', 'region_mismatch', 'token_busy', 'join_unsupported', 'not_authenticated']);
+
+/** How long the Desk waits for the server's `session.ended` before showing its local receipt. */
+export const LOCAL_END_FALLBACK_MS = 5000;
 
 export class DeskController extends SessionControllerBase<DeskSnapshot> {
   readonly signal: SignalClient;
   private iceServers: RTCIceServer[] = [];
   private resumeKey: string | null;
   private timers: ReturnType<typeof setInterval>[] = [];
-  private pending = new Map<string, (ok: boolean) => void>();
-  private evSeq = 0;
+  private readonly attestations: DeskAttestations;
   private endFallback: ReturnType<typeof setTimeout> | null = null;
+  /** The Desk ended the session itself (stop, revoke, decline): never resume it, never consent again. */
+  private endedLocally = false;
+  /** The end frame that could not be sent (socket reconnecting); delivered after the next resume. */
+  private endPending: ClientSignalMessage | null = null;
+  private recovery: IceRecovery | null = null;
 
   constructor(private readonly deps: DeskDeps) {
-    super(deps.resume ? { ...INITIAL, sessionId: deps.resume.sessionId } : INITIAL, 'desk', deps.getUserMedia);
+    super(deps.resume ? { ...DESK_INITIAL, sessionId: deps.resume.sessionId } : DESK_INITIAL, 'desk', deps.getUserMedia);
     this.resumeKey = deps.resume?.resumeKey ?? null;
     this.signal = new SignalClient({
       url: deps.url,
@@ -82,6 +78,7 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
         }),
       onStatus: (s, code) => this.onStatus(s, code),
     });
+    this.attestations = new DeskAttestations(this.signal, () => this.snap.sessionId);
     this.wire();
   }
 
@@ -115,6 +112,8 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     this.set({ signalStatus: s });
     if (s === 'closed' && code !== undefined && code >= 4400 && !['ended', 'error'].includes(this.snap.phase)) {
       this.teardown();
+      // A local end already happened: show its receipt rather than an error screen.
+      if (this.snap.phase === 'ending') return this.finishLocally();
       this.set({ phase: 'error', error: this.snap.error ?? { t: 'error', code: 'forbidden', message: `The connection was closed (${code}).` } });
     }
   }
@@ -126,6 +125,7 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     };
     s.on('desk.hello.ok', (m) => {
       this.set({ hello: m, error: null });
+      if (this.endedLocally) return this.afterLocalEndHello(m);
       if (m.resume) {
         this.setSession(m.resume.sessionId);
         // A resumed active session needs consent again (section 7.5): hard rule 2 first (D9).
@@ -152,12 +152,14 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
       if (m.state === 'held' && this.snap.phase === 'waiting') this.set({ phase: 'held' });
     });
     s.on('session.created', mine((m: SessionCreated) => {
+      // A resume re-sends session.created; a Desk that ended the session must not see consent again.
+      if (this.endedLocally) return;
       this.teardown();
       this.setSession(m.sessionId);
       this.set({ created: m, phase: 'consent', ended: null, notice: null });
     }));
     s.on('consent.ok', (m) => {
-      if (m.state !== 'active') return;
+      if (m.state !== 'active' || this.snap.phase !== 'starting') return;
       if (m.iceServers) this.iceServers = toRtcIceServers(m.iceServers);
       this.buildLink();
       this.set({ phase: 'sharing', sharingSince: this.snap.sharingSince ?? Date.now() });
@@ -178,18 +180,14 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
       this.iceServers = toRtcIceServers(m.iceServers);
       this.link?.peer.refreshIce(this.iceServers, true);
     }));
-    s.on('session.recording', mine((m) => this.set({ recording: m.recording, recordingSeen: this.snap.recordingSeen || m.recording })));
+    s.on('session.recording', mine((m) => this.setRecording({ ws: m.recording })));
     s.on('chat.message', mine((m) => this.receiveChat(m)));
-    s.on('event.ok', (m) => {
-      const key = m.re && this.pending.has(m.re) ? m.re : this.pending.keys().next().value;
-      if (key === undefined) return;
-      this.pending.get(key)?.(true);
-      this.pending.delete(key);
-    });
+    s.on('event.ok', (m) => this.attestations.acknowledge(m.re));
     s.on('session.ended', mine((m: SessionEnded) => this.onEnded(m)));
     s.on('error', (m) => {
       if (FATAL.has(m.code)) {
         this.teardown();
+        if (this.snap.phase === 'ending') return this.finishLocally();
         this.set({ phase: 'error', error: m });
       } else {
         this.set({ notice: m.code === 'rate_limited' ? 'Too many attempts. Please wait a few minutes and try again.' : m.message || m.code });
@@ -208,10 +206,20 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
 
   private onEnded(m: SessionEnded): void {
     if (this.endFallback) clearTimeout(this.endFallback);
+    this.endFallback = null;
     this.teardown();
     this.resumeKey = null;
+    this.endPending = null;
     removeStore('session', STORAGE_KEYS.roomResume);
-    this.set({ phase: 'ended', ended: m, recording: false });
+    this.set({ phase: 'ended', ended: m });
+  }
+
+  /** D3: the dot shows while either source says true; each source only changes its own flag (prd-F5). */
+  private setRecording(p: { ws?: boolean; ctrl?: boolean }): void {
+    const recordingWs = p.ws ?? this.snap.recordingWs;
+    const recordingCtrl = p.ctrl ?? this.snap.recordingCtrl;
+    const recording = recordingWs || recordingCtrl;
+    this.set({ recordingWs, recordingCtrl, recording, recordingSeen: this.snap.recordingSeen || recording });
   }
 
   // ---------- consent (D1, D2, D4, D5) ----------
@@ -242,8 +250,7 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
   decline(): void {
     if (!['consent', 'picking'].includes(this.snap.phase)) return;
     this.teardown();
-    this.signal.send({ t: 'desk.consent', state: 'revoked' });
-    this.set({ phase: 'ending' });
+    this.endLocally({ t: 'desk.consent', state: 'revoked' }, 'consent_revoked');
   }
 
   /** D4: stop.sharing on ia.ctrl, hard rule 2, then WS session.end. */
@@ -251,8 +258,7 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     if (!['sharing', 'starting'].includes(this.snap.phase) || !this.snap.sessionId) return;
     this.link?.send({ t: 'stop.sharing', ts: Date.now() });
     this.teardown();
-    this.signal.send({ t: 'session.end', sessionId: this.snap.sessionId });
-    this.awaitEnd('desk_stopped');
+    this.endLocally({ t: 'session.end', sessionId: this.snap.sessionId }, 'desk_stopped');
   }
 
   /** D5: consent.revoked on ia.ctrl, hard rule 2, then desk.consent revoked. */
@@ -260,23 +266,46 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     if (!['sharing', 'starting'].includes(this.snap.phase)) return;
     this.link?.send({ t: 'consent.revoked', ts: Date.now() });
     this.teardown();
-    this.signal.send({ t: 'desk.consent', state: 'revoked' });
-    this.awaitEnd('consent_revoked');
+    this.endLocally({ t: 'desk.consent', state: 'revoked' }, 'consent_revoked');
   }
 
-  private awaitEnd(reason: SessionEnded['endReason']): void {
+  /** Sends the end now or keeps it for the next resume (prd-F1); the local receipt follows either way. */
+  private endLocally(msg: ClientSignalMessage, reason: SessionEnded['endReason']): void {
+    this.endedLocally = true;
+    removeStore('session', STORAGE_KEYS.roomResume);
+    if (this.signal.send(msg)) {
+      this.resumeKey = null;
+      this.endPending = null;
+    } else {
+      this.endPending = msg;
+    }
     this.set({ phase: 'ending' });
-    this.endFallback = setTimeout(() => {
-      const { phase, sessionId, created } = this.snap;
-      if (phase !== 'ending' || !sessionId || !created) return;
-      const ended = localEnded({ sessionId, reason, sharingSince: this.snap.sharingSince, assist: created.assist, surface: this.snap.surface, recordingSeen: this.snap.recordingSeen });
-      this.set({ phase: 'ended', ended });
-    }, 5000);
+    if (this.endFallback) clearTimeout(this.endFallback);
+    this.endFallback = setTimeout(() => this.finishLocally(reason), LOCAL_END_FALLBACK_MS);
+  }
+
+  /** The socket re-opened after a local end: deliver the kept end on the re-registered socket, never knock. */
+  private afterLocalEndHello(m: DeskHelloOk): void {
+    const pending = this.endPending;
+    this.endPending = null;
+    this.resumeKey = null;
+    if (pending && m.resume && m.resume.sessionId === this.snap.sessionId) this.signal.send(pending);
+    else this.finishLocally();
+  }
+
+  /** The receipt from local state when the server's `session.ended` has not arrived. */
+  private finishLocally(reason?: SessionEnded['endReason']): void {
+    const { phase, sessionId, created } = this.snap;
+    if (phase !== 'ending' || !sessionId || !created) return;
+    const why = reason ?? (this.snap.sharingSince ? 'desk_stopped' : 'consent_revoked');
+    const ended = localEnded({ sessionId, reason: why, sharingSince: this.snap.sharingSince, assist: created.assist, surface: this.snap.surface, recordingSeen: this.snap.recordingSeen });
+    this.set({ phase: 'ended', ended });
   }
 
   /** After `denied` / `timeout` the socket stays open: knock again on the same token. */
   tryAgain(): void {
     if (this.snap.phase !== 'ended') return;
+    this.endedLocally = false;
     this.set({ phase: 'waiting', ended: null, created: null, sessionId: null, notice: null, sharingSince: null });
     this.knock();
   }
@@ -295,8 +324,9 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
       signal: this.signal,
       createChannels: true,
       RTCPeerConnectionImpl: this.deps.RTCPeerConnectionImpl,
-      attest: (action, data) => this.attest(action, data),
+      attest: (action, data) => this.attestations.attest(action, data),
       events: {
+        onConnectionState: (st) => this.recovery?.update(st),
         onTrack: (track) => {
           if (track.kind === 'audio') this.set({ remoteAudio: new MediaStream([track]) });
         },
@@ -308,33 +338,30 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
           if (label === 'ia.ctrl') this.sendVoiceState();
         },
         onCtrl: (m) => {
-          if (m.t === 'recording.state') this.set({ recording: m.recording, recordingSeen: this.snap.recordingSeen || m.recording });
+          if (m.t === 'recording.state') this.setRecording({ ctrl: m.recording });
           else if (m.t === 'voice.state') this.set({ peerMuted: m.muted });
         },
       },
     });
     this.link = link;
+    // correctness-F6: the Desk is the impolite offerer, so it restarts ICE (perfect negotiation).
+    this.recovery = new IceRecovery({
+      onRestart: () => link.peer.restartIce(),
+      onReconnecting: (on) => this.set({ mediaReconnecting: on }),
+      onGiveUp: () => this.set({ notice: 'The connection to your technician could not be restored. Stop sharing and join again if it does not come back.' }),
+    });
     for (const t of stream.getVideoTracks()) link.addTrack(t, stream);
     const micTrack = this.mic?.getAudioTracks()[0];
     if (micTrack && this.mic) link.addTrack(micTrack, this.mic);
   }
 
-  /** F7: the Desk's attestation over WS `desk.event`, resolved by `event.ok`. */
-  private attest(action: 'file.sent' | 'file.received', data: FileEventData): Promise<boolean> {
-    const sessionId = this.snap.sessionId;
-    if (!sessionId) return Promise.resolve(false);
-    const id = `ev${++this.evSeq}`;
-    return new Promise((resolve) => {
-      this.pending.set(id, resolve);
-      if (!this.signal.send({ t: 'desk.event', id, sessionId, action, data })) {
-        this.pending.delete(id);
-        resolve(false);
-        return;
-      }
-      setTimeout(() => {
-        if (this.pending.delete(id)) resolve(false);
-      }, 10000);
-    });
+  /** The `ia.ctrl` state and the media recovery die with the connection (correctness-F11). */
+  protected override closeLink(): void {
+    this.recovery?.dispose();
+    this.recovery = null;
+    super.closeLink();
+    this.set({ mediaReconnecting: false });
+    this.setRecording({ ctrl: false });
   }
 
   /** Hard rule 2: stop every local track (screen and microphone), close channels and the connection. */
@@ -342,6 +369,8 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     this.closeLink();
     for (const t of this.snap.localStream?.getTracks() ?? []) t.stop();
     this.stopMic();
+    // No recording runs on a share that ended; the next share starts without the dot (correctness-F11).
+    this.setRecording({ ws: false, ctrl: false });
     this.set({ localStream: null, annot: EMPTY_ANNOT });
   }
 
@@ -351,8 +380,8 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     if (this.endFallback) clearTimeout(this.endFallback);
-    for (const r of this.pending.values()) r(false);
-    this.pending.clear();
+    this.attestations.dispose();
+    this.recovery?.dispose();
     this.signal.close();
     this.stopListening();
   }

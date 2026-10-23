@@ -85,13 +85,65 @@ describe('AssistConsoleController', () => {
     expect(ctrl.snapshot.chat.map((c) => c.text)).toEqual(['hello there', 'hi']);
   });
 
-  it('sends session.stats every 10 s while connected', async () => {
+  it('sends session.stats every 5 s while connected (prd-F9)', async () => {
     vi.useFakeTimers();
     ctrl.start(created('active') as never, true);
-    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(5000);
     const stats = ws.ofType('session.stats');
     expect(stats).toHaveLength(1);
     expect(stats[0]).toMatchObject({ sessionId: IDS.session, path: 'unknown', rttMs: null });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(ws.ofType('session.stats')).toHaveLength(2);
+  });
+
+  it('a session ended before the first report still sends its last stats before session.end (prd-F9)', async () => {
+    vi.useFakeTimers();
+    ctrl.start(created('active') as never, true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(ws.ofType('session.stats')).toHaveLength(0);
+    await ctrl.endSession();
+    const types = ws.messages().map((m) => m.t);
+    expect(types.indexOf('session.stats')).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf('session.stats')).toBeLessThan(types.indexOf('session.end'));
+  });
+
+  it('measures time to first frame from consent granted, once per grant (prd-F8)', () => {
+    vi.useFakeTimers();
+    ctrl.start(created('consent_pending') as never, true);
+    ctrl.firstFrame();
+    expect(ctrl.snapshot.ttffMs).toBeNull();
+    ws.receive({ t: 'consent.changed', sessionId: IDS.session, state: 'granted', surface: 'monitor' });
+    vi.advanceTimersByTime(1200);
+    ctrl.firstFrame();
+    expect(ctrl.snapshot.ttffMs).toBe(1200);
+    vi.advanceTimersByTime(5000);
+    ctrl.firstFrame();
+    expect(ctrl.snapshot.ttffMs).toBe(1200);
+  });
+
+  it('restarts the media path on failure with a visible reconnecting phase, bounded (correctness-F6)', () => {
+    vi.useFakeTimers();
+    ctrl.start(created('active') as never, true);
+    const pc = FakePeerConnection.instances[0]!;
+    pc.setConnectionState('connected');
+    expect(ctrl.snapshot.phase).toBe('live');
+    pc.setConnectionState('failed');
+    expect(ctrl.snapshot.phase).toBe('reconnecting');
+    expect(ctrl.snapshot.notice).toMatch(/Reconnecting/);
+    // Attempt 1 is the Desk's (impolite) restart; attempt 2 forces relay, which restarts ICE here.
+    expect(pc.restarts).toBe(0);
+    vi.advanceTimersByTime(10000);
+    expect(ctrl.snapshot.relayOnly).toBe(true);
+    expect(pc.restarts).toBe(1);
+    vi.advanceTimersByTime(10000);
+    expect(pc.restarts).toBe(2);
+    vi.advanceTimersByTime(10000);
+    expect(ctrl.snapshot.notice).toMatch(/could not be restored/);
+    vi.advanceTimersByTime(60000);
+    expect(pc.restarts).toBe(2);
+    pc.setConnectionState('connected');
+    expect(ctrl.snapshot.phase).toBe('live');
+    expect(ctrl.snapshot.notice).toBeNull();
   });
 
   it('desk.reconnected to consent_pending tears the connection down (hard rule 2)', () => {

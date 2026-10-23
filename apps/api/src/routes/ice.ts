@@ -13,7 +13,7 @@ export async function iceRoutes(app: FastifyInstance, ctx: AppContext): Promise<
   app.get('/api/v1/ice', async (req): Promise<IceResponse> => {
     const p = await authenticate(ctx, req, TECH_ROLES);
     const q = parseOr400(iceQuerySchema, req.query);
-    const lim = ctx.limiter.hit(`ice:${p.user.id}`, 10, 60_000);
+    const lim = await ctx.limiter.hit(`ice:${p.user.id}`, 10, 60_000);
     if (!lim.allowed) {
       ctx.metrics.rateLimited.inc();
       fail('rate_limited', 'too many ICE requests', { retryAfterSec: lim.retryAfterSec });
