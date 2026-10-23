@@ -18,7 +18,7 @@ import { canActOnToken } from '../lib/rbac.js';
 import { principalFromAuthSessionId } from '../plugins/auth.js';
 import type { TokenVerifyOk } from '../services/token-verify.js';
 import { refreshUserSockets } from './auth-watch.js';
-import { Conn, type DeskInfo, type Transport } from './conn.js';
+import { Conn, type DeskInfo, type RelayCounters, type Transport } from './conn.js';
 import { deskResume } from './desk.js';
 import type { SignalHub } from './hub.js';
 import { performHeldKnocks, type KnockUser } from './knock.js';
@@ -43,8 +43,8 @@ export type NodeMsg =
   | { k: 'closed'; connId: string }
   | { k: 'ended'; sessionId: string; previousState: SessionState }
   | { k: 'recording'; sessionId: string }
-  | { k: 'rpc'; id: string; from: string; op: 'chatCount'; sessionId: string }
-  | { k: 'rpc-reply'; id: string; value: number };
+  | { k: 'rpc'; id: string; from: string; op: 'chatCount' | 'relayCounters'; sessionId: string }
+  | { k: 'rpc-reply'; id: string; value: unknown };
 
 export type ClusterEvent =
   | { e: 'assists'; tok: TokRef; frame: Record<string, unknown>; except: string | null }
@@ -79,7 +79,7 @@ export class Bridge {
   readonly self: string;
   readonly remotes = new Map<string, RemoteConn>();
   private readonly unsubs: (() => Promise<void>)[] = [];
-  private readonly pending = new Map<string, (value: number) => void>();
+  private readonly pending = new Map<string, (value: unknown) => void>();
   private rpcSeq = 0;
   private lastRefresh = Date.now();
 
@@ -99,7 +99,7 @@ export class Bridge {
     for (const u of this.unsubs.splice(0)) await u().catch(() => undefined);
     for (const rc of this.remotes.values()) rc.closed = rc.terminated = true;
     this.remotes.clear();
-    for (const resolve of this.pending.values()) resolve(0);
+    for (const resolve of this.pending.values()) resolve(null);
     this.pending.clear();
   }
 
@@ -202,21 +202,32 @@ export class Bridge {
 
   /** The relay count of a session owned by another node (for `chat.relayed` when it is ended here). */
   async chatCount(sessionId: string): Promise<number> {
-    if (!this.on) return 0;
+    const v = await this.rpc(sessionId, 'chatCount');
+    return typeof v === 'number' ? v : 0;
+  }
+
+  /** The WS relay counters of a session owned by another node (for `mirror.relayed`, Phase B 4.6). */
+  async relayCounters(sessionId: string): Promise<RelayCounters | null> {
+    const v = await this.rpc(sessionId, 'relayCounters');
+    return v && typeof v === 'object' ? (v as RelayCounters) : null;
+  }
+
+  private async rpc(sessionId: string, op: 'chatCount' | 'relayCounters'): Promise<unknown> {
+    if (!this.on) return null;
     const s = await getSession(this.hub.ctx.db, sessionId);
-    if (!s || s.nodeId === this.self || !(await this.alive(s.nodeId))) return 0;
+    if (!s || s.nodeId === this.self || !(await this.alive(s.nodeId))) return null;
     const id = `${this.self}:${++this.rpcSeq}`;
-    return new Promise<number>((resolve) => {
+    return new Promise<unknown>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve(0);
+        resolve(null);
       }, RPC_TIMEOUT_MS);
       timer.unref?.();
       this.pending.set(id, (value) => {
         clearTimeout(timer);
         resolve(value);
       });
-      this.toNode(s.nodeId, { k: 'rpc', id, from: this.self, op: 'chatCount', sessionId });
+      this.toNode(s.nodeId, { k: 'rpc', id, from: this.self, op, sessionId });
     });
   }
 
@@ -321,7 +332,11 @@ export class Bridge {
       case 'recording':
         return hub.pushRecordingLocal(m.sessionId);
       case 'rpc':
-        return this.toNode(m.from, { k: 'rpc-reply', id: m.id, value: hub.live.get(m.sessionId)?.chatCount ?? 0 });
+        return this.toNode(m.from, {
+          k: 'rpc-reply',
+          id: m.id,
+          value: m.op === 'chatCount' ? (hub.live.get(m.sessionId)?.chatCount ?? 0) : (hub.live.get(m.sessionId)?.relay ?? null),
+        });
       case 'rpc-reply':
         this.pending.get(m.id)?.(m.value);
         this.pending.delete(m.id);

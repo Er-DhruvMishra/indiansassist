@@ -13,8 +13,10 @@ import {
   recordingMediaType,
   recordingMetaSchema,
   recordingUploadInitRequestSchema,
+  RRWEB_RECORDING_MIME,
 } from '@indiansassist/shared';
 import { getAuditEntry, getRecording, getRecordingByUploadId, getSession, type RecordingRow } from '@indiansassist/db';
+import { deleteRecording } from '../services/recording-delete.js';
 import type { FastifyInstance } from 'fastify';
 import { hashStream, ObjectNotFoundError } from '../adapters/storage.js';
 import type { AppContext } from '../context.js';
@@ -39,9 +41,35 @@ import { requireSessionAssist, scopedSession, UUID_RE } from '../services/scope.
 
 const PRESIGN_TTL_SEC = 600;
 
-/** Object content type: the allow-listed base type only (SEC-01), so a direct object GET can never be a document. */
+/**
+ * Object / download content type: the allow-listed base type only (SEC-01), so a direct object GET can never be a
+ * document; rrweb mirror recordings are served as `application/octet-stream` (Phase B 4.7).
+ */
 function storedType(rec: RecordingRow): string {
-  return recordingMediaType(rec.mime) ?? 'application/octet-stream';
+  const t = recordingMediaType(rec.mime);
+  return t === null || t === RRWEB_RECORDING_MIME ? 'application/octet-stream' : t;
+}
+
+function downloadName(rec: RecordingRow): string {
+  const t = recordingMediaType(rec.mime);
+  return `${rec.id}.${t ? recordingFileExtension(t) : 'bin'}`;
+}
+
+/** SEC-01 headers of every recording byte stream (signed `/file` and same-origin `inline=1`). */
+function streamHeaders(rec: RecordingRow, bytes: number): Record<string, string> {
+  return {
+    'Content-Type': storedType(rec),
+    'Content-Length': String(bytes),
+    'Content-Disposition': `attachment; filename="${downloadName(rec)}"`,
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "sandbox; default-src 'none'",
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Cache-Control': 'private, no-store',
+  };
+}
+
+function notDeleted(rec: RecordingRow): void {
+  if (rec.deletedAt) fail('recording_deleted', 'this recording was deleted');
 }
 
 async function scopedRecording(ctx: AppContext, p: Principal, id: string): Promise<RecordingRow> {
@@ -181,16 +209,32 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
     return toRecording(await scopedRecording(ctx, p, req.params.id));
   });
 
-  app.get<{ Params: { id: string } }>('/api/v1/recordings/:id/download', async (req) => {
+  app.get<{ Params: { id: string }; Querystring: { inline?: string } }>('/api/v1/recordings/:id/download', async (req, reply) => {
     const p = await authenticate(ctx, req);
     const rec = await scopedRecording(ctx, p, req.params.id);
+    notDeleted(rec);
     if (rec.status !== 'stored') fail('not_found', 'recording is not stored');
-    const type = recordingMediaType(rec.mime);
+    if (req.query.inline === '1') {
+      // Y27: same-origin streaming for in-page replay (no presigned URL, so the SPA CSP never has to allow it).
+      const head = await ctx.storage.head(rec.storageKey);
+      if (!head) fail('not_found', 'recording object not found');
+      void reply.headers(streamHeaders(rec, head.bytes));
+      return reply.send(await ctx.storage.get(rec.storageKey));
+    }
     const url = await ctx.storage.presignGet(rec.storageKey, PRESIGN_TTL_SEC, {
-      contentType: type ?? 'application/octet-stream',
-      filename: `${rec.id}.${type ? recordingFileExtension(type) : 'bin'}`,
+      contentType: storedType(rec),
+      filename: downloadName(rec),
     });
     return { url, expiresAt: iso(new Date(Date.now() + PRESIGN_TTL_SEC * 1000)) };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/v1/recordings/:id', async (req, reply) => {
+    const p = await authenticate(ctx, req, ['org_admin', 'auditor']);
+    const rec = await scopedRecording(ctx, p, req.params.id);
+    notDeleted(rec);
+    if (!(await deleteRecording(ctx, p.org, rec, 'manual', userActor(p.user), p.user.id)))
+      fail('recording_deleted', 'this recording was deleted');
+    return reply.status(204).send();
   });
 
   app.get<{ Params: { id: string }; Querystring: Record<string, string> }>(
@@ -199,7 +243,7 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
     async (req, reply) => {
       const q = recordingFileQuerySchema.safeParse(req.query);
       const rec = UUID_RE.test(req.params.id) ? await getRecording(ctx.db, req.params.id) : null;
-      if (!q.success || !rec || rec.status !== 'stored' || !isRegionServed(rec.region, ctx.config.servedRegions))
+      if (!q.success || !rec || rec.status !== 'stored' || rec.deletedAt || !isRegionServed(rec.region, ctx.config.servedRegions))
         fail('not_found', 'not found');
       const expected = presignSignature(ctx.presignKey, rec.id, rec.storageKey, q.data.exp);
       if (!safeEqual(expected, q.data.sig)) fail('not_found', 'not found');
@@ -209,16 +253,7 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
       // The bytes are uploaded by a user and must never render as a document on an origin that holds a session
       // cookie (SEC-01): only the allow-listed base type is sent (never the stored string), download only, no
       // sniffing, sandboxed, not cached. RECORDING_DOWNLOAD_ORIGIN moves the route off the web origin entirely.
-      const type = recordingMediaType(rec.mime);
-      const filename = `${rec.id}.${type ? recordingFileExtension(type) : 'bin'}`;
-      void reply
-        .header('Content-Type', type ?? 'application/octet-stream')
-        .header('Content-Length', String(head.bytes))
-        .header('Content-Disposition', `attachment; filename="${filename}"`)
-        .header('X-Content-Type-Options', 'nosniff')
-        .header('Content-Security-Policy', "sandbox; default-src 'none'")
-        .header('Cross-Origin-Resource-Policy', 'same-origin')
-        .header('Cache-Control', 'private, no-store');
+      void reply.headers(streamHeaders(rec, head.bytes));
       return reply.send(await ctx.storage.get(rec.storageKey));
     },
   );
@@ -226,6 +261,7 @@ export async function recordingRoutes(app: FastifyInstance, ctx: AppContext): Pr
   app.post<{ Params: { id: string } }>('/api/v1/recordings/:id/verify', async (req) => {
     const p = await authenticate(ctx, req);
     const rec = await scopedRecording(ctx, p, req.params.id);
+    notDeleted(rec);
     let actual: { sha256: string; bytes: number } | null = null;
     try {
       actual = await hashStream(await ctx.storage.get(rec.storageKey));

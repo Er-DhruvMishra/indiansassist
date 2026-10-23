@@ -115,6 +115,12 @@ export const REDACT_PATHS = [
   '*.password',
   '*.sig',
   '*.credential',
+  // Phase B 12.4: relay payloads, control args, wire hosts.
+  '*.data',
+  '*.events',
+  '*.msg',
+  '*.value',
+  '*.host',
 ];
 
 export function pathOnly(url: string | undefined): string {

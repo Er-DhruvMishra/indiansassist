@@ -1,9 +1,9 @@
 /** recording repository (contracts sections 4.2, 6.10, 9). One recording per session in Phase A. */
 import { LIMITS, type Region } from '@indiansassist/shared';
-import { and, asc, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Executor } from '../client.js';
 import { NotFoundError } from '../errors.js';
-import { recording, type RecordingRow } from '../schema/index.js';
+import { org, recording, type RecordingRow } from '../schema/index.js';
 
 export type InsertRecordingInput = {
   id?: string;
@@ -19,9 +19,9 @@ export type InsertRecordingInput = {
   uploadExpiresAt?: Date | null;
 };
 
-/** `<region>/<orgId>/<sessionId>/<recordingId>.webm` (section 9). */
-export function recordingStorageKey(region: Region, orgId: string, sessionId: string, recordingId: string): string {
-  return `${region}/${orgId}/${sessionId}/${recordingId}.webm`;
+/** `<region>/<orgId>/<sessionId>/<recordingId>.<ext>` (section 9; `jsonl.gz` for rrweb mirror recordings, Phase B 4.7). */
+export function recordingStorageKey(region: Region, orgId: string, sessionId: string, recordingId: string, ext = 'webm'): string {
+  return `${region}/${orgId}/${sessionId}/${recordingId}.${ext}`;
 }
 
 export async function insertRecording(exec: Executor, input: InsertRecordingInput): Promise<RecordingRow> {
@@ -153,6 +153,40 @@ export async function recordingUsage(
       orgBytes: sql<number>`coalesce(sum(${recording.bytes}), 0)`.mapWith(Number),
     })
     .from(recording)
-    .where(and(eq(recording.orgId, orgId), ne(recording.status, 'failed')));
+    .where(and(eq(recording.orgId, orgId), ne(recording.status, 'failed'), isNull(recording.deletedAt)));
   return { orgUploading: row?.orgUploading ?? 0, userUploading: row?.userUploading ?? 0, orgBytes: row?.orgBytes ?? 0 };
+}
+
+/** Phase B Y26: marks a recording's object deleted (the row stays, the chain references it). Null when already deleted. */
+export async function markRecordingDeleted(
+  exec: Executor,
+  id: string,
+  deletedBy: string | null,
+  at: Date = new Date(),
+): Promise<RecordingRow | null> {
+  const [row] = await exec
+    .update(recording)
+    .set({ deletedAt: at, deletedBy, uploadExpiresAt: null })
+    .where(and(eq(recording.id, id), isNull(recording.deletedAt)))
+    .returning();
+  return row ?? null;
+}
+
+/** Retention sweep (Y26): stored, not deleted recordings older than their org's `recording_retention_days`. */
+export async function listRecordingsPastRetention(exec: Executor, now: Date = new Date(), limit = 100): Promise<RecordingRow[]> {
+  const rows = await exec
+    .select({ r: recording })
+    .from(recording)
+    .innerJoin(org, eq(org.id, recording.orgId))
+    .where(
+      and(
+        eq(recording.status, 'stored'),
+        isNull(recording.deletedAt),
+        isNotNull(org.recordingRetentionDays),
+        isNotNull(recording.storedAt),
+        sql`${recording.storedAt} < ${now.toISOString()}::timestamptz - make_interval(days => ${org.recordingRetentionDays})`,
+      ),
+    )
+    .limit(limit);
+  return rows.map((x) => x.r);
 }

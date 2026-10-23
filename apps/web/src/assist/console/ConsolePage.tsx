@@ -17,6 +17,7 @@ import { useAssistSignal } from '../signal/AssistSignalProvider';
 import { KnockPanel } from '../signal/KnockPanel';
 import { EndedView } from './EndedView';
 import { LiveConsole } from './LiveConsole';
+import { MirrorLiveConsole } from './mirror/MirrorConsole';
 
 export function ConsolePage() {
   usePageTitle('Session console');
@@ -34,7 +35,9 @@ export function ConsolePage() {
   );
 
   if (cached && signal?.client && can(me?.user.role, 'ws.assist')) {
-    return <LiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} />;
+    // Phase B 10: a P2 (extension) session mounts the mirror console instead of the video console.
+    const Live = cached.tier === 'p2_extension' ? MirrorLiveConsole : LiveConsole;
+    return <Live sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} />;
   }
   if (detail.loading) return <Spinner label="Loading session" />;
   if (!d) return <Alert>{errorMessage(detail.error)}</Alert>;
@@ -64,7 +67,8 @@ export function ConsolePage() {
 
   const isAssist = d.assist.id === me?.user.id;
   if (isAssist && signal?.client) {
-    return <LiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} />;
+    const Live = d.tier === 'p2_extension' ? MirrorLiveConsole : LiveConsole;
+    return <Live sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} />;
   }
 
   return (

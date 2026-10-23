@@ -24,7 +24,7 @@ describe('auth', () => {
     expect(res.statusCode).toBe(201);
     const body = res.json();
     expect(body.user).toMatchObject({ email, name: 'Priya S', role: 'org_admin', status: 'active' });
-    expect(body.org).toMatchObject({ name: 'Acme IT Services', dataRegion: 'in-mum', planTier: 'p1_browser' });
+    expect(body.org).toMatchObject({ name: 'Acme IT Services', dataRegion: 'in-mum', planTier: 'p2_extension' });
     expect(body.org.slug).toMatch(/^acme-it-services/);
     expect(body.seat).toMatchObject({ tier: 'p1_browser', active: true, userId: body.user.id });
     const setCookie = String(res.headers['set-cookie']);

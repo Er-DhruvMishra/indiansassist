@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import {
   ACTOR_TYPES,
   CHECKPOINT_KINDS,
+  CONSENT_LEVELS,
   CONSENT_STATES,
+  MIRROR_SCOPES,
   DEVICE_STATUSES,
   FILE_DIRECTIONS,
   INTEGRATION_TYPES,
@@ -48,6 +50,7 @@ const TABLES = [
   'recording',
   'session',
   'session_file',
+  'session_host',
   'session_participant',
   'technician_seat',
   'token',
@@ -72,6 +75,8 @@ const ENUMS: Record<string, readonly string[]> = {
   checkpoint_kind: CHECKPOINT_KINDS,
   integration_type: INTEGRATION_TYPES,
   device_status: DEVICE_STATUSES,
+  consent_level: CONSENT_LEVELS,
+  mirror_scope: MIRROR_SCOPES,
 };
 
 describe('migrations', () => {
@@ -121,14 +126,19 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(3);
+    expect(rows[0]!.n).toBe(4);
   });
 
-  it('commit a journal with the init, custom append_only and open-session index migrations', () => {
+  it('commit a journal with the init, append_only, open-session index and Phase B migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
-    expect(journal.entries.map((e) => e.tag)).toEqual(['0000_init', '0001_append_only', '0002_session_token_open_unique']);
+    expect(journal.entries.map((e) => e.tag)).toEqual([
+      '0000_init',
+      '0001_append_only',
+      '0002_session_token_open_unique',
+      '0003_phase_b',
+    ]);
   });
 
   it('enforce the slug format check and case-insensitive unique email', async () => {

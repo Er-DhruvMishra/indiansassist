@@ -1,0 +1,30 @@
+{
+  "name": "@indiansassist/extension",
+  "version": "0.2.0",
+  "private": true,
+  "description": "IndiansAssist Package 2: Chrome MV3 extension on the Desk (DOM mirroring with rrweb, browser-scoped control, side panel).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src test scripts",
+    "icons": "node scripts/icons.mjs"
+  },
+  "dependencies": {
+    "@indiansassist/shared": "workspace:*",
+    "rrweb": "catalog:",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.4",
+    "@types/node": "^22.19.0",
+    "eslint": "^10.13.0",
+    "eslint-plugin-no-unsanitized": "4.1.5",
+    "jsdom": "^26.1.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

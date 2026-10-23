@@ -1,6 +1,6 @@
 /**
  * Create token (contracts sections 3.2, 6.7, 12): tier (enum driven, capped by the caller's seat tier;
- * p1_browser in Phase A), type, lifetime, label. On success shows the join link, a client-side QR, the
+ * p1_browser and, from Phase B, p2_extension join), type, lifetime, label. On success shows the join link, a client-side QR, the
  * short code with the host it is valid on, and copy buttons.
  */
 import { useState, type FormEvent } from 'react';
@@ -21,6 +21,14 @@ import { tokensApi } from '../../lib/endpoints';
 import { fmtDateTime, fmtTier } from '../../lib/format';
 
 type AttendedType = Exclude<TokenType, 'enrollment'>;
+
+/** What the Desk needs for each tier (Phase B 2: P2 joins through the browser extension). */
+export const TIER_HINT: Record<PackageTier, string> = {
+  p1_browser: 'The Desk shares a screen or window from the browser. Nothing to install.',
+  p2_extension: 'The Desk shares browser tabs through the IndiansAssist extension (Chrome or Edge). The join page helps them install or open it.',
+  p3_portable: 'Not available yet: the Desk sees a notice instead of joining.',
+  p4_installed: 'Not available yet: the Desk sees a notice instead of joining.',
+};
 
 export function CreateTokenForm({
   seatTier,
@@ -82,7 +90,7 @@ export function CreateTokenForm({
   return (
     <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-4" noValidate>
       {error && <Alert>{error}</Alert>}
-      <Field label="Package tier" hint="Phase A: only the P1 browser share joins; other tiers show a stub to the Desk.">
+      <Field label="Package tier" hint={TIER_HINT[tier]}>
         {(p) => (
           <Select id={p.id} aria-describedby={p.describedBy} value={tier} onChange={(e) => onTier(e.target.value as PackageTier)}>
             {PACKAGE_TIERS.map((t) => (
@@ -139,6 +147,11 @@ export function TokenCreatedPanel({ result }: { result: CreateTokenResponse }) {
   return (
     <div className="flex flex-col gap-4" aria-live="polite">
       <Alert tone="green">Token created. It expires {fmtDateTime(t.expiresAt)}.</Alert>
+      {t.tier === 'p2_extension' && (
+        <p className="text-sm" data-testid="p2-note">
+          Browser extension session: the Desk opens the link in Chrome or Edge, installs or opens the IndiansAssist extension, then chooses which tabs to share.
+        </p>
+      )}
       <div className="flex flex-col gap-4 sm:flex-row">
         <QrCode text={result.joinUrl} label="QR code of the join link" />
         <div className="flex min-w-0 flex-1 flex-col gap-3">

@@ -6,7 +6,9 @@ import { pgEnum } from 'drizzle-orm/pg-core';
 import {
   ACTOR_TYPES,
   CHECKPOINT_KINDS,
+  CONSENT_LEVELS,
   CONSENT_STATES,
+  MIRROR_SCOPES,
   DEVICE_STATUSES,
   FILE_DIRECTIONS,
   INTEGRATION_TYPES,
@@ -40,3 +42,6 @@ export const fileDirectionEnum = pgEnum('file_direction', FILE_DIRECTIONS);
 export const checkpointKindEnum = pgEnum('checkpoint_kind', CHECKPOINT_KINDS);
 export const integrationTypeEnum = pgEnum('integration_type', INTEGRATION_TYPES);
 export const deviceStatusEnum = pgEnum('device_status', DEVICE_STATUSES);
+// Phase B (docs/specs/phase-b-contracts.md section 11.1)
+export const consentLevelEnum = pgEnum('consent_level', CONSENT_LEVELS);
+export const mirrorScopeEnum = pgEnum('mirror_scope', MIRROR_SCOPES);

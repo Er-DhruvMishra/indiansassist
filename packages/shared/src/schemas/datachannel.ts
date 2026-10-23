@@ -3,8 +3,9 @@
  * `ia.file`, `ia.ctrl`, the `DataChannelMessage` union keyed on `t`, and the binary file chunk codec.
  */
 import { z } from 'zod';
-import { DEFAULT_ANNOT_COLOR, LIMITS } from '../enums.js';
+import { DEFAULT_ANNOT_COLOR, LIMITS, MIRROR_TRANSPORTS } from '../enums.js';
 import { epochMsSchema, hex64Schema, hexColorSchema, sideSchema, uint32Schema, uuidSchema } from './common.js';
+import { controlEventSchema, controlRequestSchema, controlResponseSchema, tabInfoSchema } from '../extension/control.js';
 
 const ts = epochMsSchema;
 const unit = z.number().min(0).max(1);
@@ -26,7 +27,9 @@ export const dcTypingSchema = z.object({ t: z.literal('typing'), from: sideSchem
 
 const color = hexColorSchema.default(DEFAULT_ANNOT_COLOR);
 const ttlMs = z.number().int().min(1).max(LIMITS.annotTtlMaxMs).default(LIMITS.annotTtlDefaultMs);
-const box = { t: z.literal('annot'), id: uuidSchema, a: pointSchema, b: pointSchema, color, ttlMs, ts };
+/** Required in P2 (coordinates relative to that tab's viewport, Y8); the extension drops messages without it. */
+const annotTabId = z.number().int().nonnegative().max(0x7fffffff).optional();
+const box = { t: z.literal('annot'), id: uuidSchema, a: pointSchema, b: pointSchema, color, ttlMs, ts, tabId: annotTabId };
 
 export const annotArrowSchema = z.object({ ...box, shape: z.literal('arrow') });
 export const annotRectSchema = z.object({ ...box, shape: z.literal('rect') });
@@ -38,8 +41,9 @@ export const annotPointerSchema = z.object({
   at: pointSchema,
   color,
   ts,
+  tabId: annotTabId,
 });
-export const annotClearSchema = z.object({ t: z.literal('annot'), shape: z.literal('clear'), ts });
+export const annotClearSchema = z.object({ t: z.literal('annot'), shape: z.literal('clear'), ts, tabId: annotTabId });
 
 export const dcAnnotSchema = z.discriminatedUnion('shape', [
   annotArrowSchema,
@@ -103,6 +107,39 @@ export const dcVoiceStateSchema = z.object({ t: z.literal('voice.state'), from: 
 export const dcPingSchema = z.object({ t: z.literal('ping'), ts });
 export const dcPongSchema = z.object({ t: z.literal('pong'), ts });
 
+// ---------- ia.mirror JSON text frames (Phase B 4.5) ----------
+
+const tabRef = z.number().int().nonnegative().max(0x7fffffff);
+const seq = z.number().int().nonnegative().max(0xffffffff);
+export const dcMirrorTabsSchema = z.object({
+  t: z.literal('mirror.tabs'),
+  tabs: z.array(tabInfoSchema).max(500),
+  hiddenCount: z.number().int().nonnegative(),
+  activeTabId: tabRef.nullable(),
+  focusedTabId: tabRef.nullable(),
+  ts,
+});
+export const MIRROR_TAB_STATES = [
+  'attached',
+  'detached',
+  'paused',
+  'resumed',
+  'denied',
+  'too_large',
+  'navigated',
+  'revealed',
+  'restored',
+] as const;
+export const dcMirrorTabSchema = z.object({
+  t: z.literal('mirror.tab'),
+  tab: tabInfoSchema,
+  state: z.enum(MIRROR_TAB_STATES),
+  transport: z.enum(MIRROR_TRANSPORTS).optional(),
+  ts,
+});
+export const dcMirrorAckSchema = z.object({ t: z.literal('mirror.ack'), tabId: tabRef, seq, ts });
+export const dcMirrorNackSchema = z.object({ t: z.literal('mirror.nack'), tabId: tabRef, seq, ts });
+
 /** Every data channel JSON message, discriminated on `t` (annotations nest a union on `shape`). */
 export const dataChannelMessageSchema = z.discriminatedUnion('t', [
   dcChatSchema,
@@ -121,6 +158,13 @@ export const dataChannelMessageSchema = z.discriminatedUnion('t', [
   dcVoiceStateSchema,
   dcPingSchema,
   dcPongSchema,
+  dcMirrorTabsSchema,
+  dcMirrorTabSchema,
+  dcMirrorAckSchema,
+  dcMirrorNackSchema,
+  controlRequestSchema,
+  controlResponseSchema,
+  controlEventSchema,
 ]);
 export type DataChannelMessage = z.infer<typeof dataChannelMessageSchema>;
 export type DataChannelType = DataChannelMessage['t'];
@@ -131,6 +175,8 @@ export const DATA_CHANNEL_TYPES = {
   'ia.annot': ['annot'],
   'ia.file': ['file.offer', 'file.accept', 'file.reject', 'file.done', 'file.ack', 'file.cancel'],
   'ia.ctrl': ['stop.sharing', 'consent.revoked', 'recording.state', 'voice.state', 'ping', 'pong'],
+  'ia.mirror': ['mirror.tabs', 'mirror.tab', 'mirror.ack', 'mirror.nack'],
+  'ia.control': ['ctl.req', 'ctl.res', 'ctl.event'],
 } as const satisfies Record<string, readonly DataChannelType[]>;
 
 export type DataChannelParseResult =

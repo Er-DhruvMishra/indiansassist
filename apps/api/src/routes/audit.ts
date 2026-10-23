@@ -20,6 +20,7 @@ import {
   listAuditByOrgPaginated,
   listAuditBySession,
   listSessionFiles,
+  sessionHostMap,
   toChainEntry,
   verifyOrgChain,
 } from '@indiansassist/db';
@@ -45,6 +46,8 @@ export async function auditRoutes(app: FastifyInstance, ctx: AppContext): Promis
       items: rows.map(toAuditEntry),
       integrity: { ...integrity, verifiedAt: new Date().toISOString() },
       files: (await listSessionFiles(ctx.db, session.id)).map(toSessionFile),
+      // Phase B 11.3: plaintext hosts behind `hostHash` (same visibility as file names).
+      hosts: await sessionHostMap(ctx.db, session.id),
     };
   });
 

@@ -21,7 +21,15 @@ export type CtrlMessage = Extract<
   { t: 'stop.sharing' | 'consent.revoked' | 'recording.state' | 'voice.state' | 'ping' | 'pong' }
 >;
 
+/** JSON text frames the Desk sends on `ia.mirror` (Phase B 4.5); acks and nacks only travel the other way. */
+export type MirrorJsonMessage = Extract<DataChannelMessage, { t: 'mirror.tabs' | 'mirror.tab' }>;
+/** What the Desk sends on `ia.control` (Phase B 5.1); a `ctl.req` from the Desk is a wrong-direction drop. */
+export type ControlInbound = Extract<DataChannelMessage, { t: 'ctl.res' | 'ctl.event' }>;
+
 export type LinkEvents = {
+  onMirrorJson?: (msg: MirrorJsonMessage) => void;
+  onMirrorBinary?: (frame: ArrayBuffer) => void;
+  onControl?: (msg: ControlInbound) => void;
   onChat?: (msg: DcChat) => void;
   onTyping?: (active: boolean) => void;
   onAnnot?: (msg: DcAnnot) => void;
@@ -52,6 +60,7 @@ export class PeerLink {
   readonly files: FileTransfer;
   private unsub: () => void;
   private unsubOpen: () => void;
+  private unsubMirror: () => void;
   private closed = false;
 
   constructor(private readonly opts: LinkOptions) {
@@ -60,6 +69,7 @@ export class PeerLink {
     this.files = new FileTransfer(this.hub, opts.side, (l) => opts.events.onTransfers?.(l), opts.attest);
     this.unsub = this.hub.onMessage((m) => this.route(m));
     this.unsubOpen = this.hub.onOpen((label) => opts.events.onChannelOpen?.(label));
+    this.unsubMirror = this.hub.onMirrorBinary((f) => opts.events.onMirrorBinary?.(f));
     this.peer = new PeerSession({
       polite: opts.polite,
       iceServers: opts.iceServers,
@@ -108,6 +118,14 @@ export class PeerLink {
       case 'pong':
         ev.onCtrl?.(m);
         return;
+      case 'mirror.tabs':
+      case 'mirror.tab':
+        ev.onMirrorJson?.(m);
+        return;
+      case 'ctl.res':
+      case 'ctl.event':
+        ev.onControl?.(m);
+        return;
       default:
         return;
     }
@@ -137,6 +155,7 @@ export class PeerLink {
     this.closed = true;
     this.unsub();
     this.unsubOpen();
+    this.unsubMirror();
     this.files.dispose();
     this.hub.clear();
     this.peer.close();

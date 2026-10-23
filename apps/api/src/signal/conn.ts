@@ -4,7 +4,17 @@
  * the real socket (section 7.6 N1, bridge.ts).
  */
 import { randomUUID } from 'node:crypto';
-import type { SessionPath, SessionState, SignalErrorCode } from '@indiansassist/shared';
+import {
+  LIMITS,
+  type ConsentLevel,
+  type DeskClient,
+  type ExtensionPolicy,
+  type MirrorScope,
+  type PackageTier,
+  type SessionPath,
+  type SessionState,
+  type SignalErrorCode,
+} from '@indiansassist/shared';
 import WebSocket from 'ws';
 import type { Principal } from '../plugins/auth.js';
 import { TokenBucket } from '../limiter.js';
@@ -22,6 +32,8 @@ export type DeskInfo = {
   heldLabel: string | null;
   /** `token.expires_at` (ms) seen at hello; a waiting / held Desk past it is told `token_gone` (section 3.2). */
   tokenExpiresAt: number;
+  /** `desk.hello.client` (Phase B 2.4); null when absent (a web Desk). */
+  client: DeskClient | null;
 };
 
 /** Where a Conn's frames go. */
@@ -61,6 +73,13 @@ export class Conn {
    */
   terminated = false;
   readonly bucket = new TokenBucket(20, 60);
+  /**
+   * `ping` / `pong` / `session.end` / `desk.consent` skip the frame bucket (Phase B Y25); this separate, generous
+   * bucket only stops a flood of them.
+   */
+  readonly exemptBucket = new TokenBucket(20, 100);
+  /** The upgrade carried `Origin: chrome-extension://<id>` (Y21): Desk messages only, never `assist.hello`. */
+  extensionOrigin = false;
   /** Last time the cookie principal was re-validated against auth_session / user (section 7.2). */
   lastAuthCheckAt = Date.now();
   authCheckInFlight = false;
@@ -129,12 +148,30 @@ export class Conn {
   }
 }
 
+/** WS relay counters of a session (Phase B 4.6), written to `mirror.relayed` before `session.ended`. */
+export type RelayCounters = { mirrorFrames: number; mirrorBytes: number; controlFrames: number; dropped: number };
+
+export type LiveConsent = { level: ConsentLevel; scope: MirrorScope; backstage: boolean };
+
 export type Live = {
   id: string;
   orgId: string;
   tokenId: string;
+  tier: PackageTier;
   state: SessionState;
   path: SessionPath;
+  /** The P2 consent decision in force (null for P1 or before consent). */
+  consent: LiveConsent | null;
+  /** The org extension policy of a P2 session, loaded at first use (live sessions are not re-policed). */
+  policy: ExtensionPolicy | null;
+  relay: RelayCounters;
+  /** Sliding window of relayed `data` lengths (`[atMs, chars]`) for the per-session mirror budget. */
+  relayWindow: [number, number][];
+  /** `control.relay` per direction, 10 / s (Phase B 4.6). */
+  controlBuckets: { assist: TokenBucket; desk: TokenBucket };
+  /** `control.refused` entries: at most one per second per session; the rest are counted as suppressed. */
+  refusedAt: number;
+  refusedSuppressed: number;
   assistConnId: string | null;
   deskConnId: string | null;
   chatCount: number;
@@ -149,13 +186,41 @@ export type Live = {
   timers: Map<string, NodeJS.Timeout>;
 };
 
-export function newLive(s: { id: string; orgId: string; tokenId: string; state: SessionState; path: SessionPath }): Live {
+type LiveSource = {
+  id: string;
+  orgId: string;
+  tokenId: string;
+  tier: PackageTier;
+  state: SessionState;
+  path: SessionPath;
+  consentLevel?: ConsentLevel | null;
+  consentScope?: MirrorScope | null;
+  consentBackstage?: boolean | null;
+};
+
+/** The consent triple of a session row, or null when it has none (P1, or not yet granted). */
+export function consentOfRow(s: LiveSource): LiveConsent | null {
+  return s.consentLevel && s.consentScope ? { level: s.consentLevel, scope: s.consentScope, backstage: s.consentBackstage === true } : null;
+}
+
+export function newLive(s: LiveSource): Live {
   return {
     id: s.id,
     orgId: s.orgId,
     tokenId: s.tokenId,
+    tier: s.tier,
     state: s.state,
     path: s.path,
+    consent: consentOfRow(s),
+    policy: null,
+    relay: { mirrorFrames: 0, mirrorBytes: 0, controlFrames: 0, dropped: 0 },
+    relayWindow: [],
+    controlBuckets: {
+      assist: new TokenBucket(LIMITS.controlRelayPerSec, LIMITS.controlRelayPerSec),
+      desk: new TokenBucket(LIMITS.controlRelayPerSec, LIMITS.controlRelayPerSec),
+    },
+    refusedAt: 0,
+    refusedSuppressed: 0,
     assistConnId: null,
     deskConnId: null,
     chatCount: 0,

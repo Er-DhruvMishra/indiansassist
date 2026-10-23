@@ -21,6 +21,7 @@ export type NewTokenRow = typeof tables.token.$inferInsert;
 export type SessionRow = typeof tables.session.$inferSelect;
 export type NewSessionRow = typeof tables.session.$inferInsert;
 export type SessionParticipantRow = typeof tables.sessionParticipant.$inferSelect;
+export type SessionHostRow = typeof tables.sessionHost.$inferSelect;
 export type SessionFileRow = typeof tables.sessionFile.$inferSelect;
 export type AuditEntryRow = typeof tables.auditEntry.$inferSelect;
 export type AuditCheckpointRow = typeof tables.auditCheckpoint.$inferSelect;

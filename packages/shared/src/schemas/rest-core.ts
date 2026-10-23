@@ -187,3 +187,10 @@ export const inviteResponseSchema = z.object({ user: userSchema, inviteUrl: z.st
 
 export const roleChangeRequestSchema = z.object({ role: userRoleSchema, tier: packageTierSchema.optional() });
 export const statusChangeRequestSchema = z.object({ status: z.enum(['active', 'disabled']) });
+
+// ---------- org policies (Phase B 11.3) ----------
+
+/** GET / PATCH `/orgs/current/policy/retention` (Y26): null keeps recordings until deleted manually. */
+export const retentionPolicySchema = z.strictObject({
+  recordingRetentionDays: z.number().int().min(1).max(LIMITS.recordingRetentionDaysMax).nullable(),
+});

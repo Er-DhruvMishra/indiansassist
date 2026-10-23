@@ -4,7 +4,7 @@ import { auditCheckpoint, auditEntry } from './audit.js';
 import { sessionFile } from './files.js';
 import { authSession, org, technicianSeat, user } from './org.js';
 import { integration, recording } from './recording.js';
-import { session, sessionParticipant } from './session.js';
+import { session, sessionHost, sessionParticipant } from './session.js';
 import { device, token } from './token.js';
 
 export const orgRelations = relations(org, ({ many }) => ({
@@ -53,6 +53,7 @@ export const sessionRelations = relations(session, ({ one, many }) => ({
   assist: one(user, { fields: [session.assistUserId], references: [user.id] }),
   participants: many(sessionParticipant),
   files: many(sessionFile),
+  hosts: many(sessionHost),
   auditEntries: many(auditEntry),
   recording: one(recording, { fields: [session.id], references: [recording.sessionId] }),
 }));
@@ -84,4 +85,9 @@ export const recordingRelations = relations(recording, ({ one }) => ({
 
 export const integrationRelations = relations(integration, ({ one }) => ({
   org: one(org, { fields: [integration.orgId], references: [org.id] }),
+}));
+
+export const sessionHostRelations = relations(sessionHost, ({ one }) => ({
+  session: one(session, { fields: [sessionHost.sessionId], references: [session.id] }),
+  org: one(org, { fields: [sessionHost.orgId], references: [org.id] }),
 }));

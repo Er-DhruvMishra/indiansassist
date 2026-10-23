@@ -139,13 +139,67 @@ export const LIMITS = {
   passwordMin: 10,
   passwordMax: 128,
   eventGraceSec: 60,
+  // ---------- Phase B (docs/specs/phase-b-contracts.md section 11.2) ----------
+  mirrorBatchMaxEvents: 64,
+  mirrorBatchMaxMs: 200,
+  mirrorBatchMaxRawBytes: 262144,
+  mirrorSnapshotMaxRawBytes: 8388608,
+  mirrorRelaySnapshotMaxBytes: 2097152,
+  mirrorDeflateMinBytes: 1024,
+  mirrorDcChunkBytes: 65536,
+  mirrorDcMaxParts: 256,
+  mirrorReassembleTimeoutMs: 2000,
+  mirrorDcPauseBytes: 1048576,
+  mirrorDcResumeBytes: 262144,
+  mirrorDcStallMs: 3000,
+  mirrorAckIntervalMs: 2000,
+  mirrorAckTimeoutMs: 10000,
+  mirrorNackIntervalMs: 2000,
+  mirrorBackgroundBufferBytes: 2097152,
+  mirrorCssSheetMaxBytes: 524288,
+  mirrorCssTabMaxBytes: 4194304,
+  mirrorRelayDataChars: 40960,
+  mirrorRelayMaxParts: 256,
+  mirrorRelayBudgetBytes: 524288,
+  mirrorRelayBudgetWindowSec: 10,
+  controlRelayMaxBytes: 16384,
+  controlRelayPerSec: 10,
+  controlOpsPerSec: 30,
+  controlOpsBurst: 60,
+  pointerMovesPerSec: 30,
+  controlRequestTimeoutMs: 10000,
+  promptTimeoutMs: 60000,
+  promptRequestTimeoutMs: 65000,
+  controlInputAggregateMs: 10000,
+  revealTtlMs: 60000,
+  revealFieldTextMax: 200,
+  deskEventOutboxPerSec: 4,
+  deskEventOutboxBurst: 15,
+  assistEventsPerSec: 10,
+  assistEventsBurst: 30,
+  faviconMaxBytes: 8192,
+  policyDenyListMax: 500,
+  policyHostPatternMax: 253,
+  policySelectorsMax: 50,
+  policySelectorMax: 200,
+  policyJsonMaxBytes: 32768,
+  reasonMax: 500,
+  fillValueMax: 4000,
+  tabsCloseMax: 50,
+  deskClientStringMax: 32,
+  browserVersionMax: 8,
+  recordingRetentionDaysMax: 3650,
 } as const;
 
 export const DEFAULT_ANNOT_COLOR = '#f59e0b';
 
-/** Data channel labels (section 8). */
-export const DATA_CHANNEL_LABELS = ['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl'] as const;
+/**
+ * Data channel labels (Phase A section 8, Phase B section 4.2). A P1 session creates only the first four
+ * (`P1_DATA_CHANNEL_LABELS`); a P2 session adds `ia.mirror` and `ia.control`.
+ */
+export const DATA_CHANNEL_LABELS = ['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl', 'ia.mirror', 'ia.control'] as const;
 export type DataChannelLabel = (typeof DATA_CHANNEL_LABELS)[number];
+export const P1_DATA_CHANNEL_LABELS = ['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl'] as const satisfies readonly DataChannelLabel[];
 
 /** WebSocket close codes (section 7.2). */
 export const WS_CLOSE = {
@@ -169,3 +223,78 @@ export const STORAGE_KEYS = {
   joinSignal: 'ia.join.signal',
   roomResume: 'ia.room.resume',
 } as const;
+
+// ---------- Phase B enums (docs/specs/phase-b-contracts.md sections 3, 4, 5, 8, 11.2) ----------
+
+/** Ordered consent levels of a P2 session (section 5.2). */
+export const CONSENT_LEVELS = ['view', 'tab_control', 'in_page', 'deep_control'] as const;
+export type ConsentLevel = (typeof CONSENT_LEVELS)[number];
+export const CONSENT_LEVEL_ORDER: Record<ConsentLevel, number> = { view: 0, tab_control: 1, in_page: 2, deep_control: 3 };
+
+/** True when level `a` is at least level `b`. */
+export function levelAtLeast(a: ConsentLevel, b: ConsentLevel): boolean {
+  return CONSENT_LEVEL_ORDER[a] >= CONSENT_LEVEL_ORDER[b];
+}
+
+/** The lower of two levels. */
+export function minLevel(a: ConsentLevel, b: ConsentLevel): ConsentLevel {
+  return CONSENT_LEVEL_ORDER[a] <= CONSENT_LEVEL_ORDER[b] ? a : b;
+}
+
+export function isConsentLevel(x: unknown): x is ConsentLevel {
+  return typeof x === 'string' && (CONSENT_LEVELS as readonly string[]).includes(x);
+}
+
+export const MIRROR_SCOPES = ['current_tab', 'all_tabs'] as const;
+export type MirrorScope = (typeof MIRROR_SCOPES)[number];
+
+export const DESK_CLIENT_KINDS = ['web', 'extension'] as const;
+export type DeskClientKind = (typeof DESK_CLIENT_KINDS)[number];
+
+export const DESK_BROWSERS = ['chrome', 'edge', 'other'] as const;
+export type DeskBrowser = (typeof DESK_BROWSERS)[number];
+
+export const DESK_OSES = ['windows', 'mac', 'linux', 'cros', 'other'] as const;
+export type DeskOs = (typeof DESK_OSES)[number];
+
+export const INPUT_MODES = ['dom', 'debugger'] as const;
+export type InputMode = (typeof INPUT_MODES)[number];
+
+export const MIRROR_TRANSPORTS = ['dc', 'relay'] as const;
+export type MirrorTransport = (typeof MIRROR_TRANSPORTS)[number];
+
+export const MIRROR_START_REASONS = ['consent', 'resumed', 'attach', 'reconnect'] as const;
+export type MirrorStartReason = (typeof MIRROR_START_REASONS)[number];
+
+export const MIRROR_STOP_REASONS = ['paused', 'policy', 'all_tabs_closed', 'too_large', 'ended', 'revoked', 'error'] as const;
+export type MirrorStopReason = (typeof MIRROR_STOP_REASONS)[number];
+
+export const MASK_SCOPES = ['field', 'tab'] as const;
+export type MaskScope = (typeof MASK_SCOPES)[number];
+
+export const FIELD_KINDS = ['input', 'textarea', 'select', 'contenteditable', 'text'] as const;
+export type FieldKind = (typeof FIELD_KINDS)[number];
+
+export const MASK_REFUSE_CAUSES = ['refused', 'timeout', 'not_unmaskable', 'policy', 'bad_target'] as const;
+export type MaskRefuseCause = (typeof MASK_REFUSE_CAUSES)[number];
+
+export const MASK_RESTORE_CAUSES = ['desk', 'blur', 'ttl', 'navigation', 'pause', 'level', 'end'] as const;
+export type MaskRestoreCause = (typeof MASK_RESTORE_CAUSES)[number];
+
+export const BACKSTAGE_OUTCOMES = ['closed', 'kept', 'brought_to_front'] as const;
+export type BackstageOutcome = (typeof BACKSTAGE_OUTCOMES)[number];
+
+export const BACKSTAGE_ACTIONS = ['close', 'keep', 'bring_to_front'] as const;
+export type BackstageAction = (typeof BACKSTAGE_ACTIONS)[number];
+
+export const INPUT_KINDS = ['pointer', 'key', 'scroll', 'fill'] as const;
+export type InputKind = (typeof INPUT_KINDS)[number];
+
+/** Fixed-length mask for secrets and masked text (section 4.1): discloses nothing about the length. */
+export const MASK_FIXED = '********';
+
+/** Placeholder extension id used by fixtures and docs until Web Store publication (section 2.1 J4). */
+export const EXTENSION_ID_PLACEHOLDER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+/** Media type of an Assist-side rrweb mirror recording (section 4.7). */
+export const RRWEB_RECORDING_MIME = 'application/x-ia-rrweb+jsonl';

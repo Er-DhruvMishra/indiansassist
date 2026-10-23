@@ -1,7 +1,7 @@
 /**
  * Boot cleanup (contracts section 7.6 N3) and the 10 s sweeper (N4): deadline timeouts, sessions left on revoked
- * tokens, sessions owned by lost nodes, login_attempt retention, expired / abandoned uploads and hourly periodic
- * checkpoints (section 5.6 C2). Every node starts a sweeper, but a pass runs only on the holder of the `sweeper`
+ * tokens, sessions owned by lost nodes, login_attempt retention, expired / abandoned uploads, recording retention
+ * (Phase B Y26) and hourly periodic checkpoints (section 5.6 C2). Every node starts a sweeper, but a pass runs only on the holder of the `sweeper`
  * presence lease (one node of the cluster at a time; the memory driver always holds it).
  */
 import {
@@ -12,6 +12,7 @@ import {
   listExpiredUploads,
   listOpenSessionsByNode,
   listOpenSessionsOnRevokedTokens,
+  listRecordingsPastRetention,
   listSessionsPastDeadline,
   NON_ENDED_STATES,
   org as orgTable,
@@ -21,6 +22,7 @@ import { and, inArray, ne } from 'drizzle-orm';
 import type { AppContext } from './context.js';
 import { systemActor } from './lib/audit.js';
 import { writeCheckpoint } from './services/audit-service.js';
+import { deleteRecording } from './services/recording-delete.js';
 import { deleteParts, failRecording } from './services/recording-service.js';
 import { endSessionQuietly } from './services/session-end.js';
 
@@ -62,6 +64,7 @@ export class Sweeper {
       await this.lostNodes();
       await deleteLoginAttemptsBefore(this.ctx.db, new Date(Date.now() - 24 * HOUR_MS));
       await this.expiredUploads();
+      await this.retention();
       if (opts.forcePeriodic || Date.now() - this.lastPeriodic >= HOUR_MS) {
         this.lastPeriodic = Date.now();
         await this.periodicCheckpoints();
@@ -126,6 +129,23 @@ export class Sweeper {
         this.ctx.log.error({ err, recordingId: rec.id }, 'expired upload cleanup failed; retried next pass');
       }
     }
+  }
+
+  /**
+   * Phase B Y26: recordings older than their org's `recording_retention_days` are deleted (object removed, row
+   * kept, `recording.deleted { cause: 'retention' }` by the system). One bad row does not stop the others.
+   */
+  async retention(): Promise<number> {
+    let n = 0;
+    for (const rec of await listRecordingsPastRetention(this.ctx.db)) {
+      try {
+        const o = await getOrg(this.ctx.db, rec.orgId);
+        if (o && (await deleteRecording(this.ctx, o, rec, 'retention', systemActor, null))) n++;
+      } catch (err) {
+        this.ctx.log.error({ err, recordingId: rec.id }, 'retention delete failed; retried next pass');
+      }
+    }
+    return n;
   }
 
   /** Every org whose tail entry is not itself an `audit.anchored` entry gets a `periodic` checkpoint. */

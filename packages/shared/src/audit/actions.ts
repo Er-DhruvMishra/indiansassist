@@ -5,7 +5,9 @@
  */
 import { z } from 'zod';
 import {
+  CONSENT_LEVELS,
   CONSENT_SURFACES,
+  MIRROR_SCOPES,
   FILE_DIRECTIONS,
   LOGIN_METHODS,
   PACKAGE_TIERS,
@@ -20,6 +22,9 @@ import {
   VERIFY_FAILURE_KINDS,
 } from '../enums.js';
 import { sanitiseText, SANITISE_LIMITS } from './sanitise.js';
+import { P2_AUDIT_ACTIONS, P2_CHAIN_SCHEMAS } from './actions-p2.js';
+
+export * from './actions-p2.js';
 
 export const AUDIT_ACTIONS = [
   'auth.signup',
@@ -54,6 +59,8 @@ export const AUDIT_ACTIONS = [
   'audit.verified',
   'elevation.requested',
   'session.supervisor_joined',
+  // Phase B (docs/specs/phase-b-contracts.md section 3.6)
+  ...P2_AUDIT_ACTIONS,
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -113,7 +120,13 @@ const SCHEMAS = {
   'session.knock': z.strictObject({ tokenId: id, deskLabelHash: hash, userAgentHash: hash }),
   'session.accepted': z.strictObject({ tokenId: id, onBehalfOf: id.nullable() }),
   'session.denied': z.strictObject({ tokenId: id, revokeToken: z.boolean() }),
-  'session.consent_granted': z.strictObject({ surface: z.enum(CONSENT_SURFACES) }),
+  // `level`, `scope`, `backstage`: present for P2 sessions only (Phase B Y5).
+  'session.consent_granted': z.strictObject({
+    surface: z.enum(CONSENT_SURFACES),
+    level: z.enum(CONSENT_LEVELS).optional(),
+    scope: z.enum(MIRROR_SCOPES).optional(),
+    backstage: z.boolean().optional(),
+  }),
   'session.consent_revoked': empty,
   'session.started': z.strictObject({ path: z.enum(SESSION_PATHS) }),
   'session.resumed': z.strictObject({
@@ -163,6 +176,7 @@ const SCHEMAS = {
     () => false,
     'session.supervisor_joined is reserved and not written in Phase A',
   ),
+  ...P2_CHAIN_SCHEMAS,
 } satisfies Record<AuditAction, z.ZodType>;
 
 export type AuditDataSchemas = typeof SCHEMAS;

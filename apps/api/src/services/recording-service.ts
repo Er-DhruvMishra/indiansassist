@@ -3,7 +3,7 @@
  * chain (`recording.stored`, `chained_into`) and failure handling (`recording.failed`).
  */
 import { randomUUID } from 'node:crypto';
-import { LIMITS } from '@indiansassist/shared';
+import { LIMITS, recordingFileExtension, recordingMediaType, RRWEB_RECORDING_MIME } from '@indiansassist/shared';
 import {
   getRecordingBySession,
   insertRecording,
@@ -22,6 +22,11 @@ import { fail, HttpError } from '../errors.js';
 import { systemActor, writeAudit, type Actor } from '../lib/audit.js';
 
 const STALE_UPLOAD_MS = 60 * 60_000;
+
+/** Storage key suffix: `jsonl.gz` for rrweb mirror recordings (Phase B 4.7), `webm` otherwise (section 9). */
+function storageExt(mime: string): string {
+  return recordingMediaType(mime) === RRWEB_RECORDING_MIME ? recordingFileExtension(RRWEB_RECORDING_MIME) : 'webm';
+}
 
 export function partKey(storageKey: string, n: number): string {
   return `${storageKey}.part${n}`;
@@ -100,7 +105,7 @@ export async function prepareRecording(
     orgId: s.orgId,
     sessionId: s.id,
     uploadedBy,
-    storageKey: recordingStorageKey(s.region, s.orgId, s.id, id),
+    storageKey: recordingStorageKey(s.region, s.orgId, s.id, id, storageExt(input.mime)),
     region: s.region,
     mime: input.mime,
     bytes: input.bytes ?? 0,

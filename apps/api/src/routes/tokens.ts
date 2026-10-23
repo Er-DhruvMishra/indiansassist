@@ -142,7 +142,9 @@ export async function tokenRoutes(app: FastifyInstance, ctx: AppContext): Promis
       org: { ...branding, supportEmail: v.org.branding?.supportEmail ?? null },
       technician,
       signalUrl: `${wsOrigin(ctx.config.apiOrigin)}/signal`,
-      joinSupported: tok.tier === 'p1_browser' && tok.typ !== 'enrollment',
+      joinSupported: (tok.tier === 'p1_browser' || tok.tier === 'p2_extension') && tok.typ !== 'enrollment',
+      // Phase B 11.3: install info for the join page and the extension (non-null for p2_extension only).
+      extension: tok.tier === 'p2_extension' ? { ...ctx.config.extension, ids: [...ctx.config.extension.ids] } : null,
     };
   });
 }

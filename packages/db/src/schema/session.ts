@@ -1,8 +1,10 @@
 /** Live support sessions and their participants (contracts section 4.2: session, session_participant). */
 import { sql } from 'drizzle-orm';
-import { boolean, char, index, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, char, index, jsonb, pgTable, text, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import {
+  consentLevelEnum,
   consentStateEnum,
+  mirrorScopeEnum,
   packageTierEnum,
   participantRoleEnum,
   regionEnum,
@@ -48,6 +50,11 @@ export const session = pgTable(
     lastStats: jsonb('last_stats').$type<Record<string, unknown>>(),
     recordingStarted: boolean('recording_started').notNull().default(false),
     hashChainTail: char('hash_chain_tail', { length: 64 }),
+    // Phase B 11.1: the P2 consent decision and the Desk client object (null for P1 sessions).
+    consentLevel: consentLevelEnum('consent_level'),
+    consentScope: mirrorScopeEnum('consent_scope'),
+    consentBackstage: boolean('consent_backstage'),
+    deskClient: jsonb('desk_client').$type<Record<string, unknown>>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -79,4 +86,25 @@ export const sessionParticipant = pgTable(
     leftAt: tstz('left_at'),
   },
   (t) => [index('session_participant_session_id_idx').on(t.sessionId)],
+);
+
+/**
+ * Phase B 11.1: the plaintext host behind a chain `hostHash`, once per (session, hostHash). Mutable and deletable for
+ * erasure (the chain only ever holds the peppered hash), read joined by the session audit view.
+ */
+export const sessionHost = pgTable(
+  'session_host',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => session.id, { onDelete: 'cascade' }),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => org.id),
+    hostHash: char('host_hash', { length: 64 }).notNull(),
+    host: text('host').notNull(),
+    firstSeenAt: tstz('first_seen_at').notNull().defaultNow(),
+  },
+  (t) => [unique('session_host_session_hash_unique').on(t.sessionId, t.hostHash)],
 );

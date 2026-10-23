@@ -1,6 +1,7 @@
 /** REST schemas: sessions, audit, recordings, ICE, residency (contracts 6.3, 6.8-6.11). */
 import { z } from 'zod';
-import { SESSION_END_REASONS } from '../enums.js';
+import { CONSENT_LEVELS, DESK_BROWSERS, DESK_CLIENT_KINDS, DESK_OSES, LIMITS, MIRROR_SCOPES, RRWEB_RECORDING_MIME, SESSION_END_REASONS } from '../enums.js';
+import { ASSIST_EVENT_DATA, ASSIST_EVENT_REASON_ACTIONS, type AssistEventP2Action } from '../audit/actions-p2.js';
 import {
   actorTypeSchema,
   consentStateSchema,
@@ -51,6 +52,19 @@ export const sessionSchema = z.object({
   recordingStarted: z.boolean(),
   recordingId: uuidSchema.nullable(),
   hashChainTail: hex64Schema.nullable(),
+  // Phase B 11.1 (nullable; always sent by the api, optional so Phase A fixtures still parse).
+  consentLevel: z.enum(CONSENT_LEVELS).nullable().optional(),
+  consentScope: z.enum(MIRROR_SCOPES).nullable().optional(),
+  consentBackstage: z.boolean().nullable().optional(),
+  deskClient: z
+    .object({
+      kind: z.enum(DESK_CLIENT_KINDS),
+      version: z.string().optional(),
+      browser: z.object({ name: z.enum(DESK_BROWSERS), version: z.string() }).optional(),
+      os: z.enum(DESK_OSES).optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const sessionFileSchema = z.object({
@@ -121,11 +135,32 @@ export const fileEventDataSchema = z.object({
   sha256: hex64Schema,
 });
 
+function assistEvent<A extends AssistEventP2Action>(action: A) {
+  const withReason = (ASSIST_EVENT_REASON_ACTIONS as readonly string[]).includes(action);
+  return z.strictObject({
+    action: z.literal(action),
+    data: ASSIST_EVENT_DATA[action],
+    ...(withReason ? { reason: z.string().max(LIMITS.reasonMax).optional() } : {}),
+  });
+}
+
+/**
+ * POST /sessions/:id/events body (Phase A 6.8, Phase B 3.6 / Y24): file attestations, `recording.started` and the
+ * console's control-op reports (`reason` only on `mask.requested` and `level.requested`).
+ */
 export const sessionEventRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('file.sent'), data: fileEventDataSchema }),
   z.object({ action: z.literal('file.received'), data: fileEventDataSchema }),
   z.object({ action: z.literal('recording.started'), data: z.strictObject({}) }),
+  assistEvent('tab.action'),
+  assistEvent('control.input'),
+  assistEvent('mask.requested'),
+  assistEvent('level.requested'),
+  assistEvent('backstage.enter'),
+  assistEvent('backstage.exit'),
 ]);
+/** Alias named in the Phase B contracts (section 11.2). */
+export const sessionEventBodySchema = sessionEventRequestSchema;
 
 // ---------- audit (6.9) ----------
 
@@ -163,6 +198,8 @@ export const sessionAuditResponseSchema = z.object({
     failure: verifyFailureSchema.optional(),
   }),
   files: z.array(sessionFileSchema),
+  /** Phase B 11.3: `hostHash -> host` from `session_host`, for roles that may see file names. */
+  hosts: z.record(z.string(), z.string()).optional(),
 });
 
 export const auditExportRequestSchema = z.object({
@@ -189,19 +226,22 @@ export const auditLastVerifyResponseSchema = auditVerifyResponseSchema.nullable(
  * `image/svg+xml`) is refused, because the stored value is part of the recording row and must never describe an
  * active document type. The `/file` route serves only the base type of this list, never the stored string.
  */
-export const RECORDING_MEDIA_TYPES = ['video/webm', 'video/mp4', 'audio/webm', 'audio/ogg'] as const;
+export const RECORDING_MEDIA_TYPES = ['video/webm', 'video/mp4', 'audio/webm', 'audio/ogg', RRWEB_RECORDING_MIME] as const;
 export type RecordingMediaType = (typeof RECORDING_MEDIA_TYPES)[number];
 
-export const RECORDING_MIME_RE = /^(video\/webm|video\/mp4|audio\/webm|audio\/ogg)(;\s*codecs=("[A-Za-z0-9,.+\-\s]+"|[A-Za-z0-9,.+\-\s]+))?$/;
+/** Audio / video types may carry a `codecs` parameter; the rrweb JSONL type (Phase B 4.7) may not. */
+export const RECORDING_MIME_RE =
+  /^(?:(video\/webm|video\/mp4|audio\/webm|audio\/ogg)(;\s*codecs=("[A-Za-z0-9,.+\-\s]+"|[A-Za-z0-9,.+\-\s]+))?|(application\/x-ia-rrweb\+jsonl))$/;
 
 /** The allow-listed base type of a recording mime, or null when it is not on the list. */
 export function recordingMediaType(mime: string): RecordingMediaType | null {
   const m = RECORDING_MIME_RE.exec(mime);
-  return m ? (m[1] as RecordingMediaType) : null;
+  return m ? ((m[1] ?? m[4]) as RecordingMediaType) : null;
 }
 
-/** File extension for the download filename of a recording of base type `t`. */
+/** File extension for the download filename of a recording of base type `t` (`jsonl.gz` for rrweb, Phase B 4.7). */
 export function recordingFileExtension(t: RecordingMediaType): string {
+  if (t === RRWEB_RECORDING_MIME) return 'jsonl.gz';
   return t === 'video/mp4' ? 'mp4' : t === 'audio/ogg' ? 'ogg' : 'webm';
 }
 
@@ -223,6 +263,8 @@ export const recordingSchema = z.object({
   region: regionSchema,
   createdAt: isoTimestampSchema,
   storedAt: isoTimestampSchema.nullable(),
+  /** Phase B Y26: set when the object was deleted (manual or retention); always sent by the api. */
+  deletedAt: isoTimestampSchema.nullable().optional(),
 });
 
 /** Multipart field `meta` of POST /sessions/:id/recordings (parsed from its JSON string). */
@@ -302,6 +344,11 @@ export const residencyReportSchema = z.object({
       .object({ seq: z.number().int().nonnegative(), tail: hex64Schema, ts: isoTimestampSchema, kid: kidSchema })
       .nullable(),
   }),
+  /** Phase B 11.3 additions (always sent by the api; optional so Phase A fixtures still parse). */
+  extensionPolicy: z.object({ allowRelayFallback: z.boolean(), recordRevealed: z.boolean() }).optional(),
+  relaySessions: z.number().int().nonnegative().optional(),
+  relayBytes: z.number().int().nonnegative().optional(),
+  recordingRetentionDays: z.number().int().positive().nullable().optional(),
   retention: z.object({
     auditEntries: z.literal('append-only, never deleted'),
     piiInChain: z.literal('hashed with a per-org pepper; pepper destruction is the erasure mechanism (Phase E)'),

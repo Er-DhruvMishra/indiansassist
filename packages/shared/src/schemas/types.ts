@@ -5,6 +5,7 @@ import type * as tok from './rest-tokens.js';
 import type * as ses from './rest-sessions.js';
 import type * as sig from './signal-messages.js';
 import type * as dc from './datachannel.js';
+import type * as pol from '../extension/policy.js';
 
 export type ApiErrorBody = z.infer<typeof core.apiErrorSchema>;
 export type PageQuery = z.infer<typeof core.pageQuerySchema>;
@@ -61,6 +62,8 @@ export type RecordingVerifyResponse = z.infer<typeof ses.recordingVerifyResponse
 export type IceQuery = z.infer<typeof ses.iceQuerySchema>;
 export type IceResponse = z.infer<typeof ses.iceResponseSchema>;
 export type ResidencyReport = z.infer<typeof ses.residencyReportSchema>;
+export type ExtensionPolicyResponse = z.infer<typeof pol.extensionPolicyResponseSchema>;
+export type RetentionPolicy = z.infer<typeof core.retentionPolicySchema>;
 
 export type IceCandidateInit = z.infer<typeof sig.iceCandidateInitSchema>;
 export type AssistHello = z.infer<typeof sig.assistHelloSchema>;
@@ -97,6 +100,13 @@ export type AssistReconnected = z.infer<typeof sig.assistReconnectedSchema>;
 export type SessionEnded = z.infer<typeof sig.sessionEndedSchema>;
 export type EventOk = z.infer<typeof sig.eventOkSchema>;
 export type SignalError = z.infer<typeof sig.signalErrorSchema>;
+export type DeskClient = z.infer<typeof sig.deskClientSchema>;
+export type ExtensionConsent = z.infer<typeof sig.extensionConsentSchema>;
+export type DeskConsentLevel = z.infer<typeof sig.deskConsentLevelSchema>;
+export type DeskConsentBackstage = z.infer<typeof sig.deskConsentBackstageSchema>;
+export type ConsentLevelOk = z.infer<typeof sig.consentLevelOkSchema>;
+export type MirrorRelay = z.infer<typeof sig.mirrorRelaySchema>;
+export type ControlRelay = z.infer<typeof sig.controlRelaySchema>;
 
 export type DcChat = z.infer<typeof dc.dcChatSchema>;
 export type DcChatAck = z.infer<typeof dc.dcChatAckSchema>;
@@ -112,3 +122,7 @@ export type DcStopSharing = z.infer<typeof dc.dcStopSharingSchema>;
 export type DcConsentRevoked = z.infer<typeof dc.dcConsentRevokedSchema>;
 export type DcRecordingState = z.infer<typeof dc.dcRecordingStateSchema>;
 export type DcVoiceState = z.infer<typeof dc.dcVoiceStateSchema>;
+export type DcMirrorTabs = z.infer<typeof dc.dcMirrorTabsSchema>;
+export type DcMirrorTab = z.infer<typeof dc.dcMirrorTabSchema>;
+export type DcMirrorAck = z.infer<typeof dc.dcMirrorAckSchema>;
+export type DcMirrorNack = z.infer<typeof dc.dcMirrorNackSchema>;

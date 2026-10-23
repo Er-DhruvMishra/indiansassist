@@ -29,6 +29,21 @@ class FakeAudioCtx {
   createMediaStreamDestination() {
     return { stream: fakeStream([destTrack]) };
   }
+  silence: { offset: { value: number }; started: boolean; stopped: boolean; connected: boolean } | null = null;
+  createConstantSource() {
+    const n = {
+      offset: { value: 1 },
+      started: false,
+      stopped: false,
+      connected: false,
+      connect: () => void (n.connected = true),
+      disconnect: () => void (n.connected = false),
+      start: () => void (n.started = true),
+      stop: () => void (n.stopped = true),
+    };
+    this.silence = n;
+    return n;
+  }
   createMediaStreamSource(s: MediaStream) {
     const n = new FakeNode(s);
     this.nodes.push(n);
@@ -84,6 +99,16 @@ describe('SessionRecorder', () => {
     expect(FakeMediaRecorder.last.stream.tracks).toEqual([videoTrack, destTrack]);
     expect(FakeMediaRecorder.last.opts.mimeType).toBe('video/webm;codecs=vp8,opus');
     expect(live()).toEqual([]);
+  });
+
+  it('keeps silence flowing into the mix so Chromium writes data with voice off (e2e finding)', async () => {
+    const rec = new SessionRecorder(canvas(), { env });
+    rec.start();
+    const silence = FakeAudioCtx.last.silence!;
+    expect(silence).toMatchObject({ started: true, connected: true, offset: { value: 0 } });
+    FakeMediaRecorder.last.ondataavailable?.({ data: new Blob(['x']) });
+    await rec.stop();
+    expect(silence).toMatchObject({ stopped: true, connected: false });
   });
 
   it('setAudioSources adds and removes sources on the live mix', () => {

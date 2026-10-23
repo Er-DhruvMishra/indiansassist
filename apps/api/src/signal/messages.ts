@@ -1,12 +1,12 @@
 /** Builders for server -> client signaling messages (contracts section 7.3) and session timers. */
-import { iceRefreshDelayMs, sanitiseText, SANITISE_LIMITS } from '@indiansassist/shared';
+import { iceRefreshDelayMs, mergePolicy, sanitiseText, SANITISE_LIMITS, type ExtensionPolicy } from '@indiansassist/shared';
 import { getOrg, getSession, type OrgRow, type SessionRow, type TokenRow } from '@indiansassist/db';
 import { buildIceServers } from '../lib/ice.js';
 import { brandingPublic, type UserRef } from '../lib/mappers.js';
 import { endSessionQuietly } from '../services/session-end.js';
 import { systemActor } from '../lib/audit.js';
 import { iso } from '../lib/time.js';
-import { clearTimer, newLive, setTimer, type Live } from './conn.js';
+import { clearTimer, consentOfRow, newLive, setTimer, type Live } from './conn.js';
 import type { SignalHub } from './hub.js';
 
 export function ensureLive(hub: SignalHub, s: SessionRow): Live {
@@ -17,7 +17,20 @@ export function ensureLive(hub: SignalHub, s: SessionRow): Live {
   }
   live.state = s.state;
   live.path = s.path;
+  live.tier = s.tier;
+  live.consent = consentOfRow(s);
   return live;
+}
+
+/** The org extension policy merged over the defaults (Phase B 11.1). */
+export function policyOf(org: Pick<OrgRow, 'extensionPolicy'>): ExtensionPolicy {
+  return mergePolicy(org.extensionPolicy);
+}
+
+/** The policy of a live P2 session, loaded once (live sessions are not re-policed, Phase B 11.3). */
+export async function livePolicy(hub: SignalHub, live: Live): Promise<ExtensionPolicy> {
+  if (!live.policy) live.policy = policyOf(await orgOf(hub, live.orgId));
+  return live.policy;
 }
 
 export function assistKnockMsg(
@@ -60,6 +73,7 @@ export function sessionCreatedMsg(
     desk: { label: s.deskLabel ?? 'Desk' },
     org: brandingPublic(org),
     polite: side === 'assist',
+    ...(s.tier === 'p2_extension' ? { extension: { policy: hub.live.get(s.id)?.policy ?? policyOf(org) } } : {}),
   };
   if (side === 'desk') return base;
   return { ...base, ...buildIceServers(hub.ctx.config, `user:${assist.id}`) };

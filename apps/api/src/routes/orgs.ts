@@ -1,5 +1,5 @@
 /** Org routes (contracts sections 6.3, 6.6): current org, branding patch and the data residency report. */
-import { brandingPatchRequestSchema, REGION_LABELS, type ResidencyReport } from '@indiansassist/shared';
+import { brandingPatchRequestSchema, mergePolicy, REGION_LABELS, type ResidencyReport } from '@indiansassist/shared';
 import {
   auditEntry,
   getLatestCheckpoint,
@@ -11,7 +11,7 @@ import {
   user as userTable,
   type OrgBranding,
 } from '@indiansassist/db';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../context.js';
 import { userActor, writeAudit } from '../lib/audit.js';
@@ -61,7 +61,22 @@ export async function orgRoutes(app: FastifyInstance, ctx: AppContext): Promise<
     const [rec] = await ctx.db
       .select({ n: sql<number>`count(*)::int`, bytes: sql<string>`coalesce(sum(${recording.bytes}), 0)::text` })
       .from(recording)
-      .where(and(eq(recording.orgId, org.id), eq(recording.status, 'stored')));
+      .where(and(eq(recording.orgId, org.id), eq(recording.status, 'stored'), isNull(recording.deletedAt)));
+    // Phase B 11.3: WS relay use over the last 30 days, from the `mirror.relayed` entries.
+    const [relay] = await ctx.db
+      .select({
+        n: sql<number>`count(distinct ${auditEntry.sessionId})::int`,
+        bytes: sql<string>`coalesce(sum((${auditEntry.data}->>'mirrorBytes')::bigint), 0)::text`,
+      })
+      .from(auditEntry)
+      .where(
+        and(
+          eq(auditEntry.orgId, org.id),
+          eq(auditEntry.action, 'mirror.relayed'),
+          gte(auditEntry.ts, new Date(Date.now() - 30 * 86_400_000)),
+        ),
+      );
+    const policy = mergePolicy(org.extensionPolicy);
     const tail = await getOrgChainTail(ctx.db, org.id);
     const lastVerify = await getLatestCheckpoint(ctx.db, org.id, 'verify');
     const lastAnchor = await getLatestCheckpoint(ctx.db, org.id);
@@ -83,6 +98,10 @@ export async function orgRoutes(app: FastifyInstance, ctx: AppContext): Promise<
         recordingBytes: Number(rec?.bytes ?? 0),
         auditEntries: await countWhere(ctx, 'audit', org.id),
       },
+      extensionPolicy: { allowRelayFallback: policy.allowRelayFallback, recordRevealed: policy.recordRevealed },
+      relaySessions: Number(relay?.n ?? 0),
+      relayBytes: Number(relay?.bytes ?? 0),
+      recordingRetentionDays: org.recordingRetentionDays ?? null,
       chain: {
         length: tail?.seq ?? 0,
         tail: tail?.hash ?? null,

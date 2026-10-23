@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "apiOrigin": { "type": "string", "description": "API origin (one of the compiled region origins)." },
+    "deskLabel": { "type": "string", "description": "Default 'Your name' label for this computer." },
+    "extraDenyList": { "type": "array", "items": { "type": "string" }, "description": "Extra hosts that are never shared (example.com or *.example.com)." },
+    "maxConsentLevel": { "type": "string", "enum": ["view", "tab_control", "in_page", "deep_control"], "description": "Highest consent level the user may grant." },
+    "allowDeepControl": { "type": "boolean", "description": "false forbids deep control (chrome.debugger)." },
+    "allowAllTabs": { "type": "boolean", "description": "false forbids the All my tabs scope." },
+    "allowBackstage": { "type": "boolean", "description": "false forbids technician background tabs." },
+    "allowUnmask": { "type": "boolean", "description": "false forbids revealing masked fields." }
+  }
+}

@@ -13,6 +13,7 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | @noble/ed25519, @noble/hashes | MIT | token signing, hashing | in use |
 | argon2 | MIT | password hashing | in use |
 | React, Vite, Tailwind CSS | MIT | Assist console, Desk web room | in use |
+| Playwright (@playwright/test) and the Chromium build it downloads | Apache-2.0 (Chromium: BSD-3-Clause) | Package 1 two-browser e2e (dev only, not shipped) | in use (dev) |
 | coturn | BSD-3-Clause | STUN/TURN | self-hosted service |
 | PostgreSQL | PostgreSQL Licence | database | self-hosted service |
 | Valkey | BSD-3-Clause | presence / pub-sub (Redis compatible) | self-hosted service |
@@ -23,6 +24,8 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | nginx | BSD-2-Clause | TLS termination, reverse proxy, static web | self-hosted service |
 | ioredis | MIT | Valkey client (redis presence driver) | in use (Phase A, multi-node) |
 | @aws-sdk/client-s3, @aws-sdk/s3-request-presigner | Apache-2.0 | s3 storage driver | in use (Phase A) |
-| rrweb | MIT | P2 DOM mirroring | Phase B |
+| rrweb 2.1.7 (exact pin) with rrweb-snapshot, rrdom, @rrweb/types, @rrweb/utils, mitt, @xstate/fsm, base64-arraybuffer | MIT (all) | P2 DOM mirroring: replay in the Assist console's replayer frame (`apps/web`); `record()` in the extension capture script (`apps/extension`, bundled into `content.js`) | in use (Phase B, web and extension) |
+| @types/chrome 0.3.4 (+ @types/har-format) | MIT | extension API typings (`apps/extension`, dev only, not shipped) | in use (dev, Phase B) |
+| eslint-plugin-no-unsanitized 4.1.5 | MPL-2.0 (unmodified dev tool, nothing copied into our code, not shipped) | bans `innerHTML` and friends in `apps/extension` (section 12.1) | in use (dev, Phase B) |
 | pion/webrtc | MIT | server-side recorder | Phase A.2 |
 | RustDesk, MinIO source | AGPL | reference reading only, never copied | forbidden in repo |

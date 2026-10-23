@@ -1,6 +1,6 @@
 /** Tenancy and identity tables (contracts section 4.2): org, user, technician_seat, auth_session, login_attempt. */
 import { sql } from 'drizzle-orm';
-import { boolean, char, check, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, char, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { packageTierEnum, regionEnum, userRoleEnum, userStatusEnum } from './enums.js';
 
 /** `timestamp(..., { withTimezone: true, mode: 'date' })` as section 4 requires. */
@@ -32,10 +32,17 @@ export const org = pgTable(
     branding: jsonb('branding').$type<OrgBranding>().notNull().default({}),
     auditPepper: char('audit_pepper', { length: 64 }).notNull(),
     ssoConfig: jsonb('sso_config').$type<Record<string, unknown>>(),
+    /** Phase B 11.1: stored extension policy, merged over DEFAULT_EXTENSION_POLICY on every read. */
+    extensionPolicy: jsonb('extension_policy').$type<Record<string, unknown>>().notNull().default({}),
+    /** Phase B Y26: null keeps recordings until deleted manually; 1..3650. */
+    recordingRetentionDays: integer('recording_retention_days'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  () => [check('org_slug_format', sql`slug ~ '^[a-z0-9-]{3,40}$'`)],
+  () => [
+    check('org_slug_format', sql`slug ~ '^[a-z0-9-]{3,40}$'`),
+    check('org_recording_retention_days_range', sql`recording_retention_days is null or recording_retention_days between 1 and 3650`),
+  ],
 );
 
 export const user = pgTable(

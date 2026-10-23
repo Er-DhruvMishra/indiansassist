@@ -24,6 +24,11 @@ export const signalMessageSchema = z.discriminatedUnion('t', [
   m.sessionEndSchema,
   m.pingSchema,
   m.pongSchema,
+  m.deskConsentLevelSchema,
+  m.deskConsentBackstageSchema,
+  m.mirrorRelaySchema,
+  m.controlRelaySchema,
+  m.consentLevelOkSchema,
   m.assistHelloOkSchema,
   m.deskHelloOkSchema,
   m.pollStatusSchema,
@@ -67,6 +72,10 @@ export const clientSignalMessageSchema = z.discriminatedUnion('t', [
   m.sessionEndSchema,
   m.pingSchema,
   m.pongSchema,
+  m.deskConsentLevelSchema,
+  m.deskConsentBackstageSchema,
+  m.mirrorRelaySchema,
+  m.controlRelaySchema,
 ]);
 export type ClientSignalMessage = z.infer<typeof clientSignalMessageSchema>;
 
@@ -96,6 +105,9 @@ export const serverSignalMessageSchema = z.discriminatedUnion('t', [
   m.signalErrorSchema,
   m.pingSchema,
   m.pongSchema,
+  m.consentLevelOkSchema,
+  m.mirrorRelaySchema,
+  m.controlRelaySchema,
 ]);
 export type ServerSignalMessage = z.infer<typeof serverSignalMessageSchema>;
 
@@ -114,6 +126,8 @@ export const ASSIST_CLIENT_TYPES = [
   'session.end',
   'ping',
   'pong',
+  'mirror.relay',
+  'control.relay',
 ] as const satisfies readonly ClientSignalMessage['t'][];
 
 export const DESK_CLIENT_TYPES = [
@@ -129,7 +143,14 @@ export const DESK_CLIENT_TYPES = [
   'session.end',
   'ping',
   'pong',
+  'desk.consent_level',
+  'desk.consent_backstage',
+  'mirror.relay',
+  'control.relay',
 ] as const satisfies readonly ClientSignalMessage['t'][];
+
+/** Frames that never consume the per-connection frame bucket (Phase B Y25). */
+export const BUCKET_EXEMPT_TYPES = ['ping', 'pong', 'session.end', 'desk.consent'] as const satisfies readonly ClientSignalMessage['t'][];
 
 export type SignalParseFailure = {
   ok: false;
@@ -143,7 +164,7 @@ export type SignalParseResult<M> = { ok: true; msg: M } | SignalParseFailure;
 type AnyUnion = typeof signalMessageSchema | typeof clientSignalMessageSchema | typeof serverSignalMessageSchema;
 
 function knownTypes(schema: AnyUnion): Set<string> {
-  return new Set(schema.options.map((o) => o.shape.t.value as string));
+  return new Set(schema.options.map((o) => (o as unknown as { shape: { t: { value: string } } }).shape.t.value));
 }
 
 const KNOWN = new Map<AnyUnion, Set<string>>();

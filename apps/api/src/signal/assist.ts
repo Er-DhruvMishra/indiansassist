@@ -33,6 +33,7 @@ import {
   deskIce,
   ensureLive,
   orgOf,
+  policyOf,
   scheduleIceRefresh,
   sessionCreatedMsg,
   startConsentTimer,
@@ -127,6 +128,7 @@ export async function handleAssistAccept(hub: SignalHub, conn: Conn, msg: Signal
     return r;
   });
   const live = ensureLive(hub, row);
+  if (row.tier === 'p2_extension') live.policy ??= policyOf(org);
   live.assistConnId = conn.id;
   clearTimer(live, 'knock');
   startConsentTimer(hub, live);
@@ -225,6 +227,10 @@ export async function handleSessionStats(hub: SignalHub, conn: Conn, msg: Signal
   const s = await getSession(ctx.db, msg.sessionId);
   if (!s || s.state === 'ended') return;
   const lastStats = {
+    ...(msg.mirrorKbps !== undefined ? { mirrorKbps: msg.mirrorKbps } : {}),
+    ...(msg.mirrorTabs !== undefined ? { mirrorTabs: msg.mirrorTabs } : {}),
+    ...(msg.mirrorTransport !== undefined ? { mirrorTransport: msg.mirrorTransport } : {}),
+    ...(msg.sessionKbps !== undefined ? { sessionKbps: msg.sessionKbps } : {}),
     path: msg.path,
     rttMs: msg.rttMs,
     codec: msg.codec,

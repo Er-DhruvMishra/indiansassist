@@ -88,7 +88,12 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
     const passwordHash = await hashPassword(body.password);
     try {
       const out = await ctx.db.transaction(async (tx) => {
-        const org = await createOrg(tx, { name: body.orgName, slug: slug!, dataRegion: region });
+        const org = await createOrg(tx, {
+          name: body.orgName,
+          slug: slug!,
+          dataRegion: region,
+          planTier: ctx.config.signupPlanTier,
+        });
         const user = await createUser(tx, {
           orgId: org.id,
           email: body.email,

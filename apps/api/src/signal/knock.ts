@@ -69,6 +69,7 @@ export async function performKnock(
         nodeId: ctx.config.nodeId,
         deskLabel: label,
         deskUserAgent: ua,
+        deskClient: d.client,
         resumeKeyHash: sha256Hex(resumeKey),
         knockedAt: now,
         knockExpiresAt: new Date(now.getTime() + ctx.timing.knockTimeoutMs),

@@ -17,4 +17,5 @@ export * from './repo/participants.js';
 export * from './repo/audit.js';
 export * from './repo/audit-verify.js';
 export * from './repo/recordings.js';
+export * from './repo/session-hosts.js';
 export * from './seed.js';

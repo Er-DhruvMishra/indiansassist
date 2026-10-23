@@ -1,42 +1,34 @@
 /**
- * Session routes (contracts section 6.8): list, stats, detail with participants and file attestations, end (pushes
- * `session.ended` over WS) and the Assist's client-reported events (`file.*`, deduplicated `recording.started`).
+ * Session routes (contracts section 6.8): list, stats, detail with participants and file attestations and end
+ * (pushes `session.ended` over WS). The Assist's client-reported events live in session-events.ts.
  */
 import {
-  LIMITS,
-  sanitiseFileName,
   SESSION_END_REASONS,
   sessionEndRequestSchema,
-  sessionEventRequestSchema,
   sessionsListQuerySchema,
   sessionStatsQuerySchema,
   type SessionEndReason,
   type SessionStatsResponse,
 } from '@indiansassist/shared';
 import {
-  findSessionAuditByAction,
   listParticipants,
   listSessionFiles,
   listSessionsByOrg,
-  getAuditEntry,
-  markRecordingStarted,
   session as sessionTable,
   token as tokenTable,
-  upsertSessionFile,
 } from '@indiansassist/db';
 import { and, eq, gte, inArray, lt, or, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
-import { piiHash, userActor, writeAudit } from '../lib/audit.js';
+import { userActor } from '../lib/audit.js';
 import { hydrateSession, hydrateSessions } from '../lib/lookup.js';
-import { toAuditEntry, toSessionFile } from '../lib/mappers.js';
+import { toSessionFile } from '../lib/mappers.js';
 import { TECH_ROLES } from '../lib/rbac.js';
 import { iso, isoOrNull } from '../lib/time.js';
 import { parseOr400 } from '../lib/validate.js';
 import { authenticate } from '../plugins/auth.js';
-import { requireReachedActive, requireSessionAssist, scopedSession } from '../services/scope.js';
-import { MAX_ATTESTED_FILE_ID } from '../signal/desk-events.js';
+import { scopedSession } from '../services/scope.js';
 import { endSessionFlow } from '../services/session-end.js';
 
 const DAY_MS = 86_400_000;
@@ -123,61 +115,5 @@ export async function sessionRoutes(app: FastifyInstance, ctx: AppContext): Prom
       note: body.note ?? null,
     });
     return hydrateSession(ctx.db, ended.session);
-  });
-
-  app.post<{ Params: { id: string } }>('/api/v1/sessions/:id/events', async (req, reply) => {
-    const p = await authenticate(ctx, req, TECH_ROLES);
-    const { session } = await scopedSession(ctx, p, req.params.id, { write: true });
-    requireSessionAssist(p, session);
-    const body = parseOr400(sessionEventRequestSchema, req.body);
-    if (session.endedAt && Date.now() > session.endedAt.getTime() + LIMITS.eventGraceSec * 1000)
-      fail('already_ended', 'session ended too long ago');
-    if (body.action === 'recording.started') {
-      const existing = await findSessionAuditByAction(ctx.db, session.id, 'recording.started');
-      if (existing) return reply.status(200).send(toAuditEntry(existing));
-      const entry = await ctx.db.transaction(async (tx) => {
-        if (!(await markRecordingStarted(tx, session.id))) return null;
-        return writeAudit(ctx, tx, p.org, { sessionId: session.id, actor: userActor(p.user), action: 'recording.started' });
-      });
-      if (!entry) {
-        const again = await findSessionAuditByAction(ctx.db, session.id, 'recording.started');
-        if (again) return reply.status(200).send(toAuditEntry(again));
-        fail('already_ended', 'recording state changed');
-      }
-      await ctx.hub.pushRecording(session.id);
-      return reply.status(201).send(toAuditEntry(entry));
-    }
-    // File attestations (SEC-04): only for a session that reached active, once per transfer, bounded fileId.
-    requireReachedActive(session);
-    const d = body.data;
-    if (d.fileId > MAX_ATTESTED_FILE_ID) fail('validation_failed', `fileId must be at most ${MAX_ATTESTED_FILE_ID}`);
-    const already = (await listSessionFiles(ctx.db, session.id)).find(
-      (f) => f.direction === d.direction && f.fileId === d.fileId && f.assistEntryId,
-    );
-    if (already?.assistEntryId) {
-      const prior = await getAuditEntry(ctx.db, already.assistEntryId);
-      if (prior) return reply.status(200).send(toAuditEntry(prior));
-    }
-    const name = sanitiseFileName(d.name, d.fileId);
-    const entry = await ctx.db.transaction(async (tx) => {
-      const e = await writeAudit(ctx, tx, p.org, {
-        sessionId: session.id,
-        actor: userActor(p.user),
-        action: body.action,
-        data: { fileId: d.fileId, direction: d.direction, nameHash: piiHash(p.org, name), bytes: d.bytes, sha256: d.sha256 },
-      });
-      await upsertSessionFile(tx, {
-        sessionId: session.id,
-        direction: d.direction,
-        fileId: d.fileId,
-        name,
-        bytes: d.bytes,
-        sha256: d.sha256,
-        side: 'assist',
-        entryId: e.id,
-      });
-      return e;
-    });
-    return reply.status(201).send(toAuditEntry(entry));
   });
 }

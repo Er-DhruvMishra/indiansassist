@@ -8,7 +8,7 @@ import type { AppContext } from '../context.js';
 import type { EndedSession } from '../services/session-end.js';
 import { refreshUserSockets } from './auth-watch.js';
 import type { Bridge } from './bridge.js';
-import type { Conn, Live } from './conn.js';
+import type { Conn, Live, RelayCounters } from './conn.js';
 import type { SignalHub } from './hub.js';
 import { onSessionEnded, onTokenRevoked } from './lifecycle.js';
 
@@ -27,6 +27,12 @@ export abstract class HubApi {
   async chatCount(sessionId: string): Promise<number> {
     const live = this.live.get(sessionId);
     return live ? live.chatCount : this.bridge.chatCount(sessionId);
+  }
+
+  /** WS relay counters of a session (for `mirror.relayed`), asked of the owner node when it is elsewhere. */
+  async relayCounters(sessionId: string): Promise<RelayCounters | null> {
+    const live = this.live.get(sessionId);
+    return live ? { ...live.relay } : this.bridge.relayCounters(sessionId);
   }
 
   /** After a committed end: the owner node pushes `session.ended` and applies the socket rules (section 7.3). */

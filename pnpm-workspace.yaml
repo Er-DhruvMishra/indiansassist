@@ -4,3 +4,5 @@ packages:
 allowBuilds:
   argon2: false
   esbuild: true
+catalog:
+  rrweb: 2.1.7

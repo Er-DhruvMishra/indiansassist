@@ -16,6 +16,7 @@ import {
 } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
 import { writeAudit, type Actor } from '../lib/audit.js';
+import { relayUsed } from '../signal/relay-p2.js';
 
 export type EndOptions = {
   reason: SessionEndReason;
@@ -37,6 +38,7 @@ export type EndedSession = { session: SessionRow; previousState: SessionState; o
 /** Ends a session; throws SessionAlreadyEndedError (409 already_ended) or InvalidSessionTransitionError. */
 export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: EndOptions): Promise<EndedSession> {
   const chatCount = await ctx.hub.chatCount(sessionId);
+  const relay = await ctx.hub.relayCounters(sessionId);
   const result = await ctx.db.transaction(async (tx) => {
     const current = await getSession(tx, sessionId);
     if (!current) throw new Error(`session ${sessionId} not found`);
@@ -52,6 +54,14 @@ export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: E
         actor: { type: 'system', id: null, label: 'system' },
         action: 'chat.relayed',
         data: { count: chatCount },
+      });
+    // Phase B 4.6: the WS relay counters, immediately before `session.ended`.
+    if (relayUsed(relay))
+      await writeAudit(ctx, tx, org, {
+        sessionId,
+        actor: { type: 'system', id: null, label: 'system' },
+        action: 'mirror.relayed',
+        data: { ...relay },
       });
     const durationMs =
       ended.startedAt && ended.endedAt ? Math.max(0, ended.endedAt.getTime() - ended.startedAt.getTime()) : null;

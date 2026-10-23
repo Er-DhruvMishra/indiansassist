@@ -22,6 +22,9 @@ export type OrgPatch = {
   branding?: OrgBranding;
   planTier?: PackageTier;
   ssoConfig?: Record<string, unknown> | null;
+  /** Phase B 11.1 (stored as given; read through mergePolicy). */
+  extensionPolicy?: Record<string, unknown>;
+  recordingRetentionDays?: number | null;
 };
 
 export function generateAuditPepper(): string {
@@ -66,7 +69,7 @@ export async function isSlugTaken(exec: Executor, slug: string): Promise<boolean
   return (await getOrgBySlug(exec, slug)) !== null;
 }
 
-const PATCHABLE = new Set<string>(['name', 'branding', 'planTier', 'ssoConfig']);
+const PATCHABLE = new Set<string>(['name', 'branding', 'planTier', 'ssoConfig', 'extensionPolicy', 'recordingRetentionDays']);
 
 /**
  * Updates mutable org columns. Throws RegionImmutableError when the patch carries `dataRegion` (or its column

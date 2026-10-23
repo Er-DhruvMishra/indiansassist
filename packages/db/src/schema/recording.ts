@@ -31,6 +31,9 @@ export const recording = pgTable(
     region: regionEnum('region').notNull(),
     createdAt: createdAt(),
     storedAt: tstz('stored_at'),
+    /** Phase B Y26: the object was removed from storage; the row stays (the chain references it). */
+    deletedAt: tstz('deleted_at'),
+    deletedBy: uuid('deleted_by').references(() => user.id),
   },
   (t) => [index('recording_org_id_idx').on(t.orgId)],
 );

@@ -1,7 +1,8 @@
 /**
  * /join (contracts section 6.13): reads `t` from the fragment (fallback `?t=`), removes it from the URL at
  * once, looks the token up, shows the technician's org, a prominent Copy token button (then "Copy token
- * again"), the manual code / link field fallback with Continue, and Join support session.
+ * again"), the manual code / link field fallback with Continue, and Join support session. A `p2_extension`
+ * token renders the extension branch instead (Phase B 2.1, `JoinP2`).
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -20,6 +21,7 @@ import { navigateTo, regionDecision } from '../lib/region';
 import { JOIN_LABEL_KEY, readStore, writeStore } from '../lib/storage';
 import { saveJoinBrand } from './brand';
 import { DeskLayout } from './DeskLayout';
+import { JoinP2 } from './JoinP2';
 
 type LookupError = { message: string; retry?: boolean };
 
@@ -151,22 +153,28 @@ export function JoinPage() {
               {secondsLeft > 0 ? `Expires in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}` : 'Expired'}
             </Badge>
           </div>
-          <div>
-            <CopyButton text={code.value} label="Copy token" againLabel="Copy token again" size="lg" variant="secondary" />
-            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">Keep the token on your clipboard in case your technician asks for it.</p>
-          </div>
-          {info.joinSupported ? (
-            <>
-              <Field label="Your name (optional, shown to the technician)">
-                {(p) => <Input id={p.id} value={label} maxLength={80} onChange={(e) => setLabel(e.target.value)} autoComplete="name" />}
-              </Field>
-              <Button size="lg" onClick={() => void join()} disabled={secondsLeft === 0} style={secondsLeft > 0 ? { backgroundColor: accent } : undefined}>
-                Join support session
-              </Button>
-              <p className="text-xs text-slate-600 dark:text-slate-400">Nothing is shared yet. You will see exactly what is requested and choose what to share.</p>
-            </>
+          {info.tier === 'p2_extension' ? (
+            <JoinP2 info={info} code={code.value} accent={accent} expired={secondsLeft === 0} />
           ) : (
-            <Alert tone="amber">The IndiansAssist client for this package is not available yet.</Alert>
+            <>
+              <div>
+                <CopyButton text={code.value} label="Copy token" againLabel="Copy token again" size="lg" variant="secondary" />
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">Keep the token on your clipboard in case your technician asks for it.</p>
+              </div>
+              {info.joinSupported ? (
+                <>
+                  <Field label="Your name (optional, shown to the technician)">
+                    {(p) => <Input id={p.id} value={label} maxLength={80} onChange={(e) => setLabel(e.target.value)} autoComplete="name" />}
+                  </Field>
+                  <Button size="lg" onClick={() => void join()} disabled={secondsLeft === 0} style={secondsLeft > 0 ? { backgroundColor: accent } : undefined}>
+                    Join support session
+                  </Button>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">Nothing is shared yet. You will see exactly what is requested and choose what to share.</p>
+                </>
+              ) : (
+                <Alert tone="amber">The IndiansAssist client for this package is not available yet.</Alert>
+              )}
+            </>
           )}
         </section>
       )}

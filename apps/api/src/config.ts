@@ -12,9 +12,12 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_REGION,
   isRegion,
+  LIMITS,
+  PACKAGE_TIERS,
   parseRegionList,
   parseRegionOrigins,
   splitUrlList,
+  type PackageTier,
   type Region,
 } from '@indiansassist/shared';
 import { z } from 'zod';
@@ -102,6 +105,13 @@ const envSchema = z.object({
   ORG_MAX_OPEN_UPLOADS: int(10),
   USER_MAX_OPEN_UPLOADS: int(3),
   RECORDING_UPLOAD_WINDOW_SEC: int(24 * 60 * 60),
+  // Phase B (docs/specs/phase-b-contracts.md sections 2.4, 4.6, 11.3, Y21)
+  EXTENSION_IDS: str(''),
+  EXTENSION_WEBSTORE_URL: str(''),
+  EXTENSION_EDGE_URL: str(''),
+  EXTENSION_MIN_VERSION: str('0.2.0'),
+  MIRROR_RELAY_BUDGET_BYTES: int(LIMITS.mirrorRelayBudgetBytes),
+  SIGNUP_PLAN_TIER: z.enum(PACKAGE_TIERS).optional().default('p2_extension'),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -144,6 +154,12 @@ export type Config = {
   /** Origin of the fs driver's signed `/file` URLs (SEC-01); defaults to API_ORIGIN. */
   recordingDownloadOrigin: string;
   recordingQuota: { orgBytes: number; orgOpenUploads: number; userOpenUploads: number; uploadWindowSec: number };
+  /** Phase B: listed extension ids (also the Y21 Origin allow-list) and the install info of `PublicToken.extension`. */
+  extension: { ids: string[]; webStoreUrl: string | null; edgeAddonsUrl: string | null; minVersion: string };
+  /** Per-session WS mirror relay budget: `data` characters per sliding 10 s (Phase B 4.6). */
+  mirrorRelayBudgetBytes: number;
+  /** `org.plan_tier` of orgs created by signup (billing is out of scope; Phase B ships P2). */
+  signupPlanTier: PackageTier;
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
   dataDir: string;
@@ -255,6 +271,8 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     for (const k of ['S3_ENDPOINT', 'S3_REGION', 'S3_BUCKET', 'S3_ACCESS_KEY', 'S3_SECRET_KEY'] as const)
       if (e[k] === '') problems.push(`${k} is required with the s3 storage driver`);
   }
+  const extensionIds = splitUrlList(e.EXTENSION_IDS);
+  for (const id of extensionIds) if (!/^[a-p]{32}$/.test(id)) problems.push(`EXTENSION_IDS entry ${id} is not a Chrome extension id`);
   if (problems.length > 0) throw new ConfigError(`refusing to boot: ${problems.join('; ')}`);
 
   const suffixes = splitUrlList(e.ICE_OWN_HOST_SUFFIXES);
@@ -305,7 +323,27 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
       userOpenUploads: Math.max(1, e.USER_MAX_OPEN_UPLOADS),
       uploadWindowSec: e.RECORDING_UPLOAD_WINDOW_SEC,
     },
+    extension: {
+      ids: extensionIds,
+      webStoreUrl: e.EXTENSION_WEBSTORE_URL !== '' ? e.EXTENSION_WEBSTORE_URL : null,
+      edgeAddonsUrl: e.EXTENSION_EDGE_URL !== '' ? e.EXTENSION_EDGE_URL : null,
+      minVersion: e.EXTENSION_MIN_VERSION !== '' ? e.EXTENSION_MIN_VERSION : '0.2.0',
+    },
+    mirrorRelayBudgetBytes: e.MIRROR_RELAY_BUDGET_BYTES > 0 ? e.MIRROR_RELAY_BUDGET_BYTES : LIMITS.mirrorRelayBudgetBytes,
+    signupPlanTier: e.SIGNUP_PLAN_TIER,
     repoRoot,
     dataDir,
   };
+}
+
+/**
+ * Y21: `chrome-extension://<id>` is an accepted Origin for an id in EXTENSION_IDS; with an empty list any extension
+ * origin is accepted outside production (unpacked dev builds).
+ */
+export function isExtensionOrigin(config: Pick<Config, 'extension' | 'production'>, origin: string | undefined): boolean {
+  if (typeof origin !== 'string') return false;
+  const m = /^chrome-extension:\/\/([a-p]{32})$/.exec(origin);
+  if (!m) return false;
+  if (config.extension.ids.length === 0) return !config.production;
+  return config.extension.ids.includes(m[1]!);
 }

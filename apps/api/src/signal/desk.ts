@@ -3,7 +3,7 @@
  * `desk.poll`, `desk.knock` (held knocks when no technician can act) and `desk.consent`. The knock itself lives in
  * knock.ts and `desk.event` in desk-events.ts.
  */
-import { WS_CLOSE, type SignalErrorCode, type SignalOf } from '@indiansassist/shared';
+import { WS_CLOSE, type PackageTier, type SignalErrorCode, type SignalOf } from '@indiansassist/shared';
 import {
   findOpenSessionByToken,
   findTokenByTid,
@@ -22,6 +22,7 @@ import { endSessionFlow } from '../services/session-end.js';
 import { verifyTokenInput, type TokenVerifyOk } from '../services/token-verify.js';
 import type { Conn } from './conn.js';
 import type { SignalHub } from './hub.js';
+import { checkGrant } from './desk-consent.js';
 import { performKnock } from './knock.js';
 import { cancelGrace, markDeskWaiting, notifyTokenPresence, startDeskGrace } from './lifecycle.js';
 import {
@@ -40,6 +41,8 @@ export { performKnock } from './knock.js';
 
 const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
+const EXPECTED_CLIENT: Partial<Record<PackageTier, 'web' | 'extension'>> = { p1_browser: 'web', p2_extension: 'extension' };
+
 export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.hello'>): Promise<void> {
   const { ctx } = hub;
   const lim = await ctx.limiter.hit(`desk-hello:${conn.ip}`, 30, 60_000);
@@ -54,8 +57,13 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     return conn.close(v.code === 'rate_limited' ? WS_CLOSE.rateLimited : WS_CLOSE.forbidden, v.code);
   }
   const tok = v.token;
-  if (tok.tier !== 'p1_browser' || tok.typ === 'enrollment') {
-    conn.error('join_unsupported', 'the client for this package is not available yet', msg.id);
+  // Tier gate (Phase B 2.4): p1 needs a web client, p2 the extension; p3 / p4 / enrollment stay unsupported.
+  const expectedClient = tok.typ === 'enrollment' ? null : EXPECTED_CLIENT[tok.tier];
+  if (!expectedClient || (msg.client?.kind ?? 'web') !== expectedClient) {
+    conn.error('join_unsupported', 'this code needs a different IndiansAssist client', msg.id, {
+      tier: tok.tier,
+      expectedClient: expectedClient ?? null,
+    });
     return conn.close(WS_CLOSE.forbidden, 'join_unsupported');
   }
   conn.side = 'desk';
@@ -68,6 +76,7 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     held: false,
     heldLabel: null,
     tokenExpiresAt: tok.expiresAt.getTime(),
+    client: msg.client ?? null,
   };
   if (v.resumeSession) {
     // A session owned by another live node is resumed there; this node pipes the socket (section 7.6 N1).
@@ -104,7 +113,9 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
 export async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, reId: string | undefined): Promise<void> {
   const { ctx } = hub;
   const s0 = v.resumeSession!;
-  const wasActive = s0.state === 'active';
+  // Phase B 3.5 (Y2): an extension Desk resumes into `active` (consent is a decision, nothing was lost).
+  const keepsActive = s0.state === 'active' && conn.desk?.client?.kind === 'extension';
+  const wasActive = s0.state === 'active' && !keepsActive;
   const hadLive = hub.live.has(s0.id);
   const live = ensureLive(hub, s0);
   const previousConnId = live.deskConnId;
@@ -163,6 +174,11 @@ export async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, r
   if (s.state === 'knocked') return;
   const assistRef = refOf(await userRefs(ctx.db, [s.assistUserId]), s.assistUserId);
   conn.send(sessionCreatedMsg(hub, s, v.org, assistRef, 'desk'));
+  if (keepsActive) {
+    // Fresh TURN credentials; the Desk rebuilds its peer connection on this ice.refresh (Y23).
+    conn.send({ t: 'ice.refresh', sessionId: s.id, ...deskIce(hub, s.id) });
+    scheduleIceRefresh(hub, live, 'desk');
+  }
   hub.conn(live.assistConnId)?.send({
     t: 'desk.reconnected',
     sessionId: s.id,
@@ -240,24 +256,32 @@ export async function handleDeskConsent(hub: SignalHub, conn: Conn, msg: SignalO
   const assistConn = hub.conn(live.assistConnId);
   if (msg.state === 'granted') {
     if (s.state !== 'consent_pending') return conn.error('bad_state', `cannot grant consent in ${s.state}`, msg.id);
+    // Phase B 3.1: `extension` is required for p2 (and validated against the policy), rejected for p1.
+    const ext = await checkGrant(hub, live, s.tier, msg.extension);
+    if (!ext.ok) return conn.error('bad_payload', ext.message, msg.id);
     const surface = msg.surface ?? 'unknown';
     const tok = await findTokenByTid(ctx.db, s.tokenId);
+    const c = ext.consent;
     await ctx.db.transaction(async (tx) => {
-      const r = await transitionSession(tx, s.id, 'active', { from: 'consent_pending', set: { consentSurface: surface } });
+      const r = await transitionSession(tx, s.id, 'active', {
+        from: 'consent_pending',
+        set: { consentSurface: surface, ...(c ? { consentLevel: c.level, consentScope: c.scope, consentBackstage: c.backstage } : {}) },
+      });
       if (tok?.typ === 'one_time') await markTokenUsed(tx, tok.id);
       await writeAudit(ctx, tx, org, {
         sessionId: s.id,
         actor: deskActor(s.deskRef),
         action: 'session.consent_granted',
-        data: { surface },
+        data: { surface, ...(c ?? {}) },
       });
       await writeAudit(ctx, tx, org, { sessionId: s.id, actor: systemActor, action: 'session.started', data: { path: r.path } });
     });
     live.state = 'active';
+    live.consent = c;
     stopConsentTimer(live);
     ctx.metrics.sessionsActive.inc();
     conn.send({ t: 'consent.ok', ...re(msg.id), sessionId: s.id, state: 'active', consentState: 'granted', ...deskIce(hub, s.id) });
-    assistConn?.send({ t: 'consent.changed', sessionId: s.id, state: 'granted', surface });
+    assistConn?.send({ t: 'consent.changed', sessionId: s.id, state: 'granted', surface, ...(c ?? {}) });
     scheduleIceRefresh(hub, live, 'desk');
     return;
   }

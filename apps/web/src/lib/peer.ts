@@ -1,13 +1,14 @@
 /**
  * One RTCPeerConnection per session (contracts sections 7.7 and 8) with the perfect-negotiation pattern.
- * `polite` comes from `session.created` (Assist polite, Desk impolite). The Desk creates the four data
- * channels before the first offer; the Assist receives them via `ondatachannel`.
+ * `polite` comes from `session.created` (Assist polite, Desk impolite). The Desk creates the data channels
+ * before the first offer (the web Desk: the four P1 labels; the extension adds `ia.mirror` and `ia.control`,
+ * Phase B 4.2); the Assist receives them via `ondatachannel` and accepts all six labels.
  *
  * `close()` implements hard rule 2 (section 7.4): stop every local track it was told to own, close every
  * data channel, `pc.close()`. Tracks passed with `{ keep: true }` (the Desk's capture track on an Assist
  * reconnect) survive a close so they can be re-added to the next connection.
  */
-import { DATA_CHANNEL_LABELS, type DataChannelLabel, type IceCandidateInit } from '@indiansassist/shared';
+import { DATA_CHANNEL_LABELS, P1_DATA_CHANNEL_LABELS, type DataChannelLabel, type IceCandidateInit } from '@indiansassist/shared';
 
 export type SignalOut =
   | { t: 'webrtc.offer'; sdp: string }
@@ -83,8 +84,8 @@ export class PeerSession {
   }
 
   /** Desk: creates `ia.chat`, `ia.annot`, `ia.file`, `ia.ctrl` (ordered, reliable) before the first offer. */
-  createDataChannels(): void {
-    for (const label of DATA_CHANNEL_LABELS) {
+  createDataChannels(labels: readonly DataChannelLabel[] = P1_DATA_CHANNEL_LABELS): void {
+    for (const label of labels) {
       const ch = this.pc.createDataChannel(label, { ordered: true });
       this.registerChannel(ch);
     }

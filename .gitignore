@@ -13,3 +13,8 @@ coverage/
 Thumbs.db
 infra/certs/
 backups/
+# Playwright e2e artefacts
+apps/web/e2e/artifacts/
+playwright-report/
+test-results/
+blob-report/

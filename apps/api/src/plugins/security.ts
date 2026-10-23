@@ -9,17 +9,26 @@ import rateLimit from '@fastify/rate-limit';
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from '@indiansassist/shared';
 import type { FastifyInstance } from 'fastify';
 import { RedisPresence } from '../adapters/presence-redis.js';
+import { isExtensionOrigin } from '../config.js';
 import type { AppContext } from '../context.js';
 import { HttpError } from '../errors.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-export function csrfOk(method: string, headers: Record<string, string | string[] | undefined>, webOrigin: string): boolean {
+/** Routes on which a listed extension origin passes the CSRF origin rule (Phase B Y21); the header stays required. */
+export const EXTENSION_ORIGIN_ROUTES = new Set(['/api/v1/tokens/public-lookup']);
+
+export function csrfOk(
+  method: string,
+  headers: Record<string, string | string[] | undefined>,
+  webOrigin: string,
+  extensionOriginOk: (origin: string) => boolean = () => false,
+): boolean {
   if (SAFE_METHODS.has(method.toUpperCase())) return true;
   const xrw = headers[CSRF_HEADER.toLowerCase()];
   if (xrw !== CSRF_HEADER_VALUE) return false;
   const origin = headers['origin'];
-  return origin === undefined || origin === webOrigin;
+  return origin === undefined || origin === webOrigin || (typeof origin === 'string' && extensionOriginOk(origin));
 }
 
 export async function registerSecurity(app: FastifyInstance, ctx: AppContext): Promise<void> {
@@ -33,7 +42,9 @@ export async function registerSecurity(app: FastifyInstance, ctx: AppContext): P
 
   app.addHook('onRequest', async (req) => {
     if (!req.url.startsWith('/api/v1/')) return;
-    if (!csrfOk(req.method, req.headers, ctx.config.webOrigin))
+    const path = req.url.split('?')[0] ?? '';
+    const extOk = EXTENSION_ORIGIN_ROUTES.has(path) ? (o: string) => isExtensionOrigin(ctx.config, o) : undefined;
+    if (!csrfOk(req.method, req.headers, ctx.config.webOrigin, extOk))
       throw new HttpError('csrf_failed', 'missing or invalid CSRF header or origin');
   });
 

@@ -149,6 +149,10 @@ export function toSession(s: SessionRow, refs: SessionRefs): Session {
     recordingStarted: s.recordingStarted,
     recordingId: refs.recordingId,
     hashChainTail: s.hashChainTail ?? null,
+    consentLevel: s.consentLevel ?? null,
+    consentScope: s.consentScope ?? null,
+    consentBackstage: s.consentBackstage ?? null,
+    deskClient: (s.deskClient as Session['deskClient']) ?? null,
   };
 }
 
@@ -182,6 +186,7 @@ export function toRecording(r: RecordingRow): Recording {
     region: r.region,
     createdAt: iso(r.createdAt),
     storedAt: isoOrNull(r.storedAt),
+    deletedAt: isoOrNull(r.deletedAt),
   };
 }
 

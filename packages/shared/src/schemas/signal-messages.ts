@@ -23,6 +23,18 @@ import {
 } from './common.js';
 import { fileEventDataSchema } from './rest-sessions.js';
 import { SIGNAL_ERROR_CODES } from '../errors.js';
+import {
+  CONSENT_LEVELS,
+  DESK_BROWSERS,
+  DESK_CLIENT_KINDS,
+  DESK_OSES,
+  LIMITS,
+  MIRROR_SCOPES,
+  MIRROR_TRANSPORTS,
+} from '../enums.js';
+import { extensionPolicySchema } from '../extension/policy.js';
+import { controlMessageSchema } from '../extension/control.js';
+import { DESK_EVENT_DATA, DESK_EVENT_P2_ACTIONS, DESK_EVENT_REASON_ACTIONS, opIdSchema } from '../audit/actions-p2.js';
 
 const envelope = {
   id: z.string().max(64).optional(),
@@ -48,6 +60,27 @@ export const iceCandidateInitSchema = z.object({
   usernameFragment: z.string().nullable().optional(),
 });
 
+const consentLevel = z.enum(CONSENT_LEVELS);
+const mirrorScope = z.enum(MIRROR_SCOPES);
+const clientString = z.string().min(1).max(LIMITS.deskClientStringMax);
+
+/** `desk.hello.client` (Phase B section 2.4); absent means `{ kind: 'web' }`. Extensions send version and browser. */
+export const deskClientSchema = z
+  .strictObject({
+    kind: z.enum(DESK_CLIENT_KINDS),
+    version: clientString.optional(),
+    browser: z
+      .strictObject({ name: z.enum(DESK_BROWSERS), version: z.string().min(1).max(LIMITS.browserVersionMax) })
+      .optional(),
+    os: z.enum(DESK_OSES).optional(),
+  })
+  .refine((c) => c.kind !== 'extension' || (c.version !== undefined && c.browser !== undefined), {
+    message: 'an extension client sends version and browser',
+  });
+
+/** `{ level, scope, backstage }`: the P2 consent decision (Phase B section 3.1). */
+export const extensionConsentSchema = z.strictObject({ level: consentLevel, scope: mirrorScope, backstage: z.boolean() });
+
 // ---------- client -> server (and relayed) ----------
 
 export const assistHelloSchema = msg('assist.hello', {});
@@ -55,6 +88,7 @@ export const deskHelloSchema = msg('desk.hello', {
   token: z.string().min(1).max(4096),
   deskLabel: z.string().max(1000).optional(),
   resumeKey: z.string().min(1).max(256).optional(),
+  client: deskClientSchema.optional(),
 });
 export const deskPollSchema = msg('desk.poll', {});
 export const deskKnockSchema = msg('desk.knock', { deskLabel: z.string().max(1000).optional() });
@@ -67,8 +101,14 @@ export const assistDenySchema = msg('assist.deny', {
 export const deskConsentSchema = msg('desk.consent', {
   state: z.enum(['granted', 'revoked']),
   surface: consentSurfaceSchema.optional(),
+  extension: extensionConsentSchema.optional(),
 });
-export const webrtcOfferSchema = msg('webrtc.offer', { sessionId, sdp: z.string().max(60000) });
+/** `restart: true` = offer from a brand-new RTCPeerConnection; the receiver rebuilds its own first (Y23). */
+export const webrtcOfferSchema = msg('webrtc.offer', {
+  sessionId,
+  sdp: z.string().max(60000),
+  restart: z.boolean().optional(),
+});
 export const webrtcAnswerSchema = msg('webrtc.answer', { sessionId, sdp: z.string().max(60000) });
 export const webrtcIceSchema = msg('webrtc.ice', { sessionId, candidate: iceCandidateInitSchema.nullable() });
 export const chatMessageSchema = msg('chat.message', {
@@ -90,12 +130,67 @@ export const sessionStatsSchema = msg('session.stats', {
   height: z.number().int().nonnegative().nullable(),
   packetsLost: z.number().int().nullable(),
   ts: epochMsSchema,
+  mirrorKbps: z.number().nonnegative().optional(),
+  mirrorTabs: z.number().int().nonnegative().optional(),
+  mirrorTransport: z.enum(MIRROR_TRANSPORTS).optional(),
+  sessionKbps: z.number().nonnegative().optional(),
 });
+
+export const DESK_EVENT_ACTIONS = ['file.sent', 'file.received', ...DESK_EVENT_P2_ACTIONS] as const;
+export type DeskEventAction = (typeof DESK_EVENT_ACTIONS)[number];
+
+/**
+ * `desk.event` (Phase A 7.3 + Phase B 3.6): `data` is validated per action (`fileEventDataSchema` for `file.*`,
+ * `deskEventDataSchema(action)` otherwise); `reason` only for `mask.override`, `mask.refused`,
+ * `consent.level_refused`.
+ */
 export const deskEventSchema = msg('desk.event', {
   sessionId,
-  action: z.enum(['file.sent', 'file.received']),
-  data: fileEventDataSchema,
+  action: z.enum(DESK_EVENT_ACTIONS),
+  data: z.record(z.string(), z.unknown()),
+  reason: z.string().max(LIMITS.reasonMax).optional(),
+}).superRefine((m, ctx) => {
+  const schema: z.ZodType =
+    m.action === 'file.sent' || m.action === 'file.received' ? fileEventDataSchema : DESK_EVENT_DATA[m.action];
+  const r = schema.safeParse(m.data);
+  if (!r.success) for (const i of r.error.issues) ctx.addIssue({ code: 'custom', path: ['data', ...i.path], message: i.message });
+  if (m.reason !== undefined && !(DESK_EVENT_REASON_ACTIONS as readonly string[]).includes(m.action))
+    ctx.addIssue({ code: 'custom', path: ['reason'], message: `reason is not accepted for ${m.action}` });
 });
+
+export const deskConsentLevelSchema = msg('desk.consent_level', {
+  sessionId,
+  level: consentLevel,
+  requested: z.boolean().optional(),
+  opId: opIdSchema.optional(),
+});
+export const deskConsentBackstageSchema = msg('desk.consent_backstage', { sessionId, backstage: z.boolean() });
+
+const relayData = z
+  .string()
+  .max(LIMITS.mirrorRelayDataChars)
+  .regex(/^[A-Za-z0-9_-]*$/, 'expected base64url');
+/** WS mirror relay (Phase B 4.6, Y22): one slice of a frame payload; `kind: 'json'` is always a single part. */
+export const mirrorRelaySchema = msg('mirror.relay', {
+  sessionId,
+  tabId: z.number().int().nonnegative().max(0xffffffff),
+  seq: z.number().int().nonnegative().max(0xffffffff),
+  kind: z.enum(['batch', 'snapshot', 'json']),
+  enc: z.enum(['none', 'deflate']),
+  part: z.number().int().min(1).max(LIMITS.mirrorRelayMaxParts),
+  parts: z.number().int().min(1).max(LIMITS.mirrorRelayMaxParts),
+  data: relayData,
+}).superRefine((m, ctx) => {
+  if (m.part > m.parts) ctx.addIssue({ code: 'custom', path: ['part'], message: 'part must be <= parts' });
+  if (m.kind === 'json' && (m.tabId !== 0 || m.seq !== 0 || m.enc !== 'none' || m.part !== 1 || m.parts !== 1))
+    ctx.addIssue({
+      code: 'custom',
+      path: ['kind'],
+      message: 'json relay frames have tabId 0, seq 0, enc none, part = parts = 1',
+    });
+});
+/** WS control relay (Phase B 4.6): one `ia.control` message. */
+export const controlRelaySchema = msg('control.relay', { sessionId, msg: controlMessageSchema });
 export const assistResumeSchema = msg('assist.resume', { sessionId });
 export const sessionEndSchema = msg('session.end', { sessionId, note: z.string().max(5000).optional() });
 export const pingSchema = msg('ping', {});
@@ -147,6 +242,8 @@ export const knockClosedSchema = msg('knock.closed', {
   acceptedBy: userRefSchema.optional(),
 });
 export const sessionCreatedSchema = msg('session.created', {
+  /** P2 sessions only (both copies): the org extension policy in force for this session. */
+  extension: z.object({ policy: extensionPolicySchema }).optional(),
   sessionId,
   tokenId: uuidSchema,
   tier: packageTierSchema,
@@ -168,7 +265,11 @@ export const consentChangedSchema = msg('consent.changed', {
   sessionId,
   state: consentStateSchema,
   surface: consentSurfaceSchema.optional(),
+  level: consentLevel.optional(),
+  scope: mirrorScope.optional(),
+  backstage: z.boolean().optional(),
 });
+export const consentLevelOkSchema = msg('consent.level_ok', { sessionId, level: consentLevel, backstage: z.boolean() });
 export const sessionRecordingSchema = msg('session.recording', { sessionId, recording: z.boolean() });
 export const iceRefreshSchema = msg('ice.refresh', {
   sessionId,

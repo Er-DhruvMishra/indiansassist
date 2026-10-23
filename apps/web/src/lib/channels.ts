@@ -1,7 +1,8 @@
 /**
- * Typed send / receive over the four data channels (contracts section 8). Inbound JSON is validated with
- * the shared `parseDataChannelMessage` (wrong channel or a `from` that is not the peer is dropped);
- * binary frames on `ia.file` are handed to the file transfer layer untouched.
+ * Typed send / receive over the data channels (contracts section 8; Phase B 4.2 adds `ia.mirror` and
+ * `ia.control`). Inbound JSON is validated with the shared `parseDataChannelMessage` (wrong channel or a
+ * `from` that is not the peer is dropped); binary frames on `ia.file` are handed to the file transfer layer
+ * and binary frames on `ia.mirror` (fragmented rrweb batches, Phase B 4.5) to the mirror receiver, untouched.
  */
 import {
   parseDataChannelMessage,
@@ -18,6 +19,8 @@ export function channelFor(t: DataChannelMessage['t']): DataChannelLabel {
   if (t === 'chat' || t === 'chat.ack' || t === 'typing') return 'ia.chat';
   if (t === 'annot') return 'ia.annot';
   if (t.startsWith('file.')) return 'ia.file';
+  if (t.startsWith('mirror.')) return 'ia.mirror';
+  if (t.startsWith('ctl.')) return 'ia.control';
   return 'ia.ctrl';
 }
 
@@ -25,6 +28,9 @@ export class ChannelHub {
   private channels = new Map<DataChannelLabel, RTCDataChannel>();
   private handlers = new Set<MsgHandler>();
   private binHandlers = new Set<BinHandler>();
+  private mirrorBinHandlers = new Set<BinHandler>();
+  /** Bytes received per channel (JSON text length or binary length), for the mirror kbps readout. */
+  readonly bytesIn = new Map<DataChannelLabel, number>();
   private openHandlers = new Set<(label: DataChannelLabel) => void>();
 
   /** `peer` is the other side; messages whose `from` is not the peer are dropped. */
@@ -34,6 +40,8 @@ export class ChannelHub {
     this.channels.set(label, ch);
     ch.binaryType = 'arraybuffer';
     ch.onmessage = (ev: MessageEvent) => {
+      const size = typeof ev.data === 'string' ? ev.data.length : ev.data instanceof ArrayBuffer ? ev.data.byteLength : 0;
+      this.bytesIn.set(label, (this.bytesIn.get(label) ?? 0) + size);
       if (typeof ev.data === 'string') {
         const parsed = parseDataChannelMessage(label, ev.data, this.peer);
         if (!parsed.ok) {
@@ -43,6 +51,8 @@ export class ChannelHub {
         for (const h of [...this.handlers]) h(parsed.msg);
       } else if (label === 'ia.file' && ev.data instanceof ArrayBuffer) {
         for (const h of [...this.binHandlers]) h(ev.data);
+      } else if (label === 'ia.mirror' && ev.data instanceof ArrayBuffer) {
+        for (const h of [...this.mirrorBinHandlers]) h(ev.data);
       }
     };
     const fireOpen = () => {
@@ -83,6 +93,12 @@ export class ChannelHub {
   onBinary(h: BinHandler): () => void {
     this.binHandlers.add(h);
     return () => this.binHandlers.delete(h);
+  }
+
+  /** Binary parts on `ia.mirror` (Phase B 4.5). */
+  onMirrorBinary(h: BinHandler): () => void {
+    this.mirrorBinHandlers.add(h);
+    return () => this.mirrorBinHandlers.delete(h);
   }
 
   onOpen(h: (label: DataChannelLabel) => void): () => void {

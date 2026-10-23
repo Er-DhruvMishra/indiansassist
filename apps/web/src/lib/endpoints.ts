@@ -130,6 +130,9 @@ export const sessionsApi = {
       { action: 'recording.started', data: {} },
       { schema: auditEntrySchema },
     ),
+  /** Phase B 3.6 / 3.7 console reports (`tab.action`, `control.input`, `mask.requested`, ...), Y24. */
+  p2Event: (id: string, body: { action: string; data: Record<string, unknown>; reason?: string }) =>
+    api.post<AuditEntry>(`/sessions/${id}/events`, body, { schema: auditEntrySchema }),
   audit: (id: string) =>
     api.get<SessionAuditResponse>(`/sessions/${id}/audit`, { schema: sessionAuditResponseSchema }),
 };

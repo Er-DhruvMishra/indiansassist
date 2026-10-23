@@ -118,4 +118,17 @@ export const publicTokenSchema = z.object({
   technician: z.object({ name: z.string() }).nullable(),
   signalUrl: z.string(),
   joinSupported: z.boolean(),
+  /**
+   * Extension install info (Phase B 11.3): non-null only for `p2_extension`. The api always sends the key; it is
+   * optional in the schema so Phase A fixtures still parse.
+   */
+  extension: z
+    .object({
+      ids: z.array(z.string()),
+      webStoreUrl: z.string().nullable(),
+      edgeAddonsUrl: z.string().nullable(),
+      minVersion: z.string(),
+    })
+    .nullable()
+    .optional(),
 });

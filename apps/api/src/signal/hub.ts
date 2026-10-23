@@ -9,6 +9,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
   ASSIST_CLIENT_TYPES,
+  BUCKET_EXEMPT_TYPES,
   DESK_CLIENT_TYPES,
   isRegionServed,
   parseClientSignal,
@@ -19,6 +20,7 @@ import {
 import type { TokenRow } from '@indiansassist/db';
 import type { FastifyInstance } from 'fastify';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
+import { isExtensionOrigin } from '../config.js';
 import type { AppContext } from '../context.js';
 import { canActOnToken } from '../lib/rbac.js';
 import { principalFromCookieValue, unsignSessionCookie, type Principal } from '../plugins/auth.js';
@@ -34,6 +36,8 @@ import { closeExpiredWaitingDesks, runAuthChecks } from './auth-watch.js';
 import { Bridge } from './bridge.js';
 import { Conn, wsTransport, type Live } from './conn.js';
 import { handleDeskConsent, handleDeskEvent, handleDeskHello, handleDeskKnock, handleDeskPoll } from './desk.js';
+import { handleDeskConsentBackstage, handleDeskConsentLevel } from './desk-consent.js';
+import { handleControlRelay, handleMirrorRelay } from './relay-p2.js';
 import { ForbiddenGuard } from './forbidden.js';
 import { HubApi } from './hub-api.js';
 import { onConnClosed } from './lifecycle.js';
@@ -56,10 +60,29 @@ const HANDLERS: Partial<Record<ClientSignalMessage['t'], Handler>> = {
   'webrtc.ice': handleWebrtc as Handler,
   'chat.message': handleChatMessage as Handler,
   'session.end': handleSessionEnd as Handler,
+  'desk.consent_level': handleDeskConsentLevel as Handler,
+  'desk.consent_backstage': handleDeskConsentBackstage as Handler,
+  'mirror.relay': handleMirrorRelay as Handler,
+  'control.relay': handleControlRelay as Handler,
 };
 
 const ASSIST_TYPES = new Set<string>(ASSIST_CLIENT_TYPES);
 const DESK_TYPES = new Set<string>(DESK_CLIENT_TYPES);
+const EXEMPT_TYPES = new Set<string>(BUCKET_EXEMPT_TYPES);
+const T_RE = /^\s*\{\s*"t"\s*:\s*"([a-z._]{1,40})"/;
+
+/** The `t` of a text frame for the Y25 bucket exemption (a cheap prefix match, then a parse as fallback). */
+function frameType(text: string): string | null {
+  const m = T_RE.exec(text);
+  if (m) return m[1]!;
+  if (text.length > 4096) return null;
+  try {
+    const v = JSON.parse(text) as { t?: unknown };
+    return typeof v?.t === 'string' ? v.t : null;
+  } catch {
+    return null;
+  }
+}
 
 type Tok = Pick<TokenRow, 'orgId' | 'createdBy'>;
 
@@ -105,7 +128,9 @@ export class SignalHub extends HubApi {
     const path = (req.url ?? '').split('?')[0];
     if (path !== '/signal') return reject(socket, 404, 'Not Found');
     const origin = req.headers['origin'];
-    if (origin !== undefined && origin !== this.ctx.config.webOrigin) return reject(socket, 403, 'Forbidden');
+    // Y21: the web origin, or a listed extension origin (Desk messages only, never a cookie principal).
+    const extensionOrigin = origin !== undefined && origin !== this.ctx.config.webOrigin && isExtensionOrigin(this.ctx.config, origin);
+    if (origin !== undefined && origin !== this.ctx.config.webOrigin && !extensionOrigin) return reject(socket, 403, 'Forbidden');
     const ip = this.clientIp(req);
     const lim = await this.ctx.limiter.hit(`ws-upgrade:${ip}`, 60, 60_000);
     const pending = [...this.conns.values()].filter((c) => c.ip === ip && !c.helloed).length;
@@ -114,7 +139,7 @@ export class SignalHub extends HubApi {
       return reject(socket, 429, 'Too Many Requests');
     }
     let principal: Principal | null = null;
-    const cookieHeader = req.headers['cookie'];
+    const cookieHeader = extensionOrigin ? undefined : req.headers['cookie'];
     if (cookieHeader && this.app) {
       const signed = this.app.parseCookie(cookieHeader)[SESSION_COOKIE_NAME];
       principal = await principalFromCookieValue(this.ctx, unsignSessionCookie(this.app, signed));
@@ -124,7 +149,11 @@ export class SignalHub extends HubApi {
       }
     }
     const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null;
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(new Conn(wsTransport(ws), ip, ua, principal), ws));
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      const conn = new Conn(wsTransport(ws), ip, ua, principal);
+      conn.extensionOrigin = extensionOrigin;
+      this.onConnection(conn, ws);
+    });
   }
 
   private onConnection(conn: Conn, ws: WebSocket): void {
@@ -143,7 +172,16 @@ export class SignalHub extends HubApi {
 
   private onMessage(conn: Conn, data: RawData, isBinary: boolean): void {
     conn.lastInbound = Date.now();
-    if (!this.ctx.config.rateLimitDisabled && !conn.bucket.take()) {
+    const text = isBinary
+      ? ''
+      : Array.isArray(data)
+        ? Buffer.concat(data).toString('utf8')
+        : Buffer.isBuffer(data)
+          ? data.toString('utf8')
+          : Buffer.from(data).toString('utf8');
+    const t = isBinary ? null : frameType(text);
+    const bucket = t !== null && EXEMPT_TYPES.has(t) ? conn.exemptBucket : conn.bucket;
+    if (!this.ctx.config.rateLimitDisabled && !bucket.take()) {
       this.ctx.metrics.rateLimited.inc();
       const now = Date.now();
       conn.violations = conn.violations.filter((t) => t > now - 60_000);
@@ -153,11 +191,6 @@ export class SignalHub extends HubApi {
       return;
     }
     if (isBinary) return conn.error('bad_payload', 'text frames only');
-    const text = Array.isArray(data)
-      ? Buffer.concat(data).toString('utf8')
-      : Buffer.isBuffer(data)
-        ? data.toString('utf8')
-        : Buffer.from(data).toString('utf8');
     conn.queue = conn.queue.then(() => this.dispatch(conn, text)).catch((err: unknown) => this.logErr(conn, err));
   }
 
@@ -178,6 +211,10 @@ export class SignalHub extends HubApi {
     if (msg.t === 'pong') return;
     const hello = msg.t === 'assist.hello' || msg.t === 'desk.hello';
     if (hello && conn.helloed) return conn.error('bad_state', 'hello already completed', re);
+    if (msg.t === 'assist.hello' && conn.extensionOrigin) {
+      conn.error('forbidden', 'an extension origin may only connect as a Desk', re);
+      return conn.close(WS_CLOSE.forbidden, 'forbidden');
+    }
     if (!hello && !conn.side) return conn.error('not_authenticated', 'send assist.hello or desk.hello first', re);
     let handler: Handler | undefined;
     if (msg.t === 'assist.hello') handler = handleAssistHello as Handler;

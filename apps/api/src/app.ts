@@ -31,7 +31,9 @@ import { healthRoutes } from './routes/health.js';
 import { iceRoutes } from './routes/ice.js';
 import { orgRoutes } from './routes/orgs.js';
 import { recordingRoutes } from './routes/recordings.js';
+import { sessionEventRoutes } from './routes/session-events.js';
 import { sessionRoutes } from './routes/sessions.js';
+import { policyRoutes } from './routes/policies.js';
 import { tokenRoutes } from './routes/tokens.js';
 import { userRoutes } from './routes/users.js';
 import { SignalHub } from './signal/hub.js';
@@ -112,6 +114,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await userRoutes(app, ctx);
   await tokenRoutes(app, ctx);
   await sessionRoutes(app, ctx);
+  await sessionEventRoutes(app, ctx);
+  await policyRoutes(app, ctx);
   await auditRoutes(app, ctx);
   await recordingRoutes(app, ctx);
   await iceRoutes(app, ctx);

@@ -84,6 +84,7 @@ export class SessionRecorder {
   private audioCtx: AudioContext | null = null;
   private dest: MediaStreamAudioDestinationNode | null = null;
   private sources = new Map<MediaStream, MediaStreamAudioSourceNode>();
+  private keepAlive: ConstantSourceNode | null = null;
   private videoTracks: MediaStreamTrack[] = [];
   private startedAt = 0;
   private mime = 'video/webm';
@@ -120,6 +121,15 @@ export class SessionRecorder {
       this.audioCtx = ctx;
       this.dest = ctx.createMediaStreamDestination();
       tracks.push(...this.dest.stream.getAudioTracks());
+      // A destination with no source emits no audio frames, and Chromium's WebM muxer then writes nothing at
+      // all (found by the Package 1 e2e: voice off = empty recording). A zero-offset source keeps silence flowing.
+      if (typeof ctx.createConstantSource === 'function') {
+        const silence = ctx.createConstantSource();
+        silence.offset.value = 0;
+        silence.connect(this.dest);
+        silence.start();
+        this.keepAlive = silence;
+      }
     }
     this.mime = pickRecorderMime(this.opts.env?.isTypeSupported);
     const Stream = this.opts.env?.MediaStreamImpl ?? MediaStream;
@@ -168,6 +178,13 @@ export class SessionRecorder {
   private release(): void {
     for (const node of this.sources.values()) node.disconnect();
     this.sources.clear();
+    try {
+      this.keepAlive?.stop();
+    } catch {
+      /* already stopped */
+    }
+    this.keepAlive?.disconnect();
+    this.keepAlive = null;
     void this.audioCtx?.close().catch(() => undefined);
     this.audioCtx = null;
     this.dest = null;

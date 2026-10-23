@@ -24,6 +24,8 @@ export const API_ERROR_STATUS = {
   recording_exists: 409,
   token_gone: 410,
   link_expired: 410,
+  /** Phase B Y26: the recording's object was deleted (manual or retention). */
+  recording_deleted: 410,
   payload_too_large: 413,
   region_mismatch: 421,
   rate_limited: 429,

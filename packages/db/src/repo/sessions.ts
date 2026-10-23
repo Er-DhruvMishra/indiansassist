@@ -14,7 +14,9 @@ export type CreateSessionInput = Pick<
   NewSessionRow,
   'orgId' | 'tokenId' | 'assistUserId' | 'deskRef' | 'tier' | 'region' | 'nodeId'
 > &
-  Partial<Pick<NewSessionRow, 'id' | 'deskLabel' | 'deskUserAgent' | 'resumeKeyHash' | 'knockedAt' | 'knockExpiresAt'>>;
+  Partial<
+    Pick<NewSessionRow, 'id' | 'deskLabel' | 'deskUserAgent' | 'resumeKeyHash' | 'knockedAt' | 'knockExpiresAt' | 'deskClient'>
+  >;
 
 /** Creates a `knocked` session; `knock_expires_at` defaults to `knocked_at + 120 s`. */
 export async function createSession(exec: Executor, input: CreateSessionInput): Promise<SessionRow> {
@@ -64,7 +66,18 @@ export async function listOpenSessionsByToken(exec: Executor, tokenId: string): 
 }
 
 export type TransitionSet = Partial<
-  Pick<SessionRow, 'assistUserId' | 'consentSurface' | 'path' | 'nodeId' | 'consentDeadlineAt' | 'endReason'>
+  Pick<
+    SessionRow,
+    | 'assistUserId'
+    | 'consentSurface'
+    | 'path'
+    | 'nodeId'
+    | 'consentDeadlineAt'
+    | 'endReason'
+    | 'consentLevel'
+    | 'consentScope'
+    | 'consentBackstage'
+  >
 >;
 
 export type TransitionOptions = {
@@ -147,10 +160,25 @@ export async function endSession(
 
 /** Non-state columns. State and its timestamps only change through transitionSession / endSession. */
 export type SessionPatch = Partial<
-  Pick<SessionRow, 'path' | 'lastStats' | 'nodeId' | 'resumeKeyHash' | 'consentSurface' | 'deskLabel' | 'deskUserAgent'>
+  Pick<
+    SessionRow,
+    | 'path'
+    | 'lastStats'
+    | 'nodeId'
+    | 'resumeKeyHash'
+    | 'consentSurface'
+    | 'deskLabel'
+    | 'deskUserAgent'
+    | 'consentLevel'
+    | 'consentBackstage'
+    | 'deskClient'
+  >
 >;
 
 const PATCHABLE = new Set([
+  'consentLevel',
+  'consentBackstage',
+  'deskClient',
   'path',
   'lastStats',
   'nodeId',
