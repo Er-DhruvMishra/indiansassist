@@ -107,9 +107,15 @@ export class S3ObjectStorage implements ObjectStorage {
 
   async presignGet(key: string, ttlSeconds: number): Promise<string> {
     assertValidKey(key);
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: ttlSeconds,
+    // Download only, fixed type (SEC-01), whatever the object was stored with.
+    const name = key.split('/').pop() ?? 'recording.webm';
+    const cmd = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ResponseContentType: 'video/webm',
+      ResponseContentDisposition: `attachment; filename="${name}"`,
     });
+    return getSignedUrl(this.client, cmd, { expiresIn: ttlSeconds });
   }
 
   async delete(key: string): Promise<void> {

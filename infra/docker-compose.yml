@@ -8,9 +8,9 @@
 # Optional profiles:  sso (Keycloak, Phase E)   garage (AGPL alternative object store, see garage/garage.toml)
 # Production coturn relay range with host networking: add -f infra/docker-compose.turn-host.yml.
 #
-# Deviation note (task vs contract): the task text asked for Garage as the object store; contracts section
-# 11.3 / X6 (binding, and it wins over task wording) makes SeaweedFS (Apache-2.0) the default because Garage
-# is AGPL-3.0. Garage is therefore shipped as the opt-in `garage` profile with garage.toml + bootstrap.sh.
+# Object store: SeaweedFS (Apache-2.0) is the default (contracts 11.3 / X6). Garage is AGPL-3.0 and is shipped
+# only as the opt-in `garage` profile (unmodified network service; garage/garage.toml + garage/bootstrap.sh).
+# Static validation without Docker: node scripts/validate-infra.mjs  (full guide: infra/README.md)
 
 name: indiansassist-${DEFAULT_REGION:-in-mum}
 
@@ -79,6 +79,8 @@ services:
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in infra/.env}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in infra/.env}
+      # The api identity is scoped to this region's bucket only (no Admin action).
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in infra/.env}
     volumes:
       - seaweeddata:/data
       - ./seaweedfs:/ia:ro
@@ -176,7 +178,9 @@ services:
       WEB_ORIGIN: ${WEB_ORIGIN}
       TRUST_PROXY: "true"
       DATABASE_URL: postgres://${DB_APP_ROLE:-ia_app}:${IA_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-indiansassist}
-      MIGRATE_DATABASE_URL: postgres://${POSTGRES_OWNER_USER:-ia_owner}:${POSTGRES_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB:-indiansassist}
+      # The owner credential is deliberately NOT given to the long-running api: migrations run only in the
+      # one-shot `migrate` service above, so a compromised api cannot bypass the append-only audit grants.
+      MIGRATE_DATABASE_URL: ""
       DB_APP_ROLE: ${DB_APP_ROLE:-ia_app}
       SESSION_COOKIE_SECRET: ${SESSION_COOKIE_SECRET:?set SESSION_COOKIE_SECRET (>= 32 chars) in infra/.env}
       TOKEN_SIGNING_KEY: ${TOKEN_SIGNING_KEY:?set TOKEN_SIGNING_KEY (64 hex) in infra/.env}
@@ -190,7 +194,9 @@ services:
       STUN_URLS: ${STUN_URLS:-}
       ICE_OWN_HOST_SUFFIXES: ${ICE_OWN_HOST_SUFFIXES:?set ICE_OWN_HOST_SUFFIXES in infra/.env}
       TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-3600}
-      PRESENCE_DRIVER: redis
+      # Single api replica until the redis presence driver ships (infra/HARDENING.md section 10): with the memory
+      # driver a second replica could not see the first one's sockets.
+      PRESENCE_DRIVER: memory
       REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
       STORAGE_DRIVER: ${STORAGE_DRIVER:-s3}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs:8333}
@@ -270,9 +276,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      # 8080 internal per contract; bound to loopback only so the admin console is reachable via SSH tunnel.
-      - "127.0.0.1:8080:8080"
+    # 8080 is internal only (contract 11.3). To reach the admin console temporarily, add an override file that
+    # publishes "127.0.0.1:8080:8080" and use an SSH tunnel (infra/README.md, "SSO profile").
     networks: [backend, frontend]
 
 networks:

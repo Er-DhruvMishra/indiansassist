@@ -1,5 +1,6 @@
 /** Live support sessions and their participants (contracts section 4.2: session, session_participant). */
-import { boolean, char, index, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, char, index, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import {
   consentStateEnum,
   packageTierEnum,
@@ -53,6 +54,11 @@ export const session = pgTable(
   (t) => [
     index('session_org_created_idx').on(t.orgId, t.createdAt.desc()),
     index('session_token_id_idx').on(t.tokenId),
+    // At most one non-ended session per token (contracts 3.2 / 7.3 `token_busy`), enforced by the database so two
+    // concurrent knocks cannot both insert.
+    uniqueIndex('session_token_open_unique')
+      .on(t.tokenId)
+      .where(sql`state <> 'ended'`),
     index('session_assist_user_id_idx').on(t.assistUserId),
     index('session_org_state_idx').on(t.orgId, t.state),
   ],

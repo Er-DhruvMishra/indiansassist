@@ -9,6 +9,8 @@
 export type TokenWaiting = { connectionId: string; nodeId: string; knockRequested: boolean };
 
 export interface Presence {
+  /** True when the driver sees every node of the cluster (heartbeats); false for the single-node memory driver. */
+  readonly multiNode: boolean;
   setTokenWaiting(tokenId: string, info: TokenWaiting, ttlSeconds: number): Promise<void>;
   clearTokenWaiting(tokenId: string, connectionId: string): Promise<void>;
   getTokenState(tokenId: string): Promise<{ waiting: TokenWaiting | null; sessionId: string | null }>;
@@ -29,6 +31,7 @@ export const channels = {
 };
 
 export class MemoryPresence implements Presence {
+  readonly multiNode: boolean = false;
   private readonly waiting = new Map<string, { info: TokenWaiting; expiresAt: number }>();
   private readonly tokenSession = new Map<string, string>();
   private readonly subs = new Map<string, Set<(m: object) => void>>();

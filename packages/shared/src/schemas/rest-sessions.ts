@@ -183,10 +183,14 @@ export const auditLastVerifyResponseSchema = auditVerifyResponseSchema.nullable(
 
 // ---------- recordings (6.10) ----------
 
-const mimeSchema = z
-  .string()
-  .regex(/^[a-z]+\/[a-z0-9.+-]+(;.*)?$/i, 'invalid mime type')
-  .max(255);
+/**
+ * Recordings are WebM only (contracts section 9). Anything else (e.g. `text/html`, `application/javascript`,
+ * `image/svg+xml`) is refused, because the stored value is part of the recording row and must never describe an
+ * active document type.
+ */
+export const RECORDING_MIME_RE = /^video\/webm(;\s*codecs=[A-Za-z0-9,.+\-\s]+)?$/;
+
+const mimeSchema = z.string().max(255).regex(RECORDING_MIME_RE, 'recordings must be video/webm');
 
 export const recordingSchema = z.object({
   id: uuidSchema,

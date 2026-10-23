@@ -226,3 +226,13 @@ export async function listOpenSessionsByNode(exec: Executor, nodeId: string): Pr
     .from(session)
     .where(and(eq(session.nodeId, nodeId), inArray(session.state, [...NON_ENDED_STATES])));
 }
+
+/** Sweeper backstop for revocation (sections 6.7, 7.4): non-ended sessions whose token is `revoked`. */
+export async function listOpenSessionsOnRevokedTokens(exec: Executor): Promise<SessionRow[]> {
+  const rows = await exec
+    .select({ s: session })
+    .from(session)
+    .innerJoin(token, eq(token.id, session.tokenId))
+    .where(and(inArray(session.state, [...NON_ENDED_STATES]), eq(token.status, 'revoked')));
+  return rows.map((r) => r.s);
+}

@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Light and dark themes follow prefers-color-scheme (Tailwind's default `dark:` variant). */
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  }
+  /* A2: a visible focus ring on every focusable element, never removed without a replacement. */
+  :focus-visible {
+    outline: 3px solid #0e7490;
+    outline-offset: 2px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :focus-visible {
+      outline-color: #67e8f9;
+    }
+  }
+  /* A7: respect reduced motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+}

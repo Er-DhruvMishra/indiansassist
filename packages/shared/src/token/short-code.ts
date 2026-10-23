@@ -1,11 +1,11 @@
 /**
  * Short code generation, display and check digit validation.
  *
- * DEVIATION (requested by the Phase A build task, not in contracts section 3.3): the 12th digit is a Luhn
- * (mod 10) check digit over the first 11, so a mistyped digit or an adjacent transposition is caught
- * client side before a lookup. Consequences: the code space is 9 x 10^10 (contract says about 9 x 10^11),
- * and `isValidShortCode` only accepts codes produced by `generateShortCode`. `normaliseTokenInput` keeps
- * the exact contract behaviour (any 12 digits), so the server lookup path is unchanged.
+ * Contracts section 3.3 as amended by section 15 X12: the 12th digit is a Luhn (mod 10) check digit over the
+ * first 11, so a mistyped digit or an adjacent transposition is caught client side before a lookup. The issued
+ * code space is therefore 9 x 10^10. `normaliseTokenInput` still accepts any 12 digits; the server rejects a
+ * Luhn-invalid code before any database access (it can never match an issued code), and every such rejection
+ * still counts towards the per-node miss budget (S3) so the check digit never makes guessing cheaper.
  */
 import { randomBytes } from '../encoding.js';
 

@@ -6,9 +6,13 @@ set -eu
 
 : "${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}"
 : "${S3_SECRET_KEY:?S3_SECRET_KEY must be set}"
+: "${S3_BUCKET:?S3_BUCKET must be set}"
 
 case "$S3_ACCESS_KEY$S3_SECRET_KEY" in
   *[!A-Za-z0-9]*) echo "seaweedfs: S3_ACCESS_KEY / S3_SECRET_KEY must be alphanumeric" >&2; exit 1 ;;
+esac
+case "$S3_BUCKET" in
+  *[!a-z0-9.-]*) echo "seaweedfs: S3_BUCKET must be a lower-case S3 bucket name" >&2; exit 1 ;;
 esac
 
 CONF=/tmp/s3.json
@@ -19,7 +23,7 @@ cat > "$CONF" <<JSON
     {
       "name": "indiansassist-api",
       "credentials": [{ "accessKey": "$S3_ACCESS_KEY", "secretKey": "$S3_SECRET_KEY" }],
-      "actions": ["Read", "Write", "List", "Tagging", "Admin"]
+      "actions": ["Read:$S3_BUCKET", "Write:$S3_BUCKET", "List:$S3_BUCKET", "Tagging:$S3_BUCKET"]
     }
   ]
 }

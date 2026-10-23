@@ -119,11 +119,23 @@ export async function resetTokenDenied(exec: Executor, id: string): Promise<void
   await exec.update(token).set({ deniedCount: 0 }).where(eq(token.id, id));
 }
 
-export async function listActiveTokensByCreator(exec: Executor, userId: string): Promise<TokenRow[]> {
-  return exec
+/** `forUpdate` row-locks them first (lock order: token rows before the audit advisory lock, see audit.ts). */
+export async function listActiveTokensByCreator(
+  exec: Executor,
+  userId: string,
+  opts: { forUpdate?: boolean } = {},
+): Promise<TokenRow[]> {
+  const q = exec
     .select()
     .from(token)
     .where(and(eq(token.createdBy, userId), eq(token.status, 'active')));
+  return opts.forUpdate ? q.for('update') : q;
+}
+
+/** `SELECT ... FOR UPDATE` on one token (serialises knocks on a token inside a transaction). */
+export async function lockToken(exec: Executor, id: string): Promise<TokenRow | null> {
+  const [row] = await exec.select().from(token).where(eq(token.id, id)).limit(1).for('update');
+  return row ?? null;
 }
 
 export type ListTokensQuery = PageQuery & {

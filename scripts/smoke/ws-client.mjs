@@ -26,7 +26,9 @@ export class SignalClient {
       const ws = new WebSocket(this.url, { headers: this.headers, handshakeTimeout: timeoutMs });
       this.ws = ws;
       ws.once('open', () => resolve(this));
-      ws.once('unexpected-response', (_req, res) => reject(new Error(`${this.name}: upgrade rejected with HTTP ${res.statusCode}`)));
+      ws.once('unexpected-response', (_req, res) =>
+        reject(new Error(`${this.name}: upgrade rejected with HTTP ${res.statusCode}`)),
+      );
       ws.once('error', (err) => reject(new Error(`${this.name}: ${err.message}`)));
       ws.on('message', (raw, isBinary) => {
         if (isBinary) return;
@@ -69,7 +71,8 @@ export class SignalClient {
     const what = label ?? (typeof pred === 'string' ? pred : 'message');
     const idx = this.queue.findIndex(match);
     if (idx >= 0) return Promise.resolve(this.queue.splice(idx, 1)[0]);
-    if (this.closed) return Promise.reject(new Error(`${this.name}: socket closed (${this.closed.code}) before ${what}`));
+    if (this.closed)
+      return Promise.reject(new Error(`${this.name}: socket closed (${this.closed.code}) before ${what}`));
     return new Promise((resolve, reject) => {
       const w = { match, resolve, reject, label: what };
       w.timer = setTimeout(() => {
@@ -95,7 +98,10 @@ export class SignalClient {
   waitClose(timeoutMs = 5000) {
     if (this.closed) return Promise.resolve(this.closed);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${this.name}: socket not closed within ${timeoutMs} ms`)), timeoutMs);
+      const timer = setTimeout(
+        () => reject(new Error(`${this.name}: socket not closed within ${timeoutMs} ms`)),
+        timeoutMs,
+      );
       this.closeWaiters.push({ resolve: (c) => (clearTimeout(timer), resolve(c)) });
     });
   }

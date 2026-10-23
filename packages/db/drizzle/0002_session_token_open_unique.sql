@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "session_token_open_unique" ON "session" USING btree ("token_id") WHERE state <> 'ended';

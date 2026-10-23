@@ -7,5 +7,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: { port: 5173, strictPort: true },
   preview: { port: 5173 },
+  worker: { format: 'es' },
   build: { target: 'es2022', sourcemap: true },
 });

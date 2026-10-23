@@ -63,6 +63,10 @@ export async function insertAuditEntry(exec: Executor, input: AuditInput): Promi
   const sessionId = input.sessionId ?? null;
 
   return exec.transaction(async (tx) => {
+    // Lock order (binding for every caller): row locks (session, then token) BEFORE the org advisory lock. Callers
+    // that already updated the session row hold this lock; callers that did not take it here, so an audit append
+    // and a session transition on the same session can never wait on each other in opposite orders (40P01).
+    if (sessionId) await tx.execute(sql`select id from ${session} where ${session.id} = ${sessionId} for update`);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${input.orgId}::text))`);
     const [o] = await tx.select({ dataRegion: org.dataRegion }).from(org).where(eq(org.id, input.orgId)).limit(1);
     if (!o) throw new NotFoundError('org', input.orgId);

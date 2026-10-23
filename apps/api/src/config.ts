@@ -97,6 +97,10 @@ const envSchema = z.object({
   OIDC_CLIENT_SECRET: str(''),
   LOG_LEVEL: str('info'),
   RATE_LIMIT_DISABLED: bool(false),
+  ORG_STORAGE_QUOTA_BYTES: int(50 * 1024 ** 3),
+  ORG_MAX_OPEN_UPLOADS: int(10),
+  USER_MAX_OPEN_UPLOADS: int(3),
+  RECORDING_UPLOAD_WINDOW_SEC: int(24 * 60 * 60),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -135,6 +139,8 @@ export type Config = {
   authProvider: 'local' | 'oidc';
   logLevel: string;
   rateLimitDisabled: boolean;
+  /** Storage quotas (section 6.10): bytes per org (0 = unlimited), open uploads per org / user, upload window. */
+  recordingQuota: { orgBytes: number; orgOpenUploads: number; userOpenUploads: number; uploadWindowSec: number };
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
   dataDir: string;
@@ -282,6 +288,12 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     authProvider: e.AUTH_PROVIDER,
     logLevel: e.LOG_LEVEL,
     rateLimitDisabled: e.RATE_LIMIT_DISABLED,
+    recordingQuota: {
+      orgBytes: e.ORG_STORAGE_QUOTA_BYTES,
+      orgOpenUploads: Math.max(1, e.ORG_MAX_OPEN_UPLOADS),
+      userOpenUploads: Math.max(1, e.USER_MAX_OPEN_UPLOADS),
+      uploadWindowSec: e.RECORDING_UPLOAD_WINDOW_SEC,
+    },
     repoRoot,
     dataDir,
   };

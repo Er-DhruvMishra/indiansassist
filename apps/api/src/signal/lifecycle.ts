@@ -1,0 +1,152 @@
+/**
+ * Socket loss, session end and token revocation on the signaling side (contracts sections 7.3-7.5):
+ * - a Desk or Assist socket that drops out of a live session starts the 30 s resume grace, after which the session
+ *   ends `desk_left` (Desk) or `error` (Assist);
+ * - every transition to `ended` pushes `session.ended` to both participants, `knock.closed` to the Assist sockets
+ *   that saw the knock, and closes the Desk socket `4410` except after `denied` or a timeout before accept.
+ */
+import { WS_CLOSE, type SessionEndReason } from '@indiansassist/shared';
+import { findTokenByTid } from '@indiansassist/db';
+import { systemActor } from '../lib/audit.js';
+import { userRefs, refOf } from '../lib/lookup.js';
+import { surfaceOf } from '../lib/mappers.js';
+import { isoOrNull, iso } from '../lib/time.js';
+import { endSessionQuietly, type EndedSession } from '../services/session-end.js';
+import { clearTimer, clearTimers, setTimer, type Conn, type Live } from './conn.js';
+import type { SignalHub } from './hub.js';
+
+const KNOCK_CLOSED_BY: Partial<Record<SessionEndReason, string>> = {
+  denied: 'denied',
+  timeout: 'timeout',
+  token_revoked: 'revoked',
+};
+
+/** Presence entry for a Desk socket waiting on its token (no live session). */
+export async function markDeskWaiting(hub: SignalHub, conn: Conn): Promise<void> {
+  if (!conn.desk) return;
+  await hub.ctx.presence.setTokenWaiting(
+    conn.desk.tokenId,
+    { connectionId: conn.id, nodeId: hub.ctx.config.nodeId, knockRequested: conn.desk.held },
+    90,
+  );
+}
+
+export async function notifyTokenPresence(hub: SignalHub, tokenId: string): Promise<void> {
+  const tok = await findTokenByTid(hub.ctx.db, tokenId);
+  if (!tok) return;
+  const waitingDesks = hub.deskConnsForToken(tokenId).filter((c) => c.desk && c.desk.sessionId === null);
+  const msg = {
+    t: 'token.presence',
+    tokenId,
+    waiting: waitingDesks.length > 0,
+    held: waitingDesks.some((c) => c.desk!.held),
+  };
+  for (const a of hub.assistsForToken(tok)) a.send(msg);
+}
+
+export async function onConnClosed(hub: SignalHub, conn: Conn): Promise<void> {
+  const { ctx } = hub;
+  if (conn.side === 'desk' && conn.desk) {
+    const sid = conn.desk.sessionId;
+    const live = sid ? hub.live.get(sid) : undefined;
+    if (live && live.state !== 'ended' && live.deskConnId === conn.id) {
+      live.deskConnId = null;
+      startDeskGrace(hub, live);
+    } else if (!sid) {
+      await ctx.presence.clearTokenWaiting(conn.desk.tokenId, conn.id);
+      await notifyTokenPresence(hub, conn.desk.tokenId);
+    }
+    return;
+  }
+  if (conn.side === 'assist') {
+    for (const live of hub.live.values()) {
+      if (live.state === 'ended' || live.assistConnId !== conn.id) continue;
+      live.assistConnId = null;
+      startAssistGrace(hub, live);
+    }
+  }
+}
+
+/** 30 s for the Desk to resume, then `ended (desk_left)` (section 7.5). */
+export function startDeskGrace(hub: SignalHub, live: Live): void {
+  const { ctx } = hub;
+  setTimer(live, 'desk-grace', ctx.timing.graceMs, () => {
+    if (live.deskConnId !== null) return;
+    void endSessionQuietly(ctx, live.id, { reason: 'desk_left', actor: systemActor }).catch((err: unknown) =>
+      ctx.log.error({ err, sessionId: live.id }, 'desk grace end failed'),
+    );
+  });
+}
+
+/** 30 s for the Assist to resume, then `ended (error)` (section 7.5). */
+export function startAssistGrace(hub: SignalHub, live: Live): void {
+  const { ctx } = hub;
+  setTimer(live, 'assist-grace', ctx.timing.graceMs, () => {
+    if (live.assistConnId !== null) return;
+    void endSessionQuietly(ctx, live.id, { reason: 'error', actor: systemActor }).catch((err: unknown) =>
+      ctx.log.error({ err, sessionId: live.id }, 'assist grace end failed'),
+    );
+  });
+}
+
+export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promise<void> {
+  const { ctx } = hub;
+  const s = ended.session;
+  const reason = s.endReason ?? 'error';
+  const live = hub.live.get(s.id);
+  if (ended.previousState === 'active') ctx.metrics.sessionsActive.dec();
+  if (live) {
+    live.state = 'ended';
+    clearTimers(live);
+    setTimer(live, 'evict', ctx.timing.eventGraceMs, () => hub.live.delete(s.id));
+  }
+  await ctx.presence.setTokenSession(s.tokenId, null);
+  const names = await userRefs(ctx.db, [s.assistUserId]);
+  const msg = {
+    t: 'session.ended',
+    sessionId: s.id,
+    endReason: reason,
+    endedAt: iso(s.endedAt ?? new Date()),
+    startedAt: isoOrNull(s.startedAt),
+    durationMs: s.startedAt && s.endedAt ? Math.max(0, s.endedAt.getTime() - s.startedAt.getTime()) : null,
+    hashChainTail: s.hashChainTail ?? null,
+    assist: refOf(names, s.assistUserId),
+    surface: surfaceOf(s),
+    recordingStarted: s.recordingStarted,
+    reachedActive: s.startedAt !== null,
+  };
+  const desk = hub.conn(live?.deskConnId);
+  const assist = hub.conn(live?.assistConnId);
+  desk?.send(msg);
+  assist?.send(msg);
+  if (ended.previousState === 'knocked') {
+    const tok = await findTokenByTid(ctx.db, s.tokenId);
+    if (tok) {
+      const closed = { t: 'knock.closed', sessionId: s.id, by: KNOCK_CLOSED_BY[reason] ?? 'ended' };
+      for (const a of hub.assistsForToken(tok)) if (a !== assist) a.send(closed);
+    }
+  }
+  if (desk?.desk) {
+    const keepOpen = reason === 'denied' || (reason === 'timeout' && ended.previousState === 'knocked');
+    if (keepOpen) {
+      desk.desk.sessionId = null;
+      desk.desk.held = false;
+      await markDeskWaiting(hub, desk);
+    } else {
+      desk.close(WS_CLOSE.sessionEnded, 'session ended');
+    }
+  }
+}
+
+/** Waiting Desk sockets on a revoked token learn `token_gone` and are closed `4403`. */
+export function onTokenRevoked(hub: SignalHub, tokenId: string): void {
+  for (const c of hub.deskConnsForToken(tokenId)) {
+    c.error('token_gone', 'token was revoked', undefined, { status: 'revoked' });
+    c.close(WS_CLOSE.forbidden, 'token revoked');
+  }
+}
+
+export function cancelGrace(hub: SignalHub, sessionId: string, side: 'assist' | 'desk'): void {
+  const live = hub.live.get(sessionId);
+  if (live) clearTimer(live, `${side}-grace`);
+}

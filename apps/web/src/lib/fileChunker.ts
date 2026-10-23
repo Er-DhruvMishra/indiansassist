@@ -21,12 +21,23 @@ export function* chunkBytes(bytes: Uint8Array, fileId: number, chunkSize: number
   }
 }
 
+/** Reads a Blob into bytes (Blob.arrayBuffer when present, FileReader otherwise). */
+export function blobBytes(blob: Blob): Promise<Uint8Array> {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer().then((b) => new Uint8Array(b));
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(new Uint8Array(r.result as ArrayBuffer));
+    r.onerror = () => reject(r.error ?? new Error('could not read the file'));
+    r.readAsArrayBuffer(blob);
+  });
+}
+
 /** Same as `chunkBytes` for a Blob, reading 64 chunks (1 MiB) at a time so big files never sit in memory twice. */
 export async function* chunkBlob(blob: Blob, fileId: number, chunkSize: number = CHUNK_SIZE): AsyncGenerator<Uint8Array> {
   const window = chunkSize * 64;
   let index = 0;
   for (let off = 0; off < blob.size; off += window) {
-    const buf = new Uint8Array(await blob.slice(off, Math.min(blob.size, off + window)).arrayBuffer());
+    const buf = await blobBytes(blob.slice(off, Math.min(blob.size, off + window)));
     for (let p = 0; p < buf.length; p += chunkSize) {
       yield encodeFileChunk(fileId, index++, buf.subarray(p, Math.min(buf.length, p + chunkSize)));
     }

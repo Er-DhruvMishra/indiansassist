@@ -121,14 +121,14 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(2);
+    expect(rows[0]!.n).toBe(3);
   });
 
-  it('commit a journal with the init and custom append_only migrations', () => {
+  it('commit a journal with the init, custom append_only and open-session index migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
-    expect(journal.entries.map((e) => e.tag)).toEqual(['0000_init', '0001_append_only']);
+    expect(journal.entries.map((e) => e.tag)).toEqual(['0000_init', '0001_append_only', '0002_session_token_open_unique']);
   });
 
   it('enforce the slug format check and case-insensitive unique email', async () => {

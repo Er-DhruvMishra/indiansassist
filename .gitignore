@@ -11,3 +11,5 @@ coverage/
 .turbo/
 .DS_Store
 Thumbs.db
+infra/certs/
+backups/

@@ -60,6 +60,21 @@ export async function findValidAuthSession(
   return row ?? null;
 }
 
+/** Like findValidAuthSession but by row id (re-validating a long-lived WebSocket principal, section 7.2). */
+export async function findValidAuthSessionById(
+  exec: Executor,
+  id: string,
+  now: Date = new Date(),
+): Promise<{ session: AuthSessionRow; user: UserRow } | null> {
+  const [row] = await exec
+    .select({ session: authSession, user })
+    .from(authSession)
+    .innerJoin(user, eq(user.id, authSession.userId))
+    .where(and(eq(authSession.id, id), isNull(authSession.revokedAt), gt(authSession.expiresAt, now)))
+    .limit(1);
+  return row ?? null;
+}
+
 /** Refreshes last_seen_at at most once per `minIntervalMs` (default one minute). Returns true when written. */
 export async function touchAuthSession(exec: Executor, id: string, minIntervalMs = 60_000): Promise<boolean> {
   const rows = await exec

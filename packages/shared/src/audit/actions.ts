@@ -139,7 +139,13 @@ const SCHEMAS = {
     storageKey: text(),
   }),
   'recording.failed': z.strictObject({ recordingId: id, error: text(SANITISE_LIMITS.error) }),
-  'signal.forbidden': z.strictObject({ connectionId: id, messageType: text(100), sessionId: id.nullable() }),
+  // `suppressed`: attempts on the same (connection, session) since the previous entry that were coalesced (SEC-05).
+  'signal.forbidden': z.strictObject({
+    connectionId: id,
+    messageType: text(100),
+    sessionId: id.nullable(),
+    suppressed: z.number().int().nonnegative().optional(),
+  }),
   'audit.anchored': z.strictObject({ seq: int, tail: hash, ts: iso, kid: text(64), sig: text(200) }),
   'audit.exported': z.strictObject({
     format: z.literal('jsonl'),

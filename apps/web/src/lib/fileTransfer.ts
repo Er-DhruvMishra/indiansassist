@@ -15,7 +15,7 @@ import {
   type Side,
 } from '@indiansassist/shared';
 import type { ChannelHub } from './channels';
-import { FileAssembler, checkOffer, chunkBlob, makeOffer, sha256HexOf, sniffType } from './fileChunker';
+import { FileAssembler, blobBytes, checkOffer, chunkBlob, makeOffer, sha256HexOf, sniffType } from './fileChunker';
 
 export type TransferStatus =
   | 'hashing'
@@ -125,7 +125,7 @@ export class FileTransfer {
       reported: false,
     });
     try {
-      const sha256 = await sha256HexOf(await file.arrayBuffer());
+      const sha256 = await sha256HexOf(await blobBytes(file));
       this.update(key, { sha256, status: 'offered' });
       const accepted = new Promise<void>((resolve, reject) => {
         this.outgoingFile!.accepted = resolve;

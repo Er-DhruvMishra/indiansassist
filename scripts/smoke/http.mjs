@@ -28,7 +28,7 @@ export class ApiClient {
   }
 
   async request(method, path, body) {
-    const headers = { Accept: 'application/json' };
+    const headers = { Accept: 'application/json, application/x-ndjson' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) headers['X-Requested-With'] = 'IndiansAssist';
     if (this.origin) headers.Origin = this.origin;
@@ -49,7 +49,7 @@ export class ApiClient {
         json = { raw: text };
       }
     }
-    return { status: res.status, headers: res.headers, json };
+    return { status: res.status, headers: res.headers, json, text };
   }
 
   /** Like request() but throws HttpError unless the status is one of `expected`. */
@@ -60,7 +60,8 @@ export class ApiClient {
   }
 
   #storeCookie(headers) {
-    const list = typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : [headers.get('set-cookie')].filter(Boolean);
+    const list =
+      typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : [headers.get('set-cookie')].filter(Boolean);
     for (const line of list) {
       const m = /^\s*ia_session=([^;]*)/.exec(line);
       if (!m) continue;

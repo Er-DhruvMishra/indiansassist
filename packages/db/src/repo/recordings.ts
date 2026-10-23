@@ -1,6 +1,6 @@
 /** recording repository (contracts sections 4.2, 6.10, 9). One recording per session in Phase A. */
 import { LIMITS, type Region } from '@indiansassist/shared';
-import { and, asc, eq, isNotNull, lt } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, lt, ne, sql } from 'drizzle-orm';
 import type { Executor } from '../client.js';
 import { NotFoundError } from '../errors.js';
 import { recording, type RecordingRow } from '../schema/index.js';
@@ -139,3 +139,20 @@ export function defaultUploadExpiry(from: Date = new Date()): Date {
 }
 
 export const RECORDING_PART_SIZE = LIMITS.recordingPartSize;
+
+/** Quota inputs (storage quotas, section 6.10): open uploads of an org / a user and the org's bytes in storage. */
+export async function recordingUsage(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+): Promise<{ orgUploading: number; userUploading: number; orgBytes: number }> {
+  const [row] = await exec
+    .select({
+      orgUploading: sql<number>`count(*) filter (where ${recording.status} = 'uploading')`.mapWith(Number),
+      userUploading: sql<number>`count(*) filter (where ${recording.status} = 'uploading' and ${recording.uploadedBy} = ${userId})`.mapWith(Number),
+      orgBytes: sql<number>`coalesce(sum(${recording.bytes}), 0)`.mapWith(Number),
+    })
+    .from(recording)
+    .where(and(eq(recording.orgId, orgId), ne(recording.status, 'failed')));
+  return { orgUploading: row?.orgUploading ?? 0, userUploading: row?.userUploading ?? 0, orgBytes: row?.orgBytes ?? 0 };
+}
