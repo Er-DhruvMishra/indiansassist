@@ -1,0 +1,27 @@
+/**
+ * @indiansassist/shared: the Phase A contracts (docs/specs/phase-a-contracts.md) as code.
+ * Browser-safe entry: no Node-only APIs (Web Crypto, TextEncoder and @noble only).
+ */
+export * from './regions.js';
+export * from './enums.js';
+export * from './errors.js';
+export * from './encoding.js';
+export * from './canonical.js';
+export * from './crypto.js';
+export * from './cursor.js';
+export * from './files.js';
+export * from './turn.js';
+export * from './token/codec.js';
+export * from './token/short-code.js';
+export * from './audit/sanitise.js';
+export * from './audit/actions.js';
+export * from './audit/chain.js';
+export * from './audit/export.js';
+export * from './schemas/common.js';
+export * from './schemas/rest-core.js';
+export * from './schemas/rest-tokens.js';
+export * from './schemas/rest-sessions.js';
+export * from './schemas/signal-messages.js';
+export * from './schemas/signal.js';
+export * from './schemas/datachannel.js';
+export type * from './schemas/types.js';

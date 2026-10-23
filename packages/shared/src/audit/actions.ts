@@ -1,0 +1,187 @@
+/**
+ * Phase A audit action names and per-action `data` schemas (contracts section 5.3). Every schema is strict
+ * (unknown keys fail) and sanitises every string with the section 5.3 rules before hashing.
+ * PII (emails, Desk labels, user agents, file names) only ever appears as a `...Hash` key.
+ */
+import { z } from 'zod';
+import {
+  CONSENT_SURFACES,
+  FILE_DIRECTIONS,
+  LOGIN_METHODS,
+  PACKAGE_TIERS,
+  SESSION_END_REASONS,
+  SESSION_PATHS,
+  SESSION_STATES,
+  SIDES,
+  TOKEN_REVOKE_REASONS,
+  TOKEN_TYPES,
+  USER_ROLES,
+  USER_STATUSES,
+  VERIFY_FAILURE_KINDS,
+} from '../enums.js';
+import { sanitiseText, SANITISE_LIMITS } from './sanitise.js';
+
+export const AUDIT_ACTIONS = [
+  'auth.signup',
+  'auth.login',
+  'auth.login_failed',
+  'auth.logout',
+  'auth.password_changed',
+  'user.invited',
+  'user.role_changed',
+  'user.status_changed',
+  'org.branding_updated',
+  'token.created',
+  'token.revoked',
+  'session.knock',
+  'session.accepted',
+  'session.denied',
+  'session.consent_granted',
+  'session.consent_revoked',
+  'session.started',
+  'session.resumed',
+  'session.path_changed',
+  'session.ended',
+  'chat.relayed',
+  'file.sent',
+  'file.received',
+  'recording.started',
+  'recording.stored',
+  'recording.failed',
+  'signal.forbidden',
+  'audit.anchored',
+  'audit.exported',
+  'audit.verified',
+  'elevation.requested',
+  'session.supervisor_joined',
+] as const;
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/** Reserved names: valid action strings that Phase A never writes. */
+export const RESERVED_AUDIT_ACTIONS = ['elevation.requested', 'session.supervisor_joined'] as const;
+
+export function isAuditAction(x: unknown): x is AuditAction {
+  return typeof x === 'string' && (AUDIT_ACTIONS as readonly string[]).includes(x);
+}
+
+const text = (limit: number = SANITISE_LIMITS.default) => z.string().transform((s) => sanitiseText(s, limit));
+const id = text();
+const hash = z.string().regex(/^[0-9a-f]{64}$/, 'expected sha256 hex');
+const int = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const iso = text();
+const tier = z.enum(PACKAGE_TIERS);
+
+const fileData = z.strictObject({
+  fileId: int,
+  direction: z.enum(FILE_DIRECTIONS),
+  nameHash: hash,
+  bytes: int,
+  sha256: hash,
+});
+
+const empty = z.strictObject({});
+
+const SCHEMAS = {
+  'auth.signup': z.strictObject({ emailHash: hash }),
+  'auth.login': z.strictObject({ method: z.enum(LOGIN_METHODS) }),
+  'auth.login_failed': z.strictObject({ userId: id }),
+  'auth.logout': empty,
+  'auth.password_changed': empty,
+  'user.invited': z.strictObject({
+    userId: id,
+    emailHash: hash,
+    role: z.enum(USER_ROLES),
+    tier: tier.nullable(),
+  }),
+  'user.role_changed': z.strictObject({
+    userId: id,
+    from: z.enum(USER_ROLES),
+    to: z.enum(USER_ROLES),
+    fromTier: tier.nullable(),
+    toTier: tier.nullable(),
+  }),
+  'user.status_changed': z.strictObject({
+    userId: id,
+    from: z.enum(USER_STATUSES),
+    to: z.enum(USER_STATUSES),
+    revokedSessions: int,
+    revokedTokens: int,
+  }),
+  'org.branding_updated': z.strictObject({ fields: z.array(text(100)) }),
+  'token.created': z.strictObject({ tokenId: id, tier, typ: z.enum(TOKEN_TYPES), expiresAt: iso }),
+  'token.revoked': z.strictObject({ tokenId: id, reason: z.enum(TOKEN_REVOKE_REASONS) }),
+  'session.knock': z.strictObject({ tokenId: id, deskLabelHash: hash, userAgentHash: hash }),
+  'session.accepted': z.strictObject({ tokenId: id, onBehalfOf: id.nullable() }),
+  'session.denied': z.strictObject({ tokenId: id, revokeToken: z.boolean() }),
+  'session.consent_granted': z.strictObject({ surface: z.enum(CONSENT_SURFACES) }),
+  'session.consent_revoked': empty,
+  'session.started': z.strictObject({ path: z.enum(SESSION_PATHS) }),
+  'session.resumed': z.strictObject({
+    side: z.enum(SIDES),
+    fromState: z.enum(SESSION_STATES),
+    toState: z.enum(SESSION_STATES),
+  }),
+  'session.path_changed': z.strictObject({ from: z.enum(SESSION_PATHS), to: z.enum(SESSION_PATHS) }),
+  'session.ended': z.strictObject({
+    endReason: z.enum(SESSION_END_REASONS),
+    durationMs: int.nullable(),
+    path: z.enum(SESSION_PATHS),
+  }),
+  'chat.relayed': z.strictObject({ count: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }),
+  'file.sent': fileData,
+  'file.received': fileData,
+  'recording.started': empty,
+  'recording.stored': z.strictObject({
+    recordingId: id,
+    sha256: hash,
+    bytes: int,
+    mime: text(255),
+    storageKey: text(),
+  }),
+  'recording.failed': z.strictObject({ recordingId: id, error: text(SANITISE_LIMITS.error) }),
+  'signal.forbidden': z.strictObject({ connectionId: id, messageType: text(100), sessionId: id.nullable() }),
+  'audit.anchored': z.strictObject({ seq: int, tail: hash, ts: iso, kid: text(64), sig: text(200) }),
+  'audit.exported': z.strictObject({
+    format: z.literal('jsonl'),
+    count: int,
+    fromSeq: int.nullable(),
+    toSeq: int.nullable(),
+  }),
+  'audit.verified': z.strictObject({
+    ok: z.boolean(),
+    checked: int,
+    failure: z.strictObject({ kind: z.enum(VERIFY_FAILURE_KINDS), seq: z.number().int() }).nullable(),
+  }),
+  'elevation.requested': empty.refine(() => false, 'elevation.requested is reserved and not written in Phase A'),
+  'session.supervisor_joined': empty.refine(
+    () => false,
+    'session.supervisor_joined is reserved and not written in Phase A',
+  ),
+} satisfies Record<AuditAction, z.ZodType>;
+
+export type AuditDataSchemas = typeof SCHEMAS;
+export type AuditDataOf<A extends AuditAction> = z.output<AuditDataSchemas[A]>;
+export type AuditDataInputOf<A extends AuditAction> = z.input<AuditDataSchemas[A]>;
+/** Union of every action's validated `data` object. */
+export type AuditData = { [A in AuditAction]: AuditDataOf<A> }[AuditAction];
+
+/** Per-action zod schema (with sanitising transforms). Throws on an unknown action. */
+export function auditDataSchema<A extends AuditAction>(action: A): AuditDataSchemas[A] {
+  const schema = SCHEMAS[action];
+  if (!schema) throw new Error(`unknown audit action: ${String(action)}`);
+  return schema;
+}
+
+/** Sanitises `reason` (max 500) and `actor.label` (max 80) exactly as the chain requires. */
+export function sanitiseReason(reason: string | null | undefined): string | null {
+  return reason === null || reason === undefined ? null : sanitiseText(reason, SANITISE_LIMITS.reason);
+}
+
+export function sanitiseActorLabel(label: string): string {
+  return sanitiseText(label, SANITISE_LIMITS.label);
+}
+
+/** `desk:<first 8 chars of desk_ref>` (section 5.3). */
+export function deskActorLabel(deskRef: string): string {
+  return `desk:${deskRef.slice(0, 8)}`;
+}

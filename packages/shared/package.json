@@ -1,0 +1,40 @@
+{
+  "name": "@indiansassist/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IndiansAssist Phase A contracts as code: regions, enums, zod schemas, canonical JSON, audit hash chain, signed tokens, TURN credentials.",
+  "type": "module",
+  "sideEffects": [
+    "./dist/crypto.js"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.build.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@noble/ed25519": "2.3.0",
+    "@noble/hashes": "1.8.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5"
+  }
+}

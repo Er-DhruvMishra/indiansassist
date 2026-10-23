@@ -1,0 +1,28 @@
+# Minimal single-node Garage configuration (optional object store, Compose profile `garage`).
+#
+# Licence note (contracts section 11.3 / X6, docs/LICENSE-REGISTER.md): Garage is AGPL-3.0. It is run only as an
+# unmodified, separate network service reached over its S3 API; nothing is linked or copied into our code.
+# The Compose default object store is SeaweedFS (Apache-2.0). Use Garage only if you accept that posture.
+#
+# Secrets are NOT stored here: rpc_secret and admin_token come from the environment
+# (GARAGE_RPC_SECRET, GARAGE_ADMIN_TOKEN), which Garage reads in preference to this file.
+# One-time bucket / key bootstrap: infra/garage/bootstrap.sh.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+metadata_auto_snapshot_interval = "6h"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+# Must equal S3_REGION in infra/.env when STORAGE_DRIVER=s3 points at Garage.
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.internal"
+
+[admin]
+api_bind_addr = "[::]:3903"

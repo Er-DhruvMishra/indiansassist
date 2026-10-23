@@ -1,0 +1,44 @@
+{
+  "name": "@indiansassist/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IndiansAssist Drizzle schema, migrations, PGlite/pg client factory, audit chain writer and typed repositories (contracts section 4).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "drizzle"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.build.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src test",
+    "db:generate": "drizzle-kit generate --name init",
+    "db:custom": "drizzle-kit generate --custom --name append_only",
+    "db:check": "drizzle-kit check"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.11",
+    "@indiansassist/shared": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "0.31.11",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5",
+    "zod": "^4.6.7"
+  }
+}

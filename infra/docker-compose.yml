@@ -1,0 +1,291 @@
+# IndiansAssist self-host stack: ONE region cluster (contracts section 1.1 T1, section 11.3).
+#
+#   cp infra/.env.example infra/.env      # or: sh infra/scripts/init-env.sh  (generates every secret)
+#   docker compose -f infra/docker-compose.yml up -d --build
+#
+# One stack per region; never point two regions at the same Postgres, Valkey, bucket or coturn.
+# Secrets use ${VAR:?} so Compose refuses to start with an empty value: there are no default passwords.
+# Optional profiles:  sso (Keycloak, Phase E)   garage (AGPL alternative object store, see garage/garage.toml)
+# Production coturn relay range with host networking: add -f infra/docker-compose.turn-host.yml.
+#
+# Deviation note (task vs contract): the task text asked for Garage as the object store; contracts section
+# 11.3 / X6 (binding, and it wins over task wording) makes SeaweedFS (Apache-2.0) the default because Garage
+# is AGPL-3.0. Garage is therefore shipped as the opt-in `garage` profile with garage.toml + bootstrap.sh.
+
+name: indiansassist-${DEFAULT_REGION:-in-mum}
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16
+    <<: [*restart, *logging]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-indiansassist}
+      POSTGRES_USER: ${POSTGRES_OWNER_USER:-ia_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?set POSTGRES_OWNER_PASSWORD in infra/.env}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      IA_APP_DB_PASSWORD: ${IA_APP_DB_PASSWORD:?set IA_APP_DB_PASSWORD in infra/.env}
+      DB_APP_ROLE: ${DB_APP_ROLE:-ia_app}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+    # 5432 is internal only (no ports:).
+
+  valkey:
+    image: valkey/valkey:8
+    <<: [*restart, *logging]
+    command:
+      - valkey-server
+      - --requirepass
+      - ${VALKEY_PASSWORD:?set VALKEY_PASSWORD in infra/.env}
+      - --appendonly
+      - "yes"
+      - --save
+      - "60 1000"
+    environment:
+      REDISCLI_AUTH: ${VALKEY_PASSWORD}
+      VALKEYCLI_AUTH: ${VALKEY_PASSWORD}
+    volumes:
+      - valkeydata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+    # 6379 is internal only.
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    <<: [*restart, *logging]
+    entrypoint: ["/bin/sh", "/ia/entrypoint.sh"]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in infra/.env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in infra/.env}
+    volumes:
+      - seaweeddata:/data
+      - ./seaweedfs:/ia:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [backend]
+    # 8333 (s3) and 9333 (master) are internal only.
+
+  storage-init:
+    image: chrislusf/seaweedfs:3.80
+    entrypoint: ["/bin/sh", "/ia/create-bucket.sh"]
+    restart: "no"
+    environment:
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in infra/.env}
+      SEAWEED_MASTER: seaweedfs:9333
+    volumes:
+      - ./seaweedfs:/ia:ro
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    networks: [backend]
+
+  garage:
+    image: dxflrs/garage:v1.0.1
+    profiles: [garage]
+    <<: [*restart, *logging]
+    environment:
+      # Profile services use :- (Compose interpolates inactive profiles too); Garage refuses to start without them.
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:-}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garagemeta:/var/lib/garage/meta
+      - garagedata:/var/lib/garage/data
+    networks: [backend]
+    # 3900 (s3), 3901 (rpc), 3903 (admin) are internal only. Bootstrap: sh infra/garage/bootstrap.sh
+
+  coturn:
+    image: coturn/coturn:4.6
+    <<: [*restart, *logging]
+    entrypoint: ["/bin/sh", "/ia/entrypoint.sh"]
+    environment:
+      TURN_SECRET: ${TURN_SECRET:?set TURN_SECRET (>= 32 chars, same as the api) in infra/.env}
+      TURN_REALM: ${TURN_REALM:?set TURN_REALM in infra/.env}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP (public IP of this host) in infra/.env}
+      TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
+      TURN_MAX_PORT: ${TURN_MAX_PORT:-49200}
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn/entrypoint.sh:/ia/entrypoint.sh:ro
+      # Optional TLS for turns:5349: the same certificate as nginx (infra/certs/fullchain.pem + privkey.pem).
+      - ./certs:/etc/coturn/certs:ro
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/tcp"
+      # Dev relay range; must equal TURN_MIN_PORT-TURN_MAX_PORT. Production: docker-compose.turn-host.yml.
+      - "49160-49200:49160-49200/udp"
+    networks: [edge]
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    image: indiansassist/api:${IA_VERSION:-local}
+    restart: "no"
+    command: ["node", "ia-migrate.mjs"]
+    environment:
+      NODE_ENV: production
+      MIGRATE_DATABASE_URL: postgres://${POSTGRES_OWNER_USER:-ia_owner}:${POSTGRES_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB:-indiansassist}
+      DB_APP_ROLE: ${DB_APP_ROLE:-ia_app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    image: indiansassist/api:${IA_VERSION:-local}
+    <<: [*restart, *logging]
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      METRICS_PORT: ${METRICS_PORT:-9464}
+      HOST: 0.0.0.0
+      # NODE_ID is left unset so the api uses its default <hostname>:<pid> (section 7.6 N1).
+      # Production: API_ORIGIN === WEB_ORIGIN (nginx proxies /api/, /signal, /.well-known; section 11.4).
+      API_ORIGIN: ${WEB_ORIGIN:?set WEB_ORIGIN (https://...) in infra/.env}
+      WEB_ORIGIN: ${WEB_ORIGIN}
+      TRUST_PROXY: "true"
+      DATABASE_URL: postgres://${DB_APP_ROLE:-ia_app}:${IA_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-indiansassist}
+      MIGRATE_DATABASE_URL: postgres://${POSTGRES_OWNER_USER:-ia_owner}:${POSTGRES_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB:-indiansassist}
+      DB_APP_ROLE: ${DB_APP_ROLE:-ia_app}
+      SESSION_COOKIE_SECRET: ${SESSION_COOKIE_SECRET:?set SESSION_COOKIE_SECRET (>= 32 chars) in infra/.env}
+      TOKEN_SIGNING_KEY: ${TOKEN_SIGNING_KEY:?set TOKEN_SIGNING_KEY (64 hex) in infra/.env}
+      TOKEN_SIGNING_KEYS_PREVIOUS: ${TOKEN_SIGNING_KEYS_PREVIOUS:-}
+      DEFAULT_REGION: ${DEFAULT_REGION:-in-mum}
+      # One region per cluster (R2): the stack serves exactly its DEFAULT_REGION.
+      SERVED_REGIONS: ${DEFAULT_REGION:-in-mum}
+      REGION_ORIGINS: ${REGION_ORIGINS:-}
+      TURN_SECRET: ${TURN_SECRET}
+      TURN_URLS: ${TURN_URLS:-}
+      STUN_URLS: ${STUN_URLS:-}
+      ICE_OWN_HOST_SUFFIXES: ${ICE_OWN_HOST_SUFFIXES:?set ICE_OWN_HOST_SUFFIXES in infra/.env}
+      TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-3600}
+      PRESENCE_DRIVER: redis
+      REDIS_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-s3}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs:8333}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      STORAGE_FS_DIR: /data/storage
+      AUTH_PROVIDER: ${AUTH_PROVIDER:-local}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_DISABLED: "false"
+    volumes:
+      - apidata:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [backend, frontend]
+    # 4000 and 9464 are NOT published; the api is reached only through web (section 11.3).
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${WEB_ORIGIN}
+        VITE_REGION_ORIGINS: ${VITE_REGION_ORIGINS:-}
+        VITE_APP_NAME: ${VITE_APP_NAME:-IndiansAssist}
+    image: indiansassist/web:${IA_VERSION:-local}
+    <<: [*restart, *logging]
+    environment:
+      IA_TLS_SELF_SIGNED_CN: ${IA_TLS_SELF_SIGNED_CN:-localhost}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/web.conf:/etc/nginx/conf.d/web.conf:ro
+      - ./nginx/security-headers.conf:/etc/nginx/ia/security-headers.conf:ro
+      - ./nginx/proxy-common.conf:/etc/nginx/ia/proxy-common.conf:ro
+      - ./certs:/etc/nginx/certs
+      - acme:/var/www/acme
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [frontend, edge]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: [sso]
+    <<: [*restart, *logging]
+    command: ["start", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      # :- because Compose interpolates inactive profiles too; set both in infra/.env before enabling `sso`.
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-ia-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # 8080 internal per contract; bound to loopback only so the admin console is reachable via SSH tunnel.
+      - "127.0.0.1:8080:8080"
+    networks: [backend, frontend]
+
+networks:
+  backend:
+    internal: true
+  frontend: {}
+  edge: {}
+
+volumes:
+  pgdata: {}
+  valkeydata: {}
+  seaweeddata: {}
+  garagemeta: {}
+  garagedata: {}
+  apidata: {}
+  acme: {}

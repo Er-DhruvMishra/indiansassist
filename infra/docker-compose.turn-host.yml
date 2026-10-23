@@ -1,0 +1,15 @@
+# Production override for coturn (contracts section 11.3): host networking and the full relay range.
+#
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.turn-host.yml up -d
+#
+# With host networking coturn binds 3478 udp/tcp, 5349 tcp and 49152-65535 udp directly on the host, so no
+# port publishing is needed (and none is possible). Set in infra/.env:
+#   TURN_MIN_PORT=49152
+#   TURN_MAX_PORT=65535
+# and open exactly those ports in the host firewall (infra/README.md, "TURN firewall ports").
+# `!reset` needs Docker Compose v2.24 or newer.
+services:
+  coturn:
+    network_mode: host
+    networks: !reset []
+    ports: !reset []

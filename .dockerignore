@@ -1,0 +1,12 @@
+# Build context hygiene for apps/api/Dockerfile and apps/web/Dockerfile (context = repo root).
+**/node_modules
+**/dist
+**/coverage
+**/.pglite
+data
+.git
+.env
+.env.*
+infra/.env
+infra/certs
+*.log
