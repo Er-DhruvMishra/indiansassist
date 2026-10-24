@@ -85,6 +85,34 @@ describe('MirrorReceiver', () => {
     expect(sent.at(-1)).toEqual({ t: 'mirror.nack', tabId: 2, seq: 1, ts: now });
   });
 
+  it('relay: a snapshot supersedes a partial batch, so it neither expires into a nack nor freezes the view (correctness-F9)', async () => {
+    const part = (kind: 'batch' | 'snapshot', seq: number, events: unknown[], n: number, parts: number) => {
+      const raw = utf8Encode(JSON.stringify(events));
+      const size = Math.ceil(raw.length / parts);
+      return { tabId: 4, seq, kind, enc: 'none' as const, part: n, parts, data: base64urlEncode(raw.subarray((n - 1) * size, n * size)) };
+    };
+    rx.pushRelay(part('snapshot', 0, [meta, full], 1, 1));
+    rx.pushRelay(part('batch', 1, [inc(1)], 1, 1));
+    rx.pushRelay(part('batch', 2, [inc(2), inc(3)], 1, 2)); // part 2 is dropped by the Desk's snapshot supersession
+    const stale = part('snapshot', 0, [meta, full, inc(9)], 1, 3); // an older snapshot whose parts 2-3 were dropped
+    rx.pushRelay(stale);
+    rx.pushRelay(part('snapshot', 0, [meta, full], 1, 2));
+    rx.pushRelay(part('snapshot', 0, [meta, full], 2, 2));
+    rx.pushRelay(part('batch', 1, [inc(4)], 1, 1));
+    await rx.drain();
+    now += 2500;
+    rx.tick();
+    rx.pushRelay(part('batch', 2, [inc(5)], 1, 1));
+    await rx.drain();
+    expect(sent.filter((m) => m.t === 'mirror.nack')).toEqual([]);
+    expect(snaps).toHaveLength(2);
+    expect(batches.map((b) => [b[1], b[2]])).toEqual([
+      [1, [inc(1)]],
+      [1, [inc(4)]],
+      [2, [inc(5)]],
+    ]);
+  });
+
   it('reassembles relay parts and hands json relay frames to onJson', async () => {
     const onJson = vi.fn();
     const r = new MirrorReceiver({ onSnapshot: (t, e) => snaps.push([t, e]), onEvents: () => undefined, onJson, send: () => undefined });

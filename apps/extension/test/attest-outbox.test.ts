@@ -54,6 +54,26 @@ describe('attestation outbox (section 3.7)', () => {
     expect(saved.at(-1)).toHaveLength(0);
   });
 
+  it('does not spin or rewrite storage while the socket is closed; resend restarts the drain (F8)', () => {
+    let open = false;
+    let sends = 0;
+    let saves = 0;
+    const ob = new AttestOutbox({ send: () => (sends++, open), persist: () => void saves++ });
+    ob.enqueue(SID, 'mirror.stopped', { reason: 'ended', batches: 1, bytes: 2 });
+    const savesAfterEnqueue = saves;
+    vi.advanceTimersByTime(5000);
+    expect(sends).toBe(1); // one attempt, then it waits for resend()
+    expect(saves).toBe(savesAfterEnqueue);
+    expect(vi.getTimerCount()).toBe(0);
+    open = true;
+    ob.resend();
+    vi.advanceTimersByTime(10);
+    expect(sends).toBe(2);
+    expect(ob.size).toBe(1);
+    ob.ack('e0');
+    expect(ob.size).toBe(0);
+  });
+
   it('refuses invalid data (a wire host key that is not a hostname, a chain-only key)', () => {
     const ob = new AttestOutbox({ send: () => true, persist: () => undefined });
     vi.spyOn(console, 'error').mockImplementation(() => undefined);

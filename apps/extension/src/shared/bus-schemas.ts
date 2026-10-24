@@ -147,7 +147,7 @@ export const workerToContentSchema = z.discriminatedUnion('t', [
   msg('cs.unmask', { scope: z.enum(['field', 'tab']), nodeId: z.number().int().nonnegative().nullable() }),
   msg('cs.unmaskDecision', { granted: z.boolean(), ttlMs: z.number().int().nonnegative() }),
   msg('cs.hide', { by: z.enum(MASK_RESTORE_CAUSES) }),
-  msg('cs.prompt', { id: z.string().max(40), text: z.string().max(1200) }),
+  msg('cs.prompt', { id: z.string().max(40), text: z.string().max(1200), panelOnly: z.boolean().optional() }),
   msg('cs.promptClear', { id: z.string().max(40) }),
   msg('cs.annot', { msg: z.record(z.string(), z.unknown()) }),
   msg('cs.ping', {}),

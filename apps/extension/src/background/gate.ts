@@ -57,6 +57,10 @@ function checkTab(op: string, tabId: number, ctx: GateContext): ControlError | n
   if (PAUSE_BLOCKED.has(op) && st.paused) return new ControlError('tab_paused', 'the user paused this tab');
   if (NEEDS_DOCUMENT.has(op) && (st.mirrored === 'unsupported' || st.mirrored === 'too_large'))
     return new ControlError('not_supported', 'this tab cannot be controlled');
+  // prd-F7: a browser / file page is not pointed elsewhere by the Assist; only its own new-tab page may be navigated.
+  // (`tabs.reload` of a non-http page answers `bad_args` from assertNavigableUrl in the op.)
+  if (op === 'tabs.navigate' && st.mirrored === 'unsupported' && !st.createdByAssist && !st.backstage)
+    return new ControlError('not_supported', 'this tab cannot be navigated');
   if (op === 'tabs.activate' && st.backstage) return new ControlError('not_allowed', 'use bring to front for a background tab');
   return null;
 }

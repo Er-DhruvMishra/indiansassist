@@ -25,7 +25,7 @@ function mine(m: SessionMachine, sessionId: string | undefined): boolean {
   return !m.s?.sessionId || sessionId === undefined || sessionId === m.s.sessionId;
 }
 
-async function openConsent(m: SessionMachine): Promise<void> {
+export async function openConsent(m: SessionMachine): Promise<void> {
   const s = m.s;
   if (!s?.sessionId || !m.eff) return;
   const pending = await readSession<PendingJoin>(SESSION_KEYS.pending);
@@ -61,6 +61,7 @@ async function openConsent(m: SessionMachine): Promise<void> {
     m.popupWindowId = null;
   }
   m.consentWindowId = await m.openWindow(`consent.html?sessionId=${encodeURIComponent(s.sessionId)}`, 520, 820);
+  m.persist();
 }
 
 export async function handleServerMessage(m: SessionMachine, msg: ServerSignalMessage): Promise<void> {
@@ -114,12 +115,19 @@ export async function handleServerMessage(m: SessionMachine, msg: ServerSignalMe
         m.setPhase('consent_pending');
         await openConsent(m);
       } else if (msg.state === 'active') {
-        // Resume of an extension Desk keeps `active` (section 3.5); the next ice.refresh rebuilds the PC.
-        m.expectRebuild = true;
+        // Resume of an extension Desk keeps `active` (section 3.5); the next ice.refresh rebuilds the PC. When the
+        // Desk was still consent_pending the consent.ok was lost: the session never started here, so the next
+        // ice.refresh starts it (tabs classified, capture injected) instead of restoring an empty registry.
+        const neverStarted = s.phase === 'consent_pending' && s.consent !== null && !m.live;
+        if (neverStarted) {
+          m.consentInfo = null;
+          s.startedAt = m.now;
+          m.pendingStart = true;
+        } else m.expectRebuild = true;
         if (s.phase !== 'active') m.setPhase('active');
         if (!m.live && m.liveFactory) {
           m.live = m.liveFactory(m);
-          await m.live.restore();
+          if (!neverStarted) await m.live.restore();
         }
       }
       m.persist();
@@ -136,7 +144,11 @@ export async function handleServerMessage(m: SessionMachine, msg: ServerSignalMe
       return;
     case 'ice.refresh':
       if (!mine(m, msg.sessionId) || !m.live) return;
-      if (m.expectRebuild) {
+      if (m.pendingStart) {
+        m.pendingStart = false;
+        m.expectRebuild = false;
+        await m.live.start(toRtcIceServers(msg.iceServers), true);
+      } else if (m.expectRebuild) {
         m.expectRebuild = false;
         await m.live.rebuild(toRtcIceServers(msg.iceServers));
       } else {
@@ -152,7 +164,7 @@ export async function handleServerMessage(m: SessionMachine, msg: ServerSignalMe
     case 'consent.level_ok':
       if (!mine(m, msg.sessionId)) return;
       m.live?.levelConfirmed(msg.level, msg.backstage);
-      for (const w of m.levelWaiters.splice(0)) w(true);
+      m.resolveLevel(msg.re, true);
       return;
     case 'session.recording':
       if (mine(m, msg.sessionId)) m.live?.setRecording(msg.recording);
@@ -175,7 +187,7 @@ export async function handleServerMessage(m: SessionMachine, msg: ServerSignalMe
     case 'error':
       if (msg.code === 'rate_limited' && msg.re?.startsWith('e')) return m.outbox.rateLimited(msg.re);
       if (msg.re?.startsWith('e')) return m.outbox.refused(msg.re);
-      for (const w of m.levelWaiters.splice(0)) w(false);
+      m.resolveLevel(msg.re, false); // only the desk.consent_level frame this error answers
       if (FATAL.has(msg.code)) {
         if (s.endedLocally) return m.finish(null);
         return m.fail({ code: msg.code, message: msg.message || 'The session could not continue.' });

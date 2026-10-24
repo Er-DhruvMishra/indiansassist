@@ -43,6 +43,11 @@ export class ContentRegistry {
     this.registered = true;
   }
 
+  /** Worker restart: the `all_tabs` registration survived (persisted in `ia.session`). */
+  restoreRegistered(): void {
+    this.registered = true;
+  }
+
   /** Injects into one tab (the caller checked scheme, deny list and scope) and waits for `cs.ready`. */
   async inject(tabId: number): Promise<boolean> {
     this.expectReady(tabId);
@@ -85,18 +90,20 @@ export class ContentRegistry {
     this.waiting.delete(tabId);
   }
 
-  /** Teardown: unregister (when registered) and `cs.stop` to every injected tab. */
+  /**
+   * Teardown: unregister and `cs.stop` to every injected tab. The unregister runs unconditionally (F1): a worker
+   * restart may have lost the in-memory flag while Chrome still holds the registration, and P7 requires the capture
+   * script to exist only while a session is active; unregistering an id that is not registered just rejects.
+   */
   async teardown(): Promise<void> {
     for (const t of this.waiting.values()) clearTimeout(t);
     this.waiting.clear();
-    if (this.registered) {
-      try {
-        await ext().scripting.unregisterContentScripts({ ids: [CAPTURE_SCRIPT_ID] });
-      } catch {
-        /* already gone */
-      }
-      this.registered = false;
+    try {
+      await ext().scripting.unregisterContentScripts({ ids: [CAPTURE_SCRIPT_ID] });
+    } catch {
+      /* not registered */
     }
+    this.registered = false;
     const tabs = [...this.injected];
     this.injected.clear();
     await Promise.all(tabs.map((id) => this.deps.sendStop(id)));

@@ -21,12 +21,15 @@ import { cdpModifiers, cdpMouseEvents, type DebuggerControl } from './debugger-c
 import { ControlError, type GateContext } from './gate';
 import type { EffectivePolicy } from './policy';
 import type { PromptManager } from './prompts';
+import { classifyUrl } from './tab-registry';
 import { openBackstageTab, runTabOp, type TabsDeps } from './tabs-control';
 
 export type ContentInputReply = { ok: true; cx?: number; cy?: number; applied?: boolean } | { ok: false; error: 'not_supported' | 'no_target'; message?: string };
 export type UnmaskReply = { ok: true; fieldKind: string; label: string; outline: { w: number; h: number } } | { ok: false; cause: 'bad_target' | 'not_unmaskable' };
 
 export interface ControlHost {
+  /** True while Stop sharing / revoke / session end tears down: no op runs any more (F4). */
+  readonly finishing?: boolean;
   sessionId(): string;
   technician(): string;
   gateContext(): GateContext;
@@ -55,7 +58,8 @@ export interface ControlHost {
   revealGranted(tabId: number, scope: 'field' | 'tab', reason?: string, fieldKind?: string): void;
   backstageEntered(tabId: number, url: string, opId: string): void;
   backstageExit(tabId: number, action: 'close' | 'keep' | 'bring_to_front', opId: string): Promise<void>;
-  showBarPrompt(tabId: number | null, id: string, text: string): void;
+  /** `panelOnly`: the bar shows no Allow (a deep-control grant needs the side panel's permission prompt). */
+  showBarPrompt(tabId: number | null, id: string, text: string, panelOnly?: boolean): void;
   clearBarPrompt(id: string): void;
 }
 
@@ -68,6 +72,8 @@ function promptEvent(h: ControlHost, id: string, promptKind: 'level' | 'mask' | 
 async function input(req: ControlRequest, h: ControlHost): Promise<Record<string, unknown>> {
   const a = req.args as { tabId: number } & Record<string, unknown>;
   const mode = req.op === 'input.fill' ? 'dom' : h.inputMode(a.tabId);
+  // Defence in depth (F2): CDP input only while the level is deep_control, whatever the per-tab mode says.
+  if (mode === 'debugger' && !levelAtLeast(h.level(), 'deep_control')) throw new ControlError('not_allowed', 'requires deep_control');
   const reply = await h.contentRequest<ContentInputReply>(a.tabId, { t: 'cs.input', op: req.op, args: { ...a, mode } });
   const kind = INPUT_KIND[req.op as keyof typeof INPUT_KIND];
   if (!reply || !reply.ok) {
@@ -133,7 +139,7 @@ async function levelRequest(req: Extract<ControlRequest, { op: 'level.request' }
   });
   if (!pending) throw new ControlError('rate_limited', 'another level request is open');
   promptEvent(h, req.id, 'level', 'shown', opId);
-  h.showBarPrompt(null, req.id, `${h.technician()} asks for: ${LEVEL_LABELS[level].toLowerCase()}.${reason ? ` Reason: ${reason}` : ''}`);
+  h.showBarPrompt(null, req.id, `${h.technician()} asks for: ${LEVEL_LABELS[level].toLowerCase()}.${reason ? ` Reason: ${reason}` : ''}`, level === 'deep_control');
   const decision = await pending;
   h.clearBarPrompt(req.id);
   promptEvent(h, req.id, 'level', 'answered', opId);
@@ -198,6 +204,9 @@ async function attach(req: Extract<ControlRequest, { op: 'mirror.attach' }>, opI
   const st = h.tabState(tabId);
   if (st && st.mirrored !== 'not_in_scope') return { attached: st.mirrored === 'yes' || st.mirrored === 'too_large' };
   const tab = await chromeTab(tabId);
+  // prd-F9: a hidden tab that could never be shared (protected host, browser / file page) answers exactly like a
+  // missing id, without a prompt, so sweeping tab ids cannot reveal that the Desk has a banking tab open.
+  if (!tab || classifyUrl(tab.url ?? tab.pendingUrl, h.eff().denyList) !== 'ok') throw new ControlError('no_such_tab', 'no such tab');
   const pending = h.prompts.ask({
     id: req.id,
     promptKind: 'attach',

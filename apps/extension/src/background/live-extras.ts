@@ -165,7 +165,7 @@ export abstract class LiveExtras {
 
   // ---------- bar prompts ----------
 
-  async barPrompt(tabId: number | null, id: string, text: string): Promise<void> {
+  async barPrompt(tabId: number | null, id: string, text: string, panelOnly = false): Promise<void> {
     let targets: number[] = [];
     if (tabId !== null) targets = [tabId];
     else {
@@ -173,7 +173,7 @@ export abstract class LiveExtras {
       if (active?.id !== undefined && this.state(active.id)?.injected) targets = [active.id];
     }
     this.barPrompts.set(id, targets);
-    for (const t of targets) await sendToTab(t, { t: 'cs.prompt', id, text: text.slice(0, 1200) });
+    for (const t of targets) await sendToTab(t, { t: 'cs.prompt', id, text: text.slice(0, 1200), ...(panelOnly ? { panelOnly } : {}) });
   }
 
   async clearBarPrompt(id: string): Promise<void> {

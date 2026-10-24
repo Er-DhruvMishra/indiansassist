@@ -22,6 +22,11 @@ export class DebuggerControl {
 
   constructor(private readonly onChange: (tabId: number, attached: boolean, cause: DetachCause) => void) {}
 
+  /** Worker restart: the attachments Chrome kept (from `ia.session`), re-adopted without a `ctl.event`. */
+  restore(tabIds: readonly number[]): void {
+    for (const id of tabIds) this.attached.add(id);
+  }
+
   async hasPermission(): Promise<boolean> {
     try {
       return await ext().permissions.contains({ permissions: ['debugger'] });

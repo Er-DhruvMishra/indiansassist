@@ -67,3 +67,45 @@ export async function canvasHasContent(canvas: Locator): Promise<boolean> {
     return seen.size >= 3;
   });
 }
+
+/**
+ * Init script (runs before any page script): keeps every RTCPeerConnection the page creates on
+ * `window.__iaPcs`, so the test can read `getStats()` (inbound audio) without a hook in the app.
+ */
+export function recordPeerConnections(): void {
+  const w = window as unknown as { __iaPcs: RTCPeerConnection[]; RTCPeerConnection: typeof RTCPeerConnection };
+  w.__iaPcs = [];
+  const Orig = w.RTCPeerConnection;
+  if (!Orig) return;
+  class Recording extends Orig {
+    constructor(cfg?: RTCConfiguration) {
+      super(cfg);
+      w.__iaPcs.push(this);
+    }
+  }
+  w.RTCPeerConnection = Recording;
+}
+
+export type AudioProbe = { live: boolean; unmuted: boolean; bytesReceived: number };
+
+/**
+ * State of the remote audio on one side: the hidden <audio> element's track (live and receiving, i.e. not
+ * muted by the transport) plus the sum of `inbound-rtp` audio `bytesReceived` across open peer connections.
+ */
+export async function probeRemoteAudio(page: Page): Promise<AudioProbe> {
+  return page.evaluate(async () => {
+    const el = [...document.querySelectorAll('audio')].find((a) => a.srcObject instanceof MediaStream);
+    const track = (el?.srcObject as MediaStream | undefined)?.getAudioTracks()[0];
+    const pcs = ((window as unknown as { __iaPcs?: RTCPeerConnection[] }).__iaPcs ?? []).filter(
+      (pc) => pc.connectionState !== 'closed',
+    );
+    let bytesReceived = 0;
+    for (const pc of pcs) {
+      const stats = await pc.getStats();
+      stats.forEach((s: { type: string; kind?: string; bytesReceived?: number }) => {
+        if (s.type === 'inbound-rtp' && s.kind === 'audio') bytesReceived += s.bytesReceived ?? 0;
+      });
+    }
+    return { live: track?.readyState === 'live', unmuted: track ? !track.muted : false, bytesReceived };
+  });
+}

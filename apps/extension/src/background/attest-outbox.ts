@@ -156,16 +156,25 @@ export class AttestOutbox {
     this.refill();
     const t = this.now();
     this.sentAt = this.sentAt.filter((s) => t - s < WINDOW_MS);
+    let moved = false;
+    let socketDown = false;
     while (this.queue.length > 0 && this.tokens >= 1 && this.sentAt.length < this.burst) {
       const e = this.queue[0]!;
       const sent = this.deps.send({ t: 'desk.event', id: e.id, sessionId: e.sessionId, action: e.action, data: e.data, ...(e.reason !== undefined ? { reason: e.reason } : {}) });
-      if (!sent) break; // socket down: keep the entry, retry later
+      if (!sent) {
+        socketDown = true;
+        break;
+      }
       this.queue.shift();
       this.inflight.set(e.id, e);
       this.tokens -= 1;
       this.sentAt.push(t);
+      moved = true;
     }
-    this.save();
+    if (moved) this.save();
+    // Socket down (F8): keep the entries and stop; `resend()` on the next `desk.hello.ok` (or the next enqueue)
+    // restarts the drain, so nothing spins or rewrites storage while the socket is closed.
+    if (socketDown) return;
     if (this.queue.length > 0) {
       const byToken = this.tokens >= 1 ? 0 : ((1 - this.tokens) / this.currentRate()) * 1000;
       const byWindow = this.sentAt.length >= this.burst ? WINDOW_MS - (t - this.sentAt[0]!) : 0;

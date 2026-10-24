@@ -1,7 +1,10 @@
 /**
- * Per-tab sharing state and the `TabInfo` the Assist sees (sections 4.1, 4.5, 6, 8.2). Denied and out-of-scope
- * tabs disclose no title, url or favicon; `unsupported` tabs (non-http schemes) carry title and url only. With
- * scope `current_tab` only mirrored, Assist-created and backstage tabs are listed; `hiddenCount` carries the rest.
+ * Per-tab sharing state and the `TabInfo` the Assist sees (sections 4.1, 4.5, 6, 8.2). Scope is applied before the
+ * scheme and the deny list: under `current_tab` every tab the Desk did not share is `not_in_scope`, whatever its URL
+ * (SEC-P2-03), so nothing about it reaches the Assist. Denied and out-of-scope tabs disclose no title, url or
+ * favicon; `unsupported` tabs (non-http schemes) disclose only a reduced url (`unsupportedUrl`) and, for browser
+ * pages, the title (prd-F6). With scope `current_tab` only mirrored, Assist-created and backstage tabs are listed;
+ * `hiddenCount` carries the rest.
  */
 import { isMirrorableUrl, matchesDenyList, stripUrlForMirror, hostOf, type MirrorScope, type TabInfo } from '@indiansassist/shared';
 import type { TabState } from '../shared/storage';
@@ -23,6 +26,13 @@ export function classifyUrl(url: string | undefined | null, denyList: readonly s
   return matchesDenyList(url, denyList) ? 'denied' : 'ok';
 }
 
+/** Scope first: a tab outside the shared scope is `not_in_scope` whatever its scheme or host. */
+function mirroredFor(cls: UrlClass, inScope: boolean): TabState['mirrored'] {
+  if (!inScope) return 'not_in_scope';
+  if (cls === 'unsupported') return 'unsupported';
+  return cls === 'denied' ? 'denied' : 'yes';
+}
+
 export type NewTabOpts = { inScope: boolean; createdByAssist?: boolean; backstage?: boolean; now?: number };
 
 /** The state of a tab that enters the registry (consent, tab created, attach). */
@@ -31,10 +41,7 @@ export function initialTabState(url: string | undefined, denyList: readonly stri
   const createdByAssist = o.createdByAssist ?? false;
   const backstage = o.backstage ?? false;
   const inScope = scope === 'all_tabs' || o.inScope || createdByAssist || backstage;
-  let mirrored: TabState['mirrored'];
-  if (cls === 'unsupported') mirrored = 'unsupported';
-  else if (cls === 'denied') mirrored = 'denied';
-  else mirrored = inScope ? 'yes' : 'not_in_scope';
+  const mirrored = mirroredFor(cls, inScope);
   return {
     mirrored,
     paused: false,
@@ -51,10 +58,7 @@ export function initialTabState(url: string | undefined, denyList: readonly stri
 export function afterNavigation(st: TabState, url: string | undefined, denyList: readonly string[], scope: MirrorScope): TabState {
   const cls = classifyUrl(url, denyList);
   const inScope = scope === 'all_tabs' || st.inScope;
-  let mirrored: TabState['mirrored'];
-  if (cls === 'unsupported') mirrored = 'unsupported';
-  else if (cls === 'denied') mirrored = 'denied';
-  else mirrored = inScope ? 'yes' : 'not_in_scope'; // `paused` stays a separate flag; too_large is retried
+  const mirrored = mirroredFor(cls, inScope); // `paused` stays a separate flag; too_large is retried
   const out: TabState = { ...st, mirrored, host: cls === 'ok' ? hostOf(url!) : null, injected: false };
   delete out.reveal;
   delete out.error;
@@ -66,18 +70,48 @@ export function isVisibleState(m: TabState['mirrored']): boolean {
   return m === 'yes' || m === 'paused' || m === 'too_large';
 }
 
+/** Whether the Assist sees this tab at all (listed in `mirror.tabs` / `tabs.list`) under `scope`. */
+export function isListedFor(st: TabState | undefined, scope: MirrorScope): boolean {
+  if (!st) return false;
+  if (scope === 'all_tabs') return true;
+  return isVisibleState(st.mirrored) || st.createdByAssist || st.backstage;
+}
+
+const BROWSER_PAGE_SCHEMES = new Set(['chrome:', 'edge:', 'brave:', 'opera:', 'vivaldi:']);
+
+/**
+ * What an `unsupported` tab may disclose (prd-F6). An http(s) page that refused the script (`inject_failed`) is an
+ * ordinary shared page. Browser pages keep `scheme://host/` (`chrome://settings/`) and their title; `about:` keeps
+ * its opaque name; an extension page keeps its origin; every other scheme (`file:`, `data:`, `blob:`,
+ * `view-source:`, ...) only its scheme, because the path or body is the user's data (file names, user names).
+ */
+export function unsupportedUrl(url: string): { url: string | null; showTitle: boolean } {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return { url: null, showTitle: false };
+  }
+  if (isMirrorableUrl(url)) return { url: stripUrlForMirror(url), showTitle: true };
+  if (BROWSER_PAGE_SCHEMES.has(u.protocol)) return { url: `${u.protocol}//${u.host}/`, showTitle: true };
+  if (u.protocol === 'about:') return { url: `about:${u.pathname}`, showTitle: false };
+  if (u.protocol === 'chrome-extension:' || u.protocol === 'extension:') return { url: `${u.protocol}//${u.host}/`, showTitle: false };
+  return { url: u.protocol, showTitle: false };
+}
+
 export function toTabInfo(tab: chrome.tabs.Tab, st: TabState | undefined, favicon: string | null): TabInfo | null {
   if (tab.id === undefined || tab.id < 0 || tab.incognito) return null;
   const mirrored = st?.mirrored ?? 'not_in_scope';
   const hidden = mirrored === 'denied' || mirrored === 'not_in_scope';
   const unsupported = mirrored === 'unsupported';
   const url = tab.url ?? tab.pendingUrl ?? null;
+  const reduced = unsupported && url ? unsupportedUrl(url) : null;
   const info: TabInfo = {
     tabId: tab.id,
     windowId: tab.windowId,
     index: Math.max(0, tab.index),
-    title: hidden ? null : stripSharedPrefix(tab.title),
-    url: hidden || !url ? null : stripUrlForMirror(url),
+    title: hidden || (reduced && !reduced.showTitle) ? null : stripSharedPrefix(tab.title),
+    url: hidden || !url ? null : reduced ? reduced.url : stripUrlForMirror(url),
     favicon: hidden || unsupported ? null : favicon,
     active: tab.active,
     pinned: tab.pinned,

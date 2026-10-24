@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { controlRequestSchema, type ConsentLevel, type ControlRequest } from '@indiansassist/shared';
 import { gateOp, type GateContext } from '../src/background/gate';
 import type { TabState } from '../src/shared/storage';
@@ -64,6 +64,17 @@ describe('consent-level gate (section 5.2)', () => {
     const c = ctx('in_page', { 1: st({ backstage: true }), 2: st({ mirrored: 'unsupported', host: null }) });
     expect(gateOp(req('tabs.activate', { tabId: 1 }), c)?.code).toBe('not_allowed');
     expect(gateOp(req('input.pointer', { ...pointer, tabId: 2 }), c)?.code).toBe('not_supported');
-    expect(gateOp(req('tabs.navigate', { tabId: 2, url: 'https://example.com/' }), c)).toBeNull();
+    // prd-F7: a browser / file page is never pointed elsewhere; the Assist's own new-tab page may be.
+    expect(gateOp(req('tabs.navigate', { tabId: 2, url: 'https://example.com/' }), c)?.code).toBe('not_supported');
+    const own = ctx('tab_control', { 3: st({ mirrored: 'unsupported', host: null, createdByAssist: true }) });
+    expect(gateOp(req('tabs.navigate', { tabId: 3, url: 'https://example.com/' }), own)).toBeNull();
+  });
+
+  it('CDP input is refused below deep_control even when the tab is still in debugger mode', async () => {
+    const { runControlOp } = await import('../src/background/control-ops');
+    const host = { level: () => 'in_page', inputMode: () => 'debugger', contentRequest: vi.fn(), recordInput: vi.fn() };
+    const r = req('input.key', { tabId: 1, kind: 'press', key: 'a', code: 'KeyA', modifiers: { alt: false, ctrl: false, meta: false, shift: false }, text: 'a' });
+    await expect(runControlOp(r, 'op', host as never)).rejects.toMatchObject({ code: 'not_allowed' });
+    expect(host.contentRequest).not.toHaveBeenCalled();
   });
 });

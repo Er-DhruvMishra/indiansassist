@@ -91,6 +91,23 @@ describe('tab bar (section 3.3)', () => {
   });
 });
 
+describe('deep-control prompt in the bar (prd-F8)', () => {
+  it('a panel-only prompt has no Allow (the permission prompt needs the side panel) and keeps Refuse', () => {
+    const h = handlers();
+    const bar = new IndicatorBar(document, h);
+    bar.mount({});
+    bar.showPrompt('l1', 'Asha asks for: deep control.', true);
+    const prompt = bar.rootForTest().querySelector('.prompt')!;
+    const labels = [...prompt.querySelectorAll('button')].map((b) => b.textContent);
+    expect(labels).toEqual(['Refuse']);
+    expect(prompt.textContent).toContain('Open the side panel to allow');
+    bar.showPrompt('l2', 'Asha asks for: click and type.');
+    const second = [...bar.rootForTest().querySelectorAll('.prompt')][1]!;
+    expect([...second.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Allow', 'Refuse']);
+    bar.destroy();
+  });
+});
+
 describe('title prefix (section 3.3)', () => {
   it('prefixes, re-applies after an SPA title write and restores on stop', async () => {
     const g = new TitleGuard(document);

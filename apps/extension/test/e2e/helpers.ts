@@ -58,21 +58,79 @@ export async function pageMatching(
 }
 
 /**
- * Test hook installed in the Assist context before any page script: records every RTCDataChannel the Desk
- * opens towards the console, so the test can send a raw control frame the console UI would never send.
+ * Test hook installed in the Assist context before any page script: records every RTCPeerConnection the console
+ * creates (`__iaPcs`, for `getStats()`) and every RTCDataChannel the Desk opens towards it (`__iaDcs`), so the test
+ * can measure the mirror channel and send a raw control frame the console UI would never send.
  */
 export function recordDataChannels(): void {
-  const w = window as unknown as { __iaDcs: RTCDataChannel[]; RTCPeerConnection: typeof RTCPeerConnection };
+  const w = window as unknown as {
+    __iaDcs: RTCDataChannel[];
+    __iaPcs: RTCPeerConnection[];
+    RTCPeerConnection: typeof RTCPeerConnection;
+  };
   w.__iaDcs = [];
+  w.__iaPcs = [];
   const Orig = w.RTCPeerConnection;
   if (!Orig) return;
   class Recording extends Orig {
     constructor(cfg?: RTCConfiguration) {
       super(cfg);
+      w.__iaPcs.push(this);
       this.addEventListener('datachannel', (e) => w.__iaDcs.push(e.channel));
     }
   }
   w.RTCPeerConnection = Recording;
+}
+
+export type PcStats = {
+  /** `bytesReceived` of the `data-channel` stats entry per label, summed over open connections. */
+  channelBytes: Record<string, number>;
+  /** `transport` bytes received + sent. */
+  transportBytes: number;
+  /** Inbound audio: track live and receiving, RTP bytes. */
+  audioIn: { live: boolean; unmuted: boolean; bytes: number };
+  /** RTCP receiver reports about our outbound audio (the remote side receives it). */
+  audioOutReports: number;
+};
+
+/** Reads `getStats()` of every open peer connection the Assist page recorded. */
+export async function assistStats(page: Page): Promise<PcStats> {
+  return page.evaluate(async () => {
+    type S = {
+      type: string;
+      kind?: string;
+      label?: string;
+      bytesReceived?: number;
+      bytesSent?: number;
+      roundTripTimeMeasurements?: number;
+      roundTripTime?: number;
+    };
+    const pcs = ((window as unknown as { __iaPcs?: RTCPeerConnection[] }).__iaPcs ?? []).filter(
+      (pc) => pc.connectionState !== 'closed',
+    );
+    const out = {
+      channelBytes: {} as Record<string, number>,
+      transportBytes: 0,
+      audioIn: { live: false, unmuted: false, bytes: 0 },
+      audioOutReports: 0,
+    };
+    for (const pc of pcs) {
+      const stats = await pc.getStats();
+      stats.forEach((s: S) => {
+        if (s.type === 'data-channel' && s.label)
+          out.channelBytes[s.label] = (out.channelBytes[s.label] ?? 0) + (s.bytesReceived ?? 0);
+        else if (s.type === 'transport') out.transportBytes += (s.bytesReceived ?? 0) + (s.bytesSent ?? 0);
+        else if (s.type === 'inbound-rtp' && s.kind === 'audio') out.audioIn.bytes += s.bytesReceived ?? 0;
+        else if (s.type === 'remote-inbound-rtp' && s.kind === 'audio')
+          out.audioOutReports += s.roundTripTimeMeasurements ?? (s.roundTripTime !== undefined ? 1 : 0);
+      });
+    }
+    const el = [...document.querySelectorAll('audio')].find((a) => a.srcObject instanceof MediaStream);
+    const track = (el?.srcObject as MediaStream | undefined)?.getAudioTracks()[0];
+    out.audioIn.live = track?.readyState === 'live';
+    out.audioIn.unmuted = track ? !track.muted : false;
+    return out;
+  });
 }
 
 export type MirroredDoc = {

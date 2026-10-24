@@ -86,6 +86,30 @@ describe('tab op mapping (section 5.3)', () => {
     expect(chrome.tabs.ungroup).toHaveBeenCalledWith([1]);
   });
 
+  it('tabs.reload of a chrome:// or file: tab answers bad_args (prd-F7)', async () => {
+    chrome.tabsStore.set(7, makeTab(7, 'chrome://settings/'));
+    chrome.tabsStore.set(8, makeTab(8, 'file:///C:/Users/x/salary.pdf'));
+    expect(await code(runTabOp('tabs.reload', { tabId: 7 }, deps))).toBe('bad_args');
+    expect(await code(runTabOp('tabs.reload', { tabId: 8 }, deps))).toBe('bad_args');
+    expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  });
+
+  it('under current_tab tab groups never disclose unshared tabs or their group titles (SEC-P2-03)', async () => {
+    const created = await runTabOp('tabGroups.create', { tabIds: [1, 2], title: 'Work' }, deps);
+    const shared = (created.group as { groupId: number }).groupId;
+    const hidden = await chrome.tabs.group({ tabIds: [3] });
+    await chrome.tabGroups.update(hidden, { title: 'Bank stuff' });
+    const scoped: TabsDeps = { ...deps, listed: (id) => id === 1 };
+    const listed = (await runTabOp('tabGroups.list', {}, scoped)).groups as { groupId: number; title: string; tabIds: number[] }[];
+    expect(listed).toEqual([expect.objectContaining({ groupId: shared, tabIds: [1] })]);
+    expect(JSON.stringify(listed)).not.toContain('Bank stuff');
+    chrome.tabGroups.update.mockClear();
+    expect(await code(runTabOp('tabGroups.update', { groupId: hidden, title: 'x' }, scoped))).toBe('not_in_scope');
+    expect(await code(runTabOp('tabGroups.move', { groupId: hidden, index: 0 }, scoped))).toBe('not_in_scope');
+    expect(chrome.tabGroups.update).not.toHaveBeenCalled();
+    expect(chrome.tabGroups.move).not.toHaveBeenCalled();
+  });
+
   it('windows.list never lists incognito windows; unknown ops answer not_supported', async () => {
     const r = await runTabOp('windows.list', {}, deps);
     expect(r.windows).toEqual([{ windowId: 1, focused: true, state: 'normal', type: 'normal', tabCount: 3, incognito: false }]);

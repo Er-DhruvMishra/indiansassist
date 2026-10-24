@@ -53,6 +53,7 @@ export class LiveTabs extends LiveExtras {
       if (st.mirrored === 'yes') this.logShared(st);
     }
     if (consent.scope === 'all_tabs') await this.live.registry.registerAllTabs(this.deny()).catch(() => undefined);
+    this.s.captureRegistered = this.live.registry.isRegistered;
     for (const id of this.mirroredIds()) await this.live.registry.inject(id);
     const active = tabs.find((t) => t.active && t.id !== undefined && this.state(t.id)?.mirrored === 'yes');
     const focus = consent.scope === 'current_tab' ? this.s.consentTabId : (active?.id ?? this.mirroredIds()[0] ?? null);
@@ -60,9 +61,20 @@ export class LiveTabs extends LiveExtras {
     this.scheduleTabsPush();
   }
 
-  injectFailed(tabId: number): void {
+  /**
+   * No `cs.ready` (or the injection rejected). While the tab is still loading the new document may simply not exist
+   * yet (slow commit, reload): the tab stays `yes` and the `complete` event injects again (F3). Only a loaded page
+   * that refuses the script becomes `unsupported` with `inject_failed`.
+   */
+  async injectFailed(tabId: number): Promise<void> {
     const st = this.state(tabId);
     if (!st) return;
+    const tab = await ext().tabs.get(tabId).catch(() => null);
+    if (this.state(tabId) !== st || st.mirrored !== 'yes') return;
+    if (tab?.status === 'loading') {
+      st.injected = false;
+      return;
+    }
     st.mirrored = 'unsupported';
     st.error = 'inject_failed';
     st.injected = false;
@@ -72,7 +84,7 @@ export class LiveTabs extends LiveExtras {
   /** `cs.ready` from a capture script: start it (it stays inert until then). */
   async onReady(tabId: number, skipped: string[] | undefined): Promise<void> {
     const st = this.state(tabId);
-    if (!st || st.mirrored !== 'yes') {
+    if (!st || st.mirrored !== 'yes' || this.live.finishing) {
       await sendToTab(tabId, { t: 'cs.stop' });
       return;
     }
@@ -116,20 +128,24 @@ export class LiveTabs extends LiveExtras {
   // ---------- chrome.tabs events ----------
 
   onCreated(tab: chrome.tabs.Tab): void {
-    if (tab.id === undefined || tab.incognito || this.state(tab.id)) return;
+    if (tab.id === undefined || tab.incognito || this.state(tab.id) || this.live.finishing) return;
     this.s.tabs[String(tab.id)] = initialTabState(tab.pendingUrl ?? tab.url, this.deny(), this.live.scope(), { inScope: false });
     this.scheduleTabsPush();
   }
 
   async onUpdated(tabId: number, change: { status?: string; url?: string; title?: string; audible?: boolean; mutedInfo?: unknown; pinned?: boolean; favIconUrl?: string; groupId?: number }, tab: chrome.tabs.Tab): Promise<void> {
+    if (this.live.finishing) return; // Stop sharing is tearing down: nothing is (re)injected (F4)
     const st = this.state(tabId);
     if (!st) return this.onCreated(tab);
-    if (change.status === 'loading' && (change.url !== undefined || st.injected)) await this.navigated(tabId, st, tab.pendingUrl ?? tab.url);
+    // A same-URL load (reload) reports `loading` without a url while the old document is still live: injecting now
+    // would hit the old document's capture guard and never answer, so only a url change injects at once and a
+    // reload waits for `complete` (F3).
+    if (change.status === 'loading' && (change.url !== undefined || st.injected)) await this.navigated(tabId, st, tab.pendingUrl ?? tab.url, change.url !== undefined);
     else if (change.status === 'complete' && st.mirrored === 'yes' && !st.injected && !st.paused) await this.live.registry.inject(tabId);
     this.scheduleTabsPush();
   }
 
-  private async navigated(tabId: number, st: TabState, url: string | undefined): Promise<void> {
+  private async navigated(tabId: number, st: TabState, url: string | undefined, injectNow: boolean): Promise<void> {
     if (st.reveal) this.endRevealLocally(tabId, 'navigation');
     const wasYes = st.mirrored === 'yes' && !st.paused;
     const next = afterNavigation(st, url, this.deny(), this.live.scope());
@@ -144,7 +160,7 @@ export class LiveTabs extends LiveExtras {
       return this.changed(tabId, next.mirrored === 'denied' ? 'denied' : 'navigated');
     }
     if (this.live.scope() === 'all_tabs' && this.live.registry.isRegistered) this.live.registry.expectReady(tabId);
-    else await this.live.registry.inject(tabId);
+    else if (injectNow) await this.live.registry.inject(tabId);
     this.changed(tabId, 'navigated');
   }
 
@@ -175,7 +191,10 @@ export class LiveTabs extends LiveExtras {
       await sendToTab(tabId, { t: 'cs.pause' });
       this.live.attest('mirror.stopped', { reason: cause === 'bar_hidden' ? 'error' : 'paused', tabId, ...this.counters(tabId) });
     } else {
-      await sendToTab(tabId, { t: 'cs.resume' });
+      // A paused tab that navigated has no capture script (nothing is injected while paused): inject now and let
+      // cs.ready start it unpaused; otherwise the running script resumes (F5).
+      if (st.injected) await sendToTab(tabId, { t: 'cs.resume' });
+      else await this.live.registry.inject(tabId);
       this.live.attest('mirror.started', { reason: 'resumed', scope: this.live.scope(), level: this.live.level(), tabCount: this.mirroredIds().length, tabId });
     }
     this.live.send({ t: 'ctl.event', kind: 'paused', tabId, paused, ts: Date.now() });

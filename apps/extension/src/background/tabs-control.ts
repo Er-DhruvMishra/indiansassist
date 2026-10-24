@@ -26,6 +26,8 @@ export type TabsDeps = {
   info: (tab: chrome.tabs.Tab) => TabInfo | null;
   /** The Assist created a tab (`tabs.create`, `backstage.enter`): registry entry and capture injection. */
   onCreated: (tab: chrome.tabs.Tab, backstage: boolean) => Promise<void> | void;
+  /** Whether the Assist sees this tab (scope `current_tab` hides unshared tabs); absent = every tab. */
+  listed?: (tabId: number) => boolean;
 };
 
 async function getTab(tabId: number): Promise<chrome.tabs.Tab> {
@@ -53,7 +55,11 @@ function groupInfo(g: chrome.tabGroups.TabGroup, tabIds: number[]): GroupInfo {
   };
 }
 
-async function groupWithTabs(groupId: number): Promise<GroupInfo> {
+/**
+ * A group with only the tabs the Assist sees (SEC-P2-03). A group made only of unshared tabs is `not_in_scope`
+ * (`null` when `allowHidden`, used by `tabGroups.list` to skip it), so its title never reaches the Assist.
+ */
+async function groupWithTabs(groupId: number, deps: TabsDeps, allowHidden = false): Promise<GroupInfo | null> {
   let g: chrome.tabGroups.TabGroup;
   try {
     g = await ext().tabGroups.get(groupId);
@@ -61,7 +67,16 @@ async function groupWithTabs(groupId: number): Promise<GroupInfo> {
     throw new ControlError('bad_args', 'no such group');
   }
   const tabs = await ext().tabs.query({ groupId });
-  return groupInfo(g, tabs.map((t) => t.id!).filter((id) => id !== undefined));
+  const ids = tabs.map((t) => t.id).filter((id): id is number => id !== undefined && (deps.listed?.(id) ?? true));
+  if (ids.length === 0 && tabs.length > 0) {
+    if (allowHidden) return null;
+    throw new ControlError('not_in_scope', 'this group is not shared');
+  }
+  return groupInfo(g, ids);
+}
+
+async function visibleGroup(groupId: number, deps: TabsDeps): Promise<GroupInfo> {
+  return (await groupWithTabs(groupId, deps))!;
 }
 
 type Args = Record<string, unknown> & { tabId?: number; tabIds?: number[]; groupId?: number };
@@ -100,8 +115,8 @@ export async function runTabOp(op: string, a: Args, deps: TabsDeps): Promise<Rec
     }
     case 'tabs.reload': {
       const cur = await getTab(a.tabId!);
-      const url = cur.url ?? cur.pendingUrl;
-      if (url && isMirrorableUrl(url)) assertNavigableUrl(url, deps.denyList());
+      // Always checked (prd-F7): a chrome:// / file: page answers bad_args, a denied page denied_url.
+      assertNavigableUrl(cur.url ?? cur.pendingUrl ?? '', deps.denyList());
       await t.reload(a.tabId!, { bypassCache: a.bypassCache === true });
       return {};
     }
@@ -123,7 +138,10 @@ export async function runTabOp(op: string, a: Args, deps: TabsDeps): Promise<Rec
     case 'tabGroups.list': {
       const groups = await ext().tabGroups.query(typeof a.windowId === 'number' ? { windowId: a.windowId } : {});
       const out: GroupInfo[] = [];
-      for (const g of groups) out.push(await groupWithTabs(g.id));
+      for (const g of groups) {
+        const info = await groupWithTabs(g.id, deps, true);
+        if (info) out.push(info);
+      }
       return { groups: out };
     }
     case 'tabGroups.create': {
@@ -132,7 +150,7 @@ export async function runTabOp(op: string, a: Args, deps: TabsDeps): Promise<Rec
       if (typeof a.title === 'string') upd.title = a.title;
       if (typeof a.color === 'string') upd.color = a.color as chrome.tabGroups.Color;
       if (Object.keys(upd).length > 0) await ext().tabGroups.update(groupId, upd);
-      return { group: await groupWithTabs(groupId) };
+      return { group: await visibleGroup(groupId, deps) };
     }
     case 'tabGroups.update':
     case 'tabGroups.collapse': {
@@ -140,14 +158,16 @@ export async function runTabOp(op: string, a: Args, deps: TabsDeps): Promise<Rec
       if (typeof a.title === 'string') upd.title = a.title;
       if (typeof a.color === 'string') upd.color = a.color as chrome.tabGroups.Color;
       if (typeof a.collapsed === 'boolean') upd.collapsed = a.collapsed;
+      await visibleGroup(a.groupId!, deps); // not_in_scope before anything changes
       await ext().tabGroups.update(a.groupId!, upd);
-      return { group: await groupWithTabs(a.groupId!) };
+      return { group: await visibleGroup(a.groupId!, deps) };
     }
     case 'tabGroups.move': {
       const props: chrome.tabGroups.MoveProperties = { index: Number(a.index) };
       if (typeof a.windowId === 'number') props.windowId = a.windowId;
+      await visibleGroup(a.groupId!, deps);
       await ext().tabGroups.move(a.groupId!, props);
-      return { group: await groupWithTabs(a.groupId!) };
+      return { group: await visibleGroup(a.groupId!, deps) };
     }
     case 'tabGroups.ungroup':
       await t.ungroup(a.tabIds! as [number, ...number[]]);

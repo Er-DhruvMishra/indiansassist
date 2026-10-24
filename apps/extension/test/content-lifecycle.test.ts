@@ -144,4 +144,30 @@ describe('input replay (section 5.4)', () => {
     hits.push(btn);
     expect(replayInput('input.pointer', { kind: 'click', nodeId: null, vx: 0.2, vy: 0.4, modifiers: mods, mode: 'debugger' }, lookup, document, window)).toEqual({ ok: true, cx: 0.2 * window.innerWidth, cy: 0.4 * window.innerHeight });
   });
+
+  it('keys follow the frame rule in both modes: focus inside an embedded frame refuses them (prd-F2, SEC-P2-04)', () => {
+    const input = document.createElement('input');
+    const frame = document.createElement('iframe');
+    document.body.append(input, frame);
+    const mods = { alt: false, ctrl: false, meta: false, shift: false };
+    const key = (mode: 'dom' | 'debugger') => replayInput('input.key', { kind: 'press', key: '4', code: 'Digit4', text: '4', modifiers: mods, mode }, () => null, document, window);
+    const keydowns: string[] = [];
+    frame.addEventListener('keydown', () => keydowns.push('frame'));
+    frame.focus();
+    expect(document.activeElement).toBe(frame);
+    expect(key('debugger')).toEqual({ ok: false, error: 'not_supported', message: 'cross-origin frame' });
+    expect(key('dom')).toEqual({ ok: false, error: 'not_supported', message: 'cross-origin frame' });
+    expect(keydowns).toEqual([]);
+    // A frame focused inside an open shadow root is found too.
+    const host = document.createElement('div');
+    document.body.append(host);
+    const inner = document.createElement('iframe');
+    host.attachShadow({ mode: 'open' }).append(inner);
+    inner.focus();
+    expect(key('debugger')).toMatchObject({ ok: false, error: 'not_supported' });
+    input.focus();
+    expect(key('debugger')).toEqual({ ok: true });
+    expect(key('dom')).toEqual({ ok: true });
+    expect(input.value).toBe('4');
+  });
 });

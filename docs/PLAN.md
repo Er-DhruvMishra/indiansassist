@@ -31,7 +31,7 @@ indiansassist.com/
 
 Later phases add `apps/extension` (P2, MV3 + rrweb), `agent/` (P3/P4, Rust workspace), `apps/android`, `apps/ios`, `services/relay` (Go + pion).
 
-## 3. Phase A scope (foundation + Package 1)
+## 3. Phase A scope (foundation + Package 1), done
 
 Deliverables, in build order:
 
@@ -60,7 +60,7 @@ Out of Phase A: server-side pion recorder (Phase A.2), Keycloak-backed SSO end t
 
 ## 4. Phases B to E (summary)
 
-- **B, Package 2**: `apps/extension` MV3, rrweb capture over WS to Assist replay, Side Panel chat/voice/files, tab and tab group control, field masking, browser backstage. Reuses the signaling service and console shell.
+- **B, Package 2** (in review, see section 7): `apps/extension` MV3, rrweb capture over WS to Assist replay, Side Panel chat/voice/files, tab and tab group control, field masking, browser backstage. Reuses the signaling service and console shell.
 - **C, Package 3 + Android host**: Rust workspace (`agent/`), Windows first: DXGI capture, SendInput, libsodium E2EE, VP8/VP9/AV1/H.264, QUIC transport, elevation unlock with reason capture, self delete, playbooks, recording hash into the chain. Android host via MediaProjection + Accessibility Service.
 - **D, Package 4**: service install, enrollment to device identity, Wake on LAN + LAN waker mesh, AMT cold power on (hardware gated, v1), MSI/GPO, fleet groups and policy, offline action queue, self healing agent.
 - **E, Cross platform + enterprise**: macOS/Linux agents, iOS share + controllers, SSO/SAML, PSA integrations, OpenBao credential vault, DPDP residency reporting, local LLM session summaries.
@@ -75,3 +75,20 @@ See `docs/adr/`. Highlights: TypeScript backend (Fastify), Drizzle + Postgres (P
 - Every privileged or state changing action writes an audit entry.
 - No AGPL code copied into the repo (RustDesk, MinIO are reference reading only). Keep `docs/LICENSE-REGISTER.md` current.
 - Windows + Chromium first, then the rest.
+
+## 7. Status (24 Oct 2026)
+
+**Phase A: done.** Every Phase A deliverable in section 3 is built against `docs/specs/phase-a-contracts.md`, except the items listed as out of Phase A. Gates: `pnpm smoke` passes 26/26 and the P1 Playwright run (`pnpm e2e`) passes. The pion recorder (A.2) and full SSO (Phase E) stay deferred as planned.
+
+**Phase B (Package 2): implemented; the review fix round is integrated.** The contract is `docs/specs/phase-b-contracts.md`. All gates pass on the working tree: build, typecheck, lint, unit tests (shared 195, db 58 + 3 skipped, api 138, web 160, extension 125), `pnpm test:scripts` 24, `pnpm validate:infra`, `pnpm smoke` 26/26, `pnpm smoke:p2` 14/14, `pnpm e2e` (1 test, 16 steps) and `pnpm e2e:ext` (4 specs: bandwidth, control, extension, side panel). In the review round:
+- The recorder now re-masks revealed values. It holds lines while a `mask.request` is open (SEC-P2-02, prd-F1).
+- Keys follow the frame rule in both input modes (prd-F2, SEC-P2-04).
+- The capture registration, the debugger tabs and the consent prompt survive a service-worker restart (correctness-F1, F2, F10, F6).
+- Tab scope is applied before the scheme, and unsupported tabs disclose less (SEC-P2-03, SEC-P2-07, prd-F6, prd-F7).
+- New extension e2e specs cover the join carrier, the side panel, reveal, pause and bandwidth (prd-F3, F4, F5).
+
+Open before Phase B can be called done:
+- **Bandwidth gate.** `bandwidth.spec.ts` covers less than §13.4. It runs a 20 s window on scenario A only (set `E2E_BW_SECONDS` to change the length), not 60 s. It does not run scenario B (`spa.html`) or the voice-on totals. Its last run measured 13.6 kbps for the mirror and a 5.0 KiB snapshot, against a 100 kbps limit. Either extend the spec or amend §13.4.
+- **prd-F4 is partial.** The toast and bar texts inside closed shadow roots are not asserted by e2e.
+- **Known gap (§5.4).** A frame inside a closed shadow root cannot be seen by the frame rule.
+- The review-round changes are not committed yet.

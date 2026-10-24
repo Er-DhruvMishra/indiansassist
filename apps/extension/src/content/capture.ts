@@ -101,7 +101,7 @@ export class Capture {
       case 'cs.toast':
         return void this.bar?.toast(m.text);
       case 'cs.prompt':
-        return void this.bar?.showPrompt(m.id, m.text);
+        return void this.bar?.showPrompt(m.id, m.text, m.panelOnly === true);
       case 'cs.promptClear':
         return void this.bar?.clearPrompt(m.id);
       case 'cs.input':

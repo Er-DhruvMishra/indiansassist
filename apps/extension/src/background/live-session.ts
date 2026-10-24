@@ -29,6 +29,7 @@ import type { IceServer } from './ice';
 import { LiveTabs } from './live-tabs';
 import { teardownLive } from './live-teardown';
 import { capturePolicy, type EffectivePolicy } from './policy';
+import { isListedFor } from './tab-registry';
 import { InputAggregator } from './rate';
 import type { SessionMachine } from './session-machine';
 import type { TabsDeps } from './tabs-control';
@@ -52,11 +53,12 @@ export class LiveSession implements ControlHost {
     this.debuggerControl = new DebuggerControl((tabId, attached, cause) => {
       this.send({ t: 'ctl.event', kind: 'debugger', tabId, attached, ...(attached ? {} : { cause }), ts: Date.now() });
       if (!attached) this.setInputMode(tabId, 'dom');
+      this.s.debuggerTabs = [...this.debuggerControl.attached];
       void this.tabs.updateBar(tabId, { debuggerAttached: attached });
       this.m.persist();
     });
     this.registry = new ContentRegistry({
-      onInjectFailed: (tabId) => this.tabs.injectFailed(tabId),
+      onInjectFailed: (tabId) => void this.tabs.injectFailed(tabId),
       sendStop: async (tabId) => void (await sendToTab(tabId, { t: 'cs.stop' })),
     });
     this.inputs = new InputAggregator((data) => this.attest('control.input', data));
@@ -81,9 +83,18 @@ export class LiveSession implements ControlHost {
     this.m.persist();
   }
 
-  /** Worker restart during `active`: indicators re-applied, registry rebuilt from `ia.session`. */
+  /**
+   * Worker restart during `active`: registry, capture registration and debugger attachments rebuilt from
+   * `ia.session` (Chrome keeps both the registered script and the debugger attachment across a worker restart, so
+   * teardown and level changes must still see them), then the indicators re-applied.
+   */
   async restore(): Promise<void> {
     for (const [id, st] of Object.entries(this.s.tabs)) if (st.injected) this.registry.ready(Number(id));
+    if (this.s.captureRegistered) this.registry.restoreRegistered();
+    const dbg = new Set(this.s.debuggerTabs ?? []);
+    for (const [id, mode] of Object.entries(this.s.inputModes)) if (mode === 'debugger') dbg.add(Number(id));
+    this.debuggerControl.restore([...dbg]);
+    if (!levelAtLeast(this.level(), 'deep_control')) await this.debuggerControl.detachAll('level');
     await this.tabs.reapplyBars();
   }
 
@@ -91,12 +102,15 @@ export class LiveSession implements ControlHost {
   async rebuild(iceServers: IceServer[]): Promise<void> {
     this.iceServers = iceServers;
     await this.m.offscreen.ensure();
+    // The new PC re-creates the channels; the old ones close without a dc.close (F7), so nothing is open now.
+    this.openChannels.clear();
     await this.m.offscreen.send({ t: 'pc.create', iceServers, restart: true, relayAllowed: this.eff().policy.allowRelayFallback });
     const consent = this.s.consent!;
     this.attest('mirror.started', { reason: 'reconnect', scope: consent.scope, level: consent.level, tabCount: this.tabs.mirroredIds().length });
   }
 
   async teardown(kind: 'end' | 'error'): Promise<void> {
+    this.finishing = true;
     await teardownLive(this, kind === 'end' ? 'ended' : 'error', true, undefined, false);
   }
 
@@ -133,6 +147,7 @@ export class LiveSession implements ControlHost {
       denyList: () => this.eff().denyList,
       info: (tab) => this.tabs.info(tab),
       onCreated: (tab, backstage) => this.tabs.assistCreated(tab, backstage),
+      listed: (tabId) => isListedFor(this.tabState(tabId), this.scope()),
     };
   }
   send(msg: ControlResponse | ControlEvent): void {
@@ -179,17 +194,16 @@ export class LiveSession implements ControlHost {
   recording(): boolean {
     return this.s.recording;
   }
+  /** Correlated by frame id: only the `consent.level_ok` / `error` whose `re` is this frame resolves it (F11). */
   requestLevel(level: ConsentLevel, opId: string): Promise<boolean> {
+    const id = this.m.nextLevelFrameId();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), 10000);
-      this.m.levelWaiters.push((ok) => {
+      const timer = setTimeout(() => this.m.resolveLevel(id, false), 10000);
+      this.m.levelWaiters.set(id, (ok) => {
         clearTimeout(timer);
         resolve(ok);
       });
-      if (!this.m.send({ t: 'desk.consent_level', sessionId: this.sessionId(), level, requested: true, opId })) {
-        clearTimeout(timer);
-        resolve(false);
-      }
+      if (!this.m.send({ t: 'desk.consent_level', id, sessionId: this.sessionId(), level, requested: true, opId })) this.m.resolveLevel(id, false);
     });
   }
   revealGranted(tabId: number, scope: 'field' | 'tab', reason?: string, fieldKind?: string): void {
@@ -205,8 +219,8 @@ export class LiveSession implements ControlHost {
   backstageExit(tabId: number, action: 'close' | 'keep' | 'bring_to_front', opId: string): Promise<void> {
     return this.tabs.backstageExit(tabId, action, opId);
   }
-  showBarPrompt(tabId: number | null, id: string, text: string): void {
-    void this.tabs.barPrompt(tabId, id, text);
+  showBarPrompt(tabId: number | null, id: string, text: string, panelOnly?: boolean): void {
+    void this.tabs.barPrompt(tabId, id, text, panelOnly);
   }
   clearBarPrompt(id: string): void {
     void this.tabs.clearBarPrompt(id);
@@ -282,8 +296,12 @@ export class LiveSession implements ControlHost {
   async sendChat(text: string): Promise<void> {
     const line: ChatLine = { msgId: crypto.randomUUID(), from: 'desk', text, ts: Date.now() };
     this.receiveChat(line);
-    if (this.openChannels.has('ia.chat')) await this.m.offscreen.send({ t: 'dc.send', label: 'ia.chat', msg: { t: 'chat', ...line } });
-    else this.m.send({ t: 'chat.message', sessionId: this.sessionId(), ...line } as unknown as ClientSignalMessage);
+    if (this.openChannels.has('ia.chat')) {
+      const r = await this.m.offscreen.send<{ ok?: boolean }>({ t: 'dc.send', label: 'ia.chat', msg: { t: 'chat', ...line } });
+      if (r?.ok !== false) return;
+      this.openChannels.delete('ia.chat'); // the channel is gone (rebuild): fall back to the WS
+    }
+    this.m.send({ t: 'chat.message', sessionId: this.sessionId(), ...line } as unknown as ClientSignalMessage);
   }
 
   // ---------- indicators and UI ----------

@@ -5,8 +5,12 @@
  * fixture server (:4175). The spec launches its own browsers: the Desk is a persistent Chromium context with the
  * unpacked extension, the Assist an ordinary Chromium. Run from the repo root with `pnpm e2e:ext`.
  * `E2E_API_PORT=4100` moves the api when :4000 is taken.
+ * The e2e build carries a throwaway manifest `key` (generated once per run, handed to the global setup and the
+ * workers through IA_E2E_EXTENSION_KEY), so the unpacked extension id is known up front and the api lists it in
+ * EXTENSION_IDS: the join page then finds the extension over externally_connectable (carrier A, section 2.2).
  */
 import { defineConfig } from '@playwright/test';
+import { e2eExtensionIdentity } from './test/e2e/extension-key';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +19,7 @@ const repoRoot = resolve(here, '../..');
 const apiPort = process.env.E2E_API_PORT || '4000';
 const apiUrl = `http://localhost:${apiPort}`;
 const fixturePort = process.env.E2E_FIXTURE_PORT || '4175';
+const { extensionId } = e2eExtensionIdentity();
 
 export default defineConfig({
   testDir: './test/e2e',
@@ -45,6 +50,7 @@ export default defineConfig({
         STORAGE_FS_DIR: './data/e2e-ext/storage',
         RATE_LIMIT_DISABLED: '1',
         LOG_LEVEL: 'warn',
+        EXTENSION_IDS: extensionId,
       },
     },
     {

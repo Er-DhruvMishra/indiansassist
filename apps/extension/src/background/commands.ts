@@ -132,6 +132,12 @@ export async function handleContentMessage(m: SessionMachine, raw: unknown, tabI
   const c = parsed.data;
   const live = m.live;
   if (!live) return c.t === 'cs.ready' ? { ok: false } : undefined;
+  if (live.finishing) {
+    // Teardown is running (F4): a script that (re)started now is stopped, nothing else acts.
+    if (c.t !== 'cs.ready') return undefined;
+    await live.tabs.onReady(tabId, undefined);
+    return { ok: false };
+  }
   switch (c.t) {
     case 'cs.ready':
       await live.tabs.onReady(tabId, c.skippedSelectors);
@@ -149,8 +155,14 @@ export async function handleContentMessage(m: SessionMachine, raw: unknown, tabI
       return live.tabs.closeBackstage('all');
     case 'cs.promptAnswer': {
       const p = m.prompts.list().find((x) => x.id === c.id);
-      // A deep-control grant needs the permission prompt, which only the side panel can show.
-      if (p && !(p.promptKind === 'level' && p.level === 'deep_control' && c.decision === 'allow')) m.prompts.answer(c.id, c.decision);
+      if (!p) return undefined;
+      // A deep-control grant needs the browser permission prompt, which only the side panel can show (section 3.2):
+      // the bar's Allow keeps the prompt open and says where to allow it, instead of silently timing out (prd-F8).
+      if (p.promptKind === 'level' && p.level === 'deep_control' && c.decision === 'allow') {
+        m.ui.set({ status: 'Deep control must be allowed from the side panel.' });
+        return undefined;
+      }
+      m.prompts.answer(c.id, c.decision);
       return undefined;
     }
     case 'cs.revealEnded':

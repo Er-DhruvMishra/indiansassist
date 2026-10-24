@@ -6,6 +6,7 @@
 import { managedPolicySchema, type ConsentLevel, type ExtensionPolicy, type ManagedPolicy, type MirrorScope } from '@indiansassist/shared';
 import type { ExtensionPhase } from './constants';
 import { ext } from './api';
+import type { ConsentInfo } from './ui-state';
 
 export const SESSION_KEYS = {
   session: 'ia.session',
@@ -76,6 +77,16 @@ export type PersistedSession = {
   relayed: boolean;
   /** The Desk ended the session itself: never resume it, never show consent again. */
   endedLocally: boolean;
+  /**
+   * Worker-restart state (section 3.5): what a restarted service worker must know to finish what the old one began.
+   * `captureRegistered`: the `all_tabs` capture script is registered (teardown must unregister it).
+   * `debuggerTabs`: tabs with `chrome.debugger` attached (Chrome keeps the attachment across a worker restart).
+   * `consentInfo` / `consentWindowId`: the open consent prompt (closing it unanswered is a Decline, section 3.1).
+   */
+  captureRegistered?: boolean;
+  debuggerTabs?: number[];
+  consentInfo?: ConsentInfo | null;
+  consentWindowId?: number | null;
 };
 
 export function emptyLog(): ReceiptLog {

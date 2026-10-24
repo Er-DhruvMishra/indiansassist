@@ -66,7 +66,7 @@ export class IndicatorBar {
   readonly host: HTMLElement;
   private root: ShadowRoot;
   private state: BarState = { ...DEFAULT_BAR };
-  private prompts = new Map<string, string>();
+  private prompts = new Map<string, { text: string; panelOnly: boolean }>();
   private toastText: string | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private observer: MutationObserver | null = null;
@@ -143,8 +143,9 @@ export class IndicatorBar {
     this.render();
   }
 
-  showPrompt(id: string, text: string): void {
-    this.prompts.set(id, text);
+  /** `panelOnly`: the grant needs the side panel (deep control's browser permission prompt), so no Allow here. */
+  showPrompt(id: string, text: string, panelOnly = false): void {
+    this.prompts.set(id, { text, panelOnly });
     this.render();
   }
 
@@ -173,10 +174,11 @@ export class IndicatorBar {
       bar.appendChild(el('span', 'REVEALED', { class: 'chip rev' }, this.doc));
       bar.appendChild(this.button('Hide again', () => this.h.onHide()));
     }
-    for (const [id, text] of this.prompts) {
+    for (const [id, { text, panelOnly }] of this.prompts) {
       const p = el('div', null, { class: 'prompt' }, this.doc);
       p.appendChild(el('span', text, { title: text }, this.doc));
-      p.appendChild(this.button('Allow', () => this.h.onPromptAnswer(id, 'allow')));
+      if (panelOnly) p.appendChild(el('span', 'Open the side panel to allow', { class: 'hint' }, this.doc));
+      else p.appendChild(this.button('Allow', () => this.h.onPromptAnswer(id, 'allow')));
       p.appendChild(this.button('Refuse', () => this.h.onPromptAnswer(id, 'refuse')));
       bar.appendChild(p);
     }

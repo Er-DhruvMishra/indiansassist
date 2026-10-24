@@ -1,21 +1,36 @@
 /**
  * Package 1 two-browser end-to-end test: one Chromium, two contexts. Assist signs up an in-mum org, creates a
  * p1_browser one_time token and copies the join link; the Desk opens it, copies the token, joins, consents and
- * shares (fake screen); then video, chat both ways, a Desk -> Assist file, an annotation, the network widget, a
- * recording upload, Stop sharing, the consent receipt and the audit chain are all checked through the real UI.
+ * shares (fake screen); then video, chat both ways, a voice call (both sides turn voice on, the remote audio track
+ * is live and RTP audio bytes keep arriving on each side), a Desk -> Assist and an Assist -> Desk file, an
+ * annotation, the network widget, a recording upload, Stop sharing, the consent receipt and the audit chain are
+ * all checked through the real UI.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
-import { canvasHasContent, captureConsole, inkPixels, probeRemoteVideo, shot, shots } from './helpers';
+import {
+  canvasHasContent,
+  captureConsole,
+  inkPixels,
+  probeRemoteAudio,
+  probeRemoteVideo,
+  recordPeerConnections,
+  shot,
+  shots,
+} from './helpers';
 
 const WEB = 'http://localhost:5173';
 const DESK_NAME = 'E2E Desk';
 const FILE_NAME = 'e2e-desk-note.txt';
 const FILE_BYTES = randomBytes(2048).toString('hex'); // 4096 ASCII bytes
 const FILE_SHA = createHash('sha256').update(FILE_BYTES).digest('hex');
+const BACK_NAME = 'e2e-assist-reply.txt';
+const BACK_BYTES = randomBytes(1024).toString('hex'); // 2048 ASCII bytes
+const BACK_SHA = createHash('sha256').update(BACK_BYTES).digest('hex');
 
 async function newSide(ctx: BrowserContext, side: string): Promise<Page> {
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write', 'camera', 'microphone'], { origin: WEB });
+  await ctx.addInitScript(recordPeerConnections);
   const page = await ctx.newPage();
   captureConsole(page, side);
   return page;
@@ -122,6 +137,38 @@ test('Package 1: Assist and Desk complete a real browser session', async ({ brow
       await shot(assist, 'chat');
     });
 
+    await test.step('Voice call: both sides turn voice on and hear each other', async () => {
+      const assistVoice = assist.getByRole('region', { name: 'Voice' });
+      const deskVoice = desk.getByRole('region', { name: 'Voice' });
+      await assistVoice.getByRole('button', { name: 'Turn voice on' }).click();
+      await expect(assistVoice.getByRole('button', { name: 'Turn voice off' })).toBeVisible();
+      await expect(deskVoice).toContainText("Asha Tech's microphone is on");
+      await deskVoice.getByRole('button', { name: 'Turn voice on' }).click();
+      await expect(deskVoice.getByRole('button', { name: 'Turn voice off' })).toBeVisible();
+      await expect(assistVoice).toContainText(`${DESK_NAME}'s microphone is on`);
+      for (const [side, page] of [
+        ['assist', assist],
+        ['desk', desk],
+      ] as const) {
+        await expect
+          .poll(async () => {
+            const a = await probeRemoteAudio(page);
+            return a.live && a.unmuted && a.bytesReceived > 0;
+          }, { message: `${side} receives remote audio`, timeout: 20_000 })
+          .toBe(true);
+        const b0 = (await probeRemoteAudio(page)).bytesReceived;
+        await expect
+          .poll(async () => (await probeRemoteAudio(page)).bytesReceived, { message: `${side} audio bytes grow` })
+          .toBeGreaterThan(b0);
+      }
+      // The mute state reaches the other side over ia.ctrl (voice.state).
+      await deskVoice.getByRole('button', { name: 'Mute microphone' }).click();
+      await expect(assistVoice).toContainText(`${DESK_NAME} is muted`);
+      await deskVoice.getByRole('button', { name: 'Unmute microphone' }).click();
+      await expect(assistVoice).toContainText(`${DESK_NAME}'s microphone is on`);
+      await shot(assist, 'voice-on');
+    });
+
     await test.step('Desk sends a file and Assist receives it intact', async () => {
       await desk
         .locator('#file-send')
@@ -140,6 +187,28 @@ test('Package 1: Assist and Desk complete a real browser session', async ({ brow
         desk.getByRole('region', { name: 'Files' }).getByRole('listitem').filter({ hasText: FILE_NAME }),
       ).toContainText('done');
       await shot(assist, 'file-received');
+    });
+
+    await test.step('Assist sends a file and the Desk accepts it intact', async () => {
+      await assist
+        .locator('#file-send')
+        .setInputFiles({ name: BACK_NAME, mimeType: 'text/plain', buffer: Buffer.from(BACK_BYTES) });
+      const dialog = desk.getByRole('dialog', { name: 'Incoming file' });
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(BACK_NAME);
+      await expect(dialog).toContainText('2.0 KiB');
+      await expect(dialog).toContainText('Asha Tech');
+      await shot(desk, 'desk-incoming-file');
+      await dialog.getByRole('button', { name: 'Accept', exact: true }).click();
+      const row = desk.getByRole('region', { name: 'Files' }).getByRole('listitem').filter({ hasText: BACK_NAME });
+      await expect(row).toContainText(`From Asha Tech: ${BACK_NAME}`);
+      await expect(row).toContainText('done');
+      await expect(row).toContainText('2.0 KiB / 2.0 KiB');
+      await expect(row).toContainText(`sha256 ${BACK_SHA}`);
+      await expect(row).toContainText('reported to the server');
+      const sent = assist.getByRole('region', { name: 'Files' }).getByRole('listitem').filter({ hasText: BACK_NAME });
+      await expect(sent).toContainText(`To ${DESK_NAME}: ${BACK_NAME}`);
+      await expect(sent).toContainText('done');
     });
 
     await test.step('Annotation drawn on Assist appears on the Desk overlay', async () => {
@@ -212,7 +281,10 @@ test('Package 1: Assist and Desk complete a real browser session', async ({ brow
       ]) {
         await expect(table.getByRole('cell', { name: action, exact: true }).first()).toBeVisible();
       }
-      await expect(table.getByRole('cell', { name: /^file\.(sent|received)$/ }).first()).toBeVisible();
+      await expect(table.getByRole('cell', { name: 'file.sent', exact: true }).first()).toBeVisible();
+      // The Desk attests what it received from the Assist (actor desk).
+      const received = table.getByRole('row').filter({ has: assist.getByRole('cell', { name: 'file.received', exact: true }) });
+      await expect(received.filter({ hasText: '(desk)' }).first()).toBeVisible();
       await assist.getByRole('button', { name: 'Verify chain' }).click();
       const badge = assist.getByText(/^Verified /);
       await expect(badge).toBeVisible();

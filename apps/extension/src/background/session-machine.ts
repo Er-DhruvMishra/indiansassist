@@ -70,15 +70,45 @@ export class SessionMachine {
   readonly outbox: AttestOutbox;
   /** A `session.created` with state `active` arrived on resume: the next `ice.refresh` rebuilds the PC (Y23). */
   expectRebuild = false;
-  levelWaiters: ((ok: boolean) => void)[] = [];
-  consentWindowId: number | null = null;
+  /**
+   * A `session.created { state: 'active' }` arrived while the Desk was still `consent_pending` (the `consent.ok` was
+   * lost with the socket): the session never started here, so the next `ice.refresh` starts it instead of rebuilding.
+   */
+  pendingStart = false;
+  /** `desk.consent_level { requested: true }` waiters by frame id; resolved by the `re` of `consent.level_ok` / `error`. */
+  readonly levelWaiters = new Map<string, (ok: boolean) => void>();
+  private levelSeq = 0;
   popupWindowId: number | null = null;
   endPending: ClientSignalMessage | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   endFallback: ReturnType<typeof setTimeout> | null = null;
   private persistQueued = false;
   liveFactory: ((m: SessionMachine) => LiveSession) | null = null;
-  consentInfo: ConsentInfo | null = null;
+
+  /** The open consent prompt; persisted in `ia.session` so a worker restart keeps it (section 3.1). */
+  get consentInfo(): ConsentInfo | null {
+    return this.s?.consentInfo ?? null;
+  }
+  set consentInfo(v: ConsentInfo | null) {
+    if (this.s) this.s.consentInfo = v;
+  }
+  get consentWindowId(): number | null {
+    return this.s?.consentWindowId ?? null;
+  }
+  set consentWindowId(v: number | null) {
+    if (this.s) this.s.consentWindowId = v;
+  }
+
+  nextLevelFrameId(): string {
+    return `lv${this.levelSeq++}`;
+  }
+
+  /** Resolves (and forgets) the level waiter for frame `re`. */
+  resolveLevel(re: string | undefined, ok: boolean): void {
+    const w = re !== undefined ? this.levelWaiters.get(re) : undefined;
+    if (w) this.levelWaiters.delete(re!);
+    w?.(ok);
+  }
 
   constructor(readonly deps: MachineDeps) {
     this.prompts = new PromptManager((prompts) => this.ui.set({ prompts }));
@@ -156,6 +186,7 @@ export class SessionMachine {
       this.live = this.liveFactory(this);
       await this.live.restore();
     }
+    this.refreshUi();
     this.startSignal();
   }
 

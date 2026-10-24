@@ -127,6 +127,42 @@ describe('control handler (sections 4.6, 5)', () => {
     expect(events.map((e) => e.state)).toEqual(['shown', 'answered']);
   });
 
+  it('a deep_control level.request shows the bar prompt without Allow (panel only, prd-F8)', async () => {
+    const t = host('in_page', { 1: st() });
+    const done = new ControlHandler(t.h).handle({ t: 'ctl.req', id: 'l3', op: 'level.request', args: { level: 'deep_control', reason: 'site ignores clicks' }, ts: 1 });
+    await Promise.resolve();
+    expect(t.h.showBarPrompt).toHaveBeenCalledWith(null, 'l3', expect.stringContaining('Reason: site ignores clicks'), true);
+    t.prompts.answer('l3', 'refuse');
+    await done;
+  });
+
+  it('nothing runs while sharing is ending (F4)', async () => {
+    const t = host('deep_control', { 1: st() });
+    (t.h as { finishing?: boolean }).finishing = true;
+    await new ControlHandler(t.h).handle({ t: 'ctl.req', id: 'n1', op: 'tabs.navigate', args: { tabId: 1, url: 'https://example.com/x' }, ts: 1 });
+    expect(t.sent).toEqual([expect.objectContaining({ id: 'n1', ok: false, error: { code: 'not_allowed', message: 'sharing is ending' } })]);
+  });
+
+  it('mirror.attach on a hidden protected or browser tab is indistinguishable from a missing id (prd-F9)', async () => {
+    const chrome = installChromeMock({ tabs: [makeTab(1, 'https://example.com/'), makeTab(2, 'https://netbanking.hdfcbank.com/'), makeTab(3, 'chrome://settings/'), makeTab(4, 'https://example.org/')] });
+    const hidden = st({ mirrored: 'not_in_scope', inScope: false });
+    const t = host('view', { 1: st(), 2: hidden, 3: hidden, 4: hidden });
+    const c = new ControlHandler(t.h);
+    for (const [id, tabId] of [['a2', 2], ['a3', 3], ['a9', 9]] as const) await c.handle({ t: 'ctl.req', id, op: 'mirror.attach', args: { tabId, reason: 'please' }, ts: 1 });
+    const res = t.sent.filter((m) => m.t === 'ctl.res');
+    expect(res.map((r) => (r.ok ? 'ok' : r.error))).toEqual([
+      { code: 'no_such_tab', message: 'no such tab' },
+      { code: 'no_such_tab', message: 'no such tab' },
+      { code: 'no_such_tab', message: 'no such tab' },
+    ]);
+    expect(t.prompts.list()).toHaveLength(0);
+    const ordinary = c.handle({ t: 'ctl.req', id: 'a4', op: 'mirror.attach', args: { tabId: 4, reason: 'please' }, ts: 1 });
+    await vi.waitFor(() => expect(t.prompts.list()).toHaveLength(1));
+    t.prompts.answer('a4', 'refuse');
+    await ordinary;
+    expect(chrome.tabs.get).toHaveBeenCalled();
+  });
+
   it('mask.request on a secret answers granted false without a prompt (not_unmaskable)', async () => {
     const t = host('view', { 1: st() });
     (t.contentRequest as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, cause: 'not_unmaskable' });

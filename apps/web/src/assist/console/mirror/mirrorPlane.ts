@@ -97,6 +97,8 @@ export class MirrorPlane {
   private hintTimer: ReturnType<typeof setTimeout> | null = null;
   private sawSnapshot = false;
   private readyOnce = false;
+  /** Tabs with a `mask.request` in flight (the recorder holds their lines until the answer, Phase B 4.7). */
+  private revealAsks = new Set<number>();
 
   constructor(private readonly deps: PlaneDeps) {
     this.bridge = deps.bridge ?? new ReplayerBridge();
@@ -121,9 +123,19 @@ export class MirrorPlane {
     return this.deps.get();
   }
 
+  /** Brings a recorder started mid-ask or mid-reveal up to date before it sees the tab's events. */
+  private recorderFor(tabId: number): MirrorRecorder | null {
+    const rec = this.deps.recorder();
+    if (!rec) return null;
+    if (this.revealAsks.has(tabId)) rec.ask(tabId);
+    const info = this.snap.tabs.tabs.find((t) => t.tabId === tabId);
+    if (info && info.revealed !== 'none') rec.revealStart(tabId, info.revealed);
+    return rec;
+  }
+
   private onSnapshot(tabId: number, events: unknown[]): void {
     const clean = sanitiseEvents(events);
-    const rec = this.deps.recorder();
+    const rec = this.recorderFor(tabId);
     for (const e of clean) rec?.event(tabId, 0, e);
     this.bridge.snapshot(tabId, clean);
     if (!this.sawSnapshot) {
@@ -134,7 +146,7 @@ export class MirrorPlane {
 
   private onEvents(tabId: number, seq: number, events: unknown[]): void {
     const clean = sanitiseEvents(events);
-    const rec = this.deps.recorder();
+    const rec = this.recorderFor(tabId);
     for (const e of clean) rec?.event(tabId, seq, e);
     this.bridge.events(tabId, clean);
   }
@@ -157,7 +169,9 @@ export class MirrorPlane {
     rec?.meta(m, m.tab.tabId);
     if (m.state === 'revealed') rec?.revealStart(m.tab.tabId, m.tab.revealed === 'tab' ? 'tab' : 'field');
     if (m.state === 'restored' || m.state === 'detached') {
-      rec?.revealEnd(m.tab.tabId);
+      const redacted = rec?.revealEnd(m.tab.tabId) ?? false;
+      // The masked restore snapshot may have arrived inside the window (and been re-masked): re-sync the recording.
+      if (redacted && m.state === 'restored') void this.op('mirror.snapshot', { tabId: m.tab.tabId }, { quiet: true });
       const revealUntil = { ...this.snap.revealUntil };
       delete revealUntil[m.tab.tabId];
       this.deps.set({ revealUntil });
@@ -317,7 +331,11 @@ export class MirrorPlane {
     this.deps.set({ revealTarget: null });
     const args: Record<string, unknown> = { tabId: t.tabId, scope: t.scope, reason };
     if (t.nodeId !== undefined) args.nodeId = t.nodeId;
+    this.revealAsks.add(t.tabId);
+    this.deps.recorder()?.ask(t.tabId);
     const r = await this.op('mask.request', args, { quiet: true });
+    this.revealAsks.delete(t.tabId);
+    this.deps.recorder()?.answered(t.tabId, r.ok && r.result.granted === true, t.scope);
     if (r.ok && r.result.granted === true) {
       const ttl = typeof r.result.ttlMs === 'number' ? r.result.ttlMs : LIMITS.revealTtlMs;
       this.deps.set({ revealUntil: { ...this.snap.revealUntil, [t.tabId]: Date.now() + ttl }, lastOp: { text: 'The user revealed it for up to a minute.', ok: true, at: Date.now() } });

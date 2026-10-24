@@ -161,6 +161,12 @@ export function installChromeMock(opts: { tabs?: chrome.tabs.Tab[]; managed?: Re
       move: vi.fn(async (id: number) => groups.get(id)),
     },
     windows: {
+      /** Open window ids for `windows.get` (the consent / popup windows); a missing id rejects like Chrome. */
+      open: new Set<number>(),
+      get: vi.fn(async (id: number) => {
+        if (!mock.windows.open.has(id)) throw new Error(`No window with id: ${id}`);
+        return { id };
+      }),
       create: vi.fn(async () => ({ id: 77 })),
       update: vi.fn(async () => ({})),
       remove: vi.fn(async () => undefined),

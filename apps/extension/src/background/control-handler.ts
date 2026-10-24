@@ -52,6 +52,7 @@ export class ControlHandler {
     if (typeof m.id !== 'string' || m.id.length === 0 || m.id.length > 40) return;
     if (this.ids.seen(m.id)) return;
     const id = m.id;
+    if (this.host.finishing) return this.fail(id, 'not_allowed', 'sharing is ending');
     const isMove = m.op === 'input.pointer' && (m.args as { kind?: unknown } | undefined)?.kind === 'move';
     if (!(isMove ? this.moves : this.ops).take()) return this.fail(id, 'rate_limited', 'too many requests');
     if (!isControlOp(m.op)) return this.fail(id, 'not_supported', 'unknown op');

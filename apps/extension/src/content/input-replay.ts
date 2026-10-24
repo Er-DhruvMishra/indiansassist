@@ -1,7 +1,7 @@
 /**
  * Input replay in the page (section 5.4). Coordinates come from the node's client rect (`nx`/`ny`) or the viewport
- * (`vx`/`vy`); the frame rule refuses any hit on an `<iframe>`, `<frame>`, `<object>`, `<embed>` or `<portal>`
- * (`not_supported`, nothing forwarded to CDP). In `dom` mode synthetic events are dispatched (bubbling, composed);
+ * (`vx`/`vy`); the frame rule refuses any hit on an `<iframe>`, `<frame>`, `<object>`, `<embed>` or `<portal>`, and
+ * any key while focus is inside one (`not_supported`, nothing forwarded to CDP). In `dom` mode synthetic events are dispatched (bubbling, composed);
  * text goes in through `execCommand('insertText')` or the prototype value setter plus `input` / `change`.
  * In `debugger` mode the page only resolves coordinates; the worker drives CDP.
  */
@@ -38,6 +38,16 @@ export function hitTest(doc: Document, cx: number, cy: number): { ok: true; el: 
     return { ok: false, reason: 'none' };
   }
   return { ok: true, el };
+}
+
+/**
+ * The element keys would land in: `document.activeElement`, descending into open shadow roots. A focused frame
+ * shows up here as the `<iframe>` (or `<frame>`, `<object>`, `<embed>`, `<portal>`) element itself.
+ */
+export function focusTarget(doc: Document): Element | null {
+  let el: Element | null = doc.activeElement;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+  return el;
 }
 
 function mouseInit(cx: number, cy: number, button: number, m: Modifiers): MouseEventInit {
@@ -137,6 +147,10 @@ export function replayInput(op: string, args: Record<string, unknown>, lookup: N
   const mode = args.mode === 'debugger' ? 'debugger' : 'dom';
   const mods = (args.modifiers ?? { alt: false, ctrl: false, meta: false, shift: false }) as Modifiers;
   if (op === 'input.key') {
+    // Frame rule for keys too (section 5.4, prd-F2): with focus inside an embedded frame (card field, SSO widget)
+    // CDP would type into content the Assist cannot see, so nothing is dispatched or forwarded.
+    const focused = focusTarget(doc);
+    if (focused && FRAME_TAGS.has(focused.tagName.toUpperCase())) return { ok: false, error: 'not_supported', message: 'cross-origin frame' };
     if (mode === 'dom') dispatchKey(doc, args as never, win);
     return { ok: true };
   }

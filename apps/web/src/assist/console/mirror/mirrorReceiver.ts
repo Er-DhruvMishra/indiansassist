@@ -112,8 +112,17 @@ export class MirrorReceiver {
       }
       return;
     }
+    // A snapshot supersedes the tab's unfinished batches: the Desk drops their unsent parts (relay pacer), so they
+    // would only expire later, nack and freeze the view although the snapshot was applied. Batch seqs restart after
+    // a snapshot, so a stale partial could also collide with a new batch of the same seq.
+    if (m.kind === 'snapshot') this.dropRelayBatches(m.tabId);
     const key = `${m.tabId}:${m.kind}:${m.seq}`;
     let p = this.relay.get(key);
+    if (p && m.part === 1 && p.chunks[0] !== undefined) {
+      // Part 1 again: a new message under the same key (superseded snapshot); start over instead of mixing parts.
+      this.relay.delete(key);
+      p = undefined;
+    }
     if (!p) {
       p = { kind: m.kind, enc: m.enc, parts: m.parts, chunks: new Array<Uint8Array | undefined>(m.parts), got: 0, bytes: 0, firstAt: this.now() };
       this.relay.set(key, p);
@@ -139,6 +148,11 @@ export class MirrorReceiver {
       off += c!.length;
     }
     this.enqueue({ kind: p.kind, tabId: m.tabId, seq: m.seq, deflate: p.enc === 'deflate', payload });
+  }
+
+  private dropRelayBatches(tabId: number): void {
+    const prefix = `${tabId}:batch:`;
+    for (const key of [...this.relay.keys()]) if (key.startsWith(prefix)) this.relay.delete(key);
   }
 
   private enqueue(w: Whole): void {
@@ -206,6 +220,7 @@ export class MirrorReceiver {
   forgetTab(tabId: number): void {
     this.tabs.delete(tabId);
     this.reasm.dropTab(tabId);
+    for (const key of [...this.relay.keys()]) if (key.startsWith(`${tabId}:`)) this.relay.delete(key);
   }
 
   /** After a link rebuild every tab waits for its fresh snapshot (Phase B 3.5). */

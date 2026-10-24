@@ -9,6 +9,7 @@ import { onBus } from '../shared/bus';
 import { EXTENSION_VERSION, KEEPALIVE_ALARM, OFFSCREEN_PATH, UI_PORT } from '../shared/constants';
 import { lockSessionStorage, patchDiagnostics, readLocal, LOCAL_KEYS, type Diagnostics } from '../shared/storage';
 import { handleContentMessage, handleUiCommand } from './commands';
+import { restoreConsentWindow } from './consent-window';
 import { handleHandshake, senderOrigin } from './external';
 import { LiveSession } from './live-session';
 import { handleOffscreenMessage } from './offscreen-messages';
@@ -27,6 +28,7 @@ const ready: Promise<void> = (async () => {
     /* side panel unsupported */
   }
   await machine.restore().catch((e: unknown) => console.error('[worker] restore failed', e));
+  await restoreConsentWindow(machine).catch(() => undefined);
 })();
 
 async function onOriginRefused(origin: string | null): Promise<void> {
