@@ -19,7 +19,7 @@ import {
 } from '@playwright/test';
 import { e2eExtensionIdentity } from './extension-key';
 import { E2E_DIST } from './global-setup';
-import { FIXTURES, HEADLESS, MEDIA_ARGS, WEB, captureConsole, pageMatching, recordDataChannels, shot } from './helpers';
+import { BAR, FIXTURES, HEADLESS, MEDIA_ARGS, WEB, captureConsole, pageMatching, recordDataChannels, shot } from './helpers';
 
 export const DESK_NAME = 'E2E Desk';
 export const TECH_NAME = 'Asha Tech';
@@ -38,6 +38,10 @@ export type P2Session = {
   panel: Page;
   sessionId: string;
   fixtureTabId: number;
+  /** Date.now() just before the Desk clicked Share: t = 0 of the bandwidth window (contract 13.4). */
+  sharedAt: number;
+  /** What the fixture tab's bar says while shared: "Shared with <technician> (<org>)". */
+  sharedText: string;
   close: () => Promise<void>;
 };
 
@@ -175,6 +179,8 @@ export async function startP2Session(o: { org: string; label: string; consent: C
     });
 
     let fixtureTabId = 0;
+    let sharedAt = 0;
+    const sharedText = `Shared with ${TECH_NAME} (${o.org})`;
     await test.step(`Desk consents in the extension: this tab only, ${o.consent.level}`, async () => {
       const consent = await pageMatching(deskCtx, (u) => u.startsWith(`chrome-extension://${extId}/consent.html`));
       await expect(consent.getByRole('heading', { name: `${TECH_NAME} wants to see your browser` })).toBeVisible();
@@ -188,13 +194,17 @@ export async function startP2Session(o: { org: string; label: string; consent: C
       await consent.locator(`#level-${o.consent.level}`).check();
       if (o.consent.backstage) await consent.locator('#bg').check();
       await shot(consent, 'desk-consent');
+      sharedAt = Date.now();
       await consent.getByRole('button', { name: 'Share', exact: true }).click();
       await expect(fixture).toHaveTitle(/^\(Shared\) IA Fixture Form$/);
       await expect(fixture.locator('ia-indicator')).toHaveCount(1);
+      // The bar is in a closed shadow root; the e2e build mirrors it into data-ia-e2e-* host attributes (BAR).
+      await expect(fixture.locator(BAR), 'bar names the technician and the organisation').toHaveAttribute('data-ia-e2e-bar', sharedText);
+      await expect(fixture.locator(BAR)).toHaveAttribute('data-ia-e2e-text', /Pause this tab.*Stop sharing$/);
       await expect(assist.getByRole('tab', { name: /IA Fixture Form/ })).toBeVisible();
     });
 
-    return { assist, desk: deskCtx, worker, extId, fixture, panel, sessionId, fixtureTabId, close };
+    return { assist, desk: deskCtx, worker, extId, fixture, panel, sessionId, fixtureTabId, sharedAt, sharedText, close };
   } catch (e) {
     await close();
     throw e;

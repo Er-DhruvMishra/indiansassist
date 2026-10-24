@@ -63,8 +63,11 @@ export function buildEnv(env = { ...readDotEnv(), ...process.env }) {
   // IA_DEV=1 forces a dev build, IA_DEV=0 a production build; unset, a build without VITE_REGION_ORIGINS is a dev
   // build (so `pnpm build` at the root works on a fresh checkout) and a build with it is a production build.
   const dev = env.IA_DEV !== undefined && env.IA_DEV !== '' ? env.IA_DEV === '1' : !env.VITE_REGION_ORIGINS;
+  // IA_E2E=1 compiles the e2e-only test hooks (the bar's data-ia-e2e-* mirror, content/indicator.ts); a production
+  // build refuses it, so no store build can carry them.
   const e2e = env.IA_E2E === '1';
   const { origins, problems } = parseRegionOriginList(env.VITE_REGION_ORIGINS, dev);
+  if (e2e && !dev) problems.push('IA_E2E=1 is for the dev e2e build only (set IA_DEV=1)');
   const regionOrigins = [...origins];
   if (dev) for (const o of DEV_WEB_ORIGINS) if (!regionOrigins.includes(o)) regionOrigins.push(o);
   if (regionOrigins.length === 0) problems.push('VITE_REGION_ORIGINS is empty (set it, or build with IA_DEV=1)');

@@ -5,6 +5,7 @@
  * Also the `(Shared) ` title prefix (re-applied after SPA title writes, restored on stop).
  */
 import type { BarState } from '../shared/bus-schemas';
+import { IS_E2E } from '../shared/constants';
 import { el } from '../shared/dom';
 
 const HOST_STYLE: [string, string][] = [
@@ -192,6 +193,9 @@ export class IndicatorBar {
     bar.appendChild(this.button('Stop sharing', () => this.h.onStop(), 'stop'));
     if (old) this.root.replaceChild(bar, old);
     else this.root.appendChild(bar);
+    // `IS_E2E` is the compile-time `IA_E2E=1` flag: `false` in every other build, so this call and the function are
+    // dropped from the bundle (test/indicator-e2e-hook.test.ts builds content.js and checks).
+    if (IS_E2E) mirrorBarForE2e(this.host, bar, this.state, [...this.prompts.values()].map((p) => p.text), this.toastText);
   }
 
   private button(label: string, onClick: () => void, cls?: string): HTMLButtonElement {
@@ -218,6 +222,28 @@ export class IndicatorBar {
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.host.remove();
   }
+}
+
+/**
+ * E2E builds only (section 13.2). Playwright cannot pierce the closed shadow root, and the content script's isolated
+ * world cannot hand the page's main world a JS reference, so the bar's state is mirrored into `data-ia-e2e-*`
+ * attributes on the host (the DOM is shared between worlds; the host is `data-ia-block`, so rrweb never mirrors
+ * them): `bar` (the status text), `text` (everything on the bar), `prompts` (open prompt cards joined by " | "),
+ * `toast`, and `buttons` (each button's label and centre in viewport pixels, so a test clicks it with real mouse
+ * input that lands inside the closed root exactly as a user's click would).
+ */
+export function mirrorBarForE2e(host: HTMLElement, bar: HTMLElement, s: BarState, prompts: string[], toast: string | null): void {
+  const set = (name: string, value: string | null) =>
+    value === null ? host.removeAttribute(`data-ia-e2e-${name}`) : host.setAttribute(`data-ia-e2e-${name}`, value);
+  set('bar', barText(s));
+  set('text', bar.textContent ?? '');
+  set('prompts', prompts.length > 0 ? prompts.join(' | ') : null);
+  set('toast', toast);
+  const buttons = [...bar.querySelectorAll('button')].map((b) => {
+    const r = b.getBoundingClientRect();
+    return { label: b.textContent ?? '', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  set('buttons', JSON.stringify(buttons));
 }
 
 export const SHARED_PREFIX = '(Shared) ';

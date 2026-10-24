@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>IA Fixture SPA</title>
+    <style>
+      body { font-family: sans-serif; margin: 24px; }
+      #rows { height: 420px; overflow: auto; border: 1px solid #999; margin: 8px 0; padding: 0; }
+      #rows li { list-style: none; padding: 2px 8px; border-bottom: 1px solid #eee; }
+    </style>
+  </head>
+  <body>
+    <!-- Bandwidth scenario B (contract 13.4): a 500-row list that is re-rendered from scratch on every filter keystroke. -->
+    <h1>IA fixture: employee directory</h1>
+    <label>Filter <input id="filter" type="search" autocomplete="off" /></label>
+    <p id="count"></p>
+    <ul id="rows"></ul>
+    <script>
+      const DEPTS = ['Payroll team', 'People ops', 'Finance desk', 'IT support', 'Sales floor'];
+      const CITIES = ['Mumbai', 'Pune', 'Delhi', 'Chennai', 'Kolkata', 'Jaipur', 'Indore'];
+      const data = Array.from({ length: 500 }, (_, i) => ({
+        name: 'Employee ' + String(i + 1).padStart(4, '0'),
+        dept: DEPTS[i % DEPTS.length],
+        city: CITIES[i % CITIES.length],
+      }));
+      const filter = document.getElementById('filter');
+      const list = document.getElementById('rows');
+      const count = document.getElementById('count');
+      function render() {
+        const q = filter.value.trim().toLowerCase();
+        const rows = data.filter((r) => !q || (r.name + ' ' + r.dept + ' ' + r.city).toLowerCase().includes(q));
+        const frag = document.createDocumentFragment();
+        for (const r of rows) {
+          const li = document.createElement('li');
+          li.textContent = r.name + ' - ' + r.dept + ' - ' + r.city + ' office';
+          frag.appendChild(li);
+        }
+        list.replaceChildren(frag);
+        count.textContent = rows.length + ' of 500 employees';
+      }
+      filter.addEventListener('input', render);
+      render();
+    </script>
+  </body>
+</html>

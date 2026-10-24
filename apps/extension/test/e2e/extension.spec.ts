@@ -6,12 +6,13 @@
  * on the fixture form; the console replayer renders the page with the password (fixed 8-char mask), the
  * [data-ia-sensitive] span and the typed input masked and the [data-ia-block] panel absent; Assist opens a new tab
  * through ia.control and the Desk gets it; a raw in_page frame above the consent is refused by the extension
- * (not_allowed); Stop sharing from the side panel ends the session; the audit chain holds session.consent_granted,
- * mirror.started, tab.action and mirror.stopped, and verifies.
+ * (not_allowed); **Stop sharing** clicked on the tab bar itself (E11: a real mouse click inside the bar's closed
+ * shadow root, at the centre the e2e build's `data-ia-e2e-buttons` reports) ends the session and removes the bar;
+ * the audit chain holds session.consent_granted, mirror.started, tab.action and mirror.stopped, and verifies.
  */
 import { MASK_FIXED } from '@indiansassist/shared';
 import { expect, test } from '@playwright/test';
-import { FIXTURES, rawControl, readMirror, shot, shots } from './helpers';
+import { BAR, FIXTURES, clickBarButton, rawControl, readMirror, shot, shots } from './helpers';
 import { openAudit, startP2Session, type P2Session } from './session';
 
 const PASSWORD = 'hunter2-secret';
@@ -22,7 +23,7 @@ test('Package 2: extension Desk mirrors a tab to the Assist console and takes ta
   let s: P2Session | null = null;
   try {
     s = await startP2Session({ org: 'E2E Extension Clinic', label: 'E2E P2 ticket', consent: { level: 'tab_control' } });
-    const { assist, desk: deskCtx, fixture, panel, fixtureTabId } = s;
+    const { assist, desk: deskCtx, fixture, panel, fixtureTabId, sharedText } = s;
     await shot(fixture, 'desk-fixture-shared');
 
     await test.step('Assist replayer renders the page with the protected fields masked', async () => {
@@ -69,11 +70,14 @@ test('Package 2: extension Desk mirrors a tab to the Assist console and takes ta
       await expect(fixture.locator('#toggle')).toHaveText('Off');
     });
 
-    await test.step('Desk stops sharing from the side panel; both sides show the end', async () => {
+    await test.step('Desk stops sharing from the tab bar; the bar goes and both sides show the end', async () => {
       const p = panel;
-      await p.getByRole('button', { name: 'Stop sharing' }).click();
+      await fixture.bringToFront();
+      await expect(fixture.locator(BAR)).toHaveAttribute('data-ia-e2e-bar', sharedText);
+      await shot(fixture, 'desk-fixture-bar-before-stop');
+      await clickBarButton(fixture, 'Stop sharing');
+      await expect(fixture.locator(BAR), 'the bar is removed on Stop').toHaveCount(0);
       await expect(p.getByRole('heading', { name: 'Session ended' })).toBeVisible();
-      await expect(fixture.locator('ia-indicator')).toHaveCount(0);
       await expect(fixture).toHaveTitle('IA Fixture Form');
       await expect(assist.getByText(/^Session ended/).first()).toBeVisible();
       await shot(p, 'desk-sidepanel-receipt');

@@ -10,6 +10,24 @@ export const WEB = 'http://localhost:5173';
 export const FIXTURES = `http://localhost:${process.env.E2E_FIXTURE_PORT || '4175'}`;
 export const HEADLESS = process.env.E2E_HEADED !== '1';
 
+/**
+ * The sharing bar's host. Its closed shadow root is opaque to Playwright; the e2e build (IA_E2E=1) mirrors the
+ * bar into host attributes (src/content/indicator.ts `mirrorBarForE2e`): `data-ia-e2e-bar` (status text),
+ * `data-ia-e2e-text` (everything on the bar), `data-ia-e2e-prompts`, `data-ia-e2e-toast`, `data-ia-e2e-buttons`.
+ */
+export const BAR = 'ia-indicator';
+
+/**
+ * Clicks a button of the sharing bar with real mouse input at the centre the e2e hook reports, so the click
+ * lands inside the closed shadow root exactly as a user's would.
+ */
+export async function clickBarButton(page: Page, label: string): Promise<void> {
+  const raw = await page.locator(BAR).getAttribute('data-ia-e2e-buttons');
+  const b = (JSON.parse(raw ?? '[]') as { label: string; x: number; y: number }[]).find((x) => x.label === label);
+  if (!b) throw new Error(`no bar button "${label}" in ${raw}`);
+  await page.mouse.click(b.x, b.y);
+}
+
 /** Fake media on both sides; host candidates as plain IPs so two Chromium processes on one machine connect P2P. */
 export const MEDIA_ARGS = [
   '--use-fake-ui-for-media-stream',
@@ -91,6 +109,8 @@ export type PcStats = {
   audioIn: { live: boolean; unmuted: boolean; bytes: number };
   /** RTCP receiver reports about our outbound audio (the remote side receives it). */
   audioOutReports: number;
+  /** Audio RTP both ways, payload + RTP headers (`inbound-rtp` + `outbound-rtp`, kind audio): the voice share. */
+  audioRtpBytes: number;
 };
 
 /** Reads `getStats()` of every open peer connection the Assist page recorded. */
@@ -104,6 +124,8 @@ export async function assistStats(page: Page): Promise<PcStats> {
       bytesSent?: number;
       roundTripTimeMeasurements?: number;
       roundTripTime?: number;
+      headerBytesReceived?: number;
+      headerBytesSent?: number;
     };
     const pcs = ((window as unknown as { __iaPcs?: RTCPeerConnection[] }).__iaPcs ?? []).filter(
       (pc) => pc.connectionState !== 'closed',
@@ -113,6 +135,7 @@ export async function assistStats(page: Page): Promise<PcStats> {
       transportBytes: 0,
       audioIn: { live: false, unmuted: false, bytes: 0 },
       audioOutReports: 0,
+      audioRtpBytes: 0,
     };
     for (const pc of pcs) {
       const stats = await pc.getStats();
@@ -120,7 +143,11 @@ export async function assistStats(page: Page): Promise<PcStats> {
         if (s.type === 'data-channel' && s.label)
           out.channelBytes[s.label] = (out.channelBytes[s.label] ?? 0) + (s.bytesReceived ?? 0);
         else if (s.type === 'transport') out.transportBytes += (s.bytesReceived ?? 0) + (s.bytesSent ?? 0);
-        else if (s.type === 'inbound-rtp' && s.kind === 'audio') out.audioIn.bytes += s.bytesReceived ?? 0;
+        else if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+          out.audioIn.bytes += s.bytesReceived ?? 0;
+          out.audioRtpBytes += (s.bytesReceived ?? 0) + (s.headerBytesReceived ?? 0);
+        } else if (s.type === 'outbound-rtp' && s.kind === 'audio')
+          out.audioRtpBytes += (s.bytesSent ?? 0) + (s.headerBytesSent ?? 0);
         else if (s.type === 'remote-inbound-rtp' && s.kind === 'audio')
           out.audioOutReports += s.roundTripTimeMeasurements ?? (s.roundTripTime !== undefined ? 1 : 0);
       });
