@@ -61,11 +61,32 @@ pnpm e2e:ext    # Package 2: the unpacked extension in a persistent Chromium con
 Both start their own api (fresh PGlite under `./data/e2e` or `./data/e2e-ext`, rate limits off) and the Vite dev
 server, so ports 4000 and 5173 must be free (stop `pnpm dev` first). `E2E_API_PORT=4100` moves the api when :4000
 is taken. `pnpm e2e:ext` also builds the extension into `apps/extension/dist-e2e` and serves the fixture pages of
-`apps/extension/test/fixtures` on :4175. `E2E_HEADED=1` shows the browsers. Screenshots land in
+`apps/extension/test/fixtures` on :4175; its bandwidth gate (contract 13.4) runs three 60 s windows, and
+`E2E_BW_SECONDS=15` shortens them for a quick local run (not the gate). `E2E_HEADED=1` shows the browsers. Screenshots land in
 `apps/web/e2e/artifacts/` and `apps/extension/test/e2e/artifacts/`.
 
 Configuration: `apps/api/.env.example` (copy to `.env` at the repo root), `apps/web/.env.example` and
 `apps/extension/.env.example`; every variable has a dev default, so none is needed for local development.
+
+### Server-side recorder (Phase A.2, Go)
+
+`services/recorder` is a headless pion/webrtc peer of the **Desk** that writes a WebM of the shared screen (and the
+Desk microphone) to disk and uploads it with its sha256 into the audit chain, so a durable recording does not depend
+on the technician's browser. Contract: [docs/specs/phase-a2-recorder.md](docs/specs/phase-a2-recorder.md). It needs
+Go 1.27.
+
+```
+pnpm recorder:test     # go vet ./... and go test ./... in services/recorder
+pnpm recorder:build    # binary in ./data/recorder-bin/
+```
+
+Run it locally against `pnpm dev`: start the api with a service token (`RECORDER_TOKEN=<32+ chars>` in `.env`),
+then `RECORDER_TOKEN=<same> ./data/recorder-bin/recorder` (defaults: `API_URL=http://localhost:4000`,
+`OUT_DIR=./data/recorder`, `/healthz` and `/metrics` on `:9470`). An org admin turns it on with
+`PATCH /api/v1/orgs/current/policy/recording { "recordingMode": "server" | "both" }`; the Desk consent screen then
+says that the server records. `RECORDER_TOKEN=<same> pnpm smoke:recorder` checks the signaling, upload and audit
+path against a running api with a Node client acting as the recorder (no media). In Compose the recorder is the
+`recorder` profile: `docker compose --profile recorder up -d` (env in `infra/.env.example`).
 
 ## Self host
 

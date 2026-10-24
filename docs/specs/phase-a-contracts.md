@@ -1337,7 +1337,7 @@ Run `pnpm dev` (api :4000, web :5173). Browser 1 = Assist (Chrome). Browser 2 = 
 
 | Item | Phase |
 |---|---|
-| Server-side pion recorder (also the only way to detect out-of-band recording by a modified console; Phase A relies on the console's `recording.started` report plus the server push) | A.2 |
+| Server-side pion recorder (also the only way to detect out-of-band recording by a modified console; Phase A relies on the console's `recording.started` report plus the server push) | A.2, delivered: `docs/specs/phase-a2-recorder.md` |
 | Supervisor join (`supervisor` participant, `session.supervisor_joined`) and session handoff | A.2 |
 | OIDC / Keycloak end to end, SAML | E |
 | PSA integrations (`integration` rows exist, no endpoints) | E |

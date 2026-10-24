@@ -19,6 +19,7 @@ export function ensureLive(hub: SignalHub, s: SessionRow): Live {
   live.path = s.path;
   live.tier = s.tier;
   live.consent = consentOfRow(s);
+  live.recordingMode = s.recordingMode ?? null;
   return live;
 }
 
@@ -73,6 +74,7 @@ export function sessionCreatedMsg(
     desk: { label: s.deskLabel ?? 'Desk' },
     org: brandingPublic(org),
     polite: side === 'assist',
+    recordingMode: s.recordingMode ?? 'assist_only',
     ...(s.tier === 'p2_extension' ? { extension: { policy: hub.live.get(s.id)?.policy ?? policyOf(org) } } : {}),
   };
   if (side === 'desk') return base;

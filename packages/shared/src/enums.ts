@@ -66,7 +66,8 @@ export const SESSION_END_REASONS = [
 ] as const;
 export type SessionEndReason = (typeof SESSION_END_REASONS)[number];
 
-export const PARTICIPANT_ROLES = ['assist', 'desk', 'supervisor'] as const;
+/** `recorder` (Phase A.2, docs/specs/phase-a2-recorder.md section 2): the server-side recorder participant. */
+export const PARTICIPANT_ROLES = ['assist', 'desk', 'supervisor', 'recorder'] as const;
 export type ParticipantRole = (typeof PARTICIPANT_ROLES)[number];
 
 export const ACTOR_TYPES = ['user', 'desk', 'system'] as const;
@@ -74,6 +75,47 @@ export type ActorType = (typeof ACTOR_TYPES)[number];
 
 export const RECORDING_STATUSES = ['uploading', 'stored', 'failed'] as const;
 export type RecordingStatus = (typeof RECORDING_STATUSES)[number];
+
+// ---------- Phase A.2 (docs/specs/phase-a2-recorder.md sections 3, 5, 9) ----------
+
+/** Org recording policy (A.2 section 3); `assist_only` is the Phase A behaviour and the default. */
+export const RECORDING_MODES = ['off', 'assist_only', 'server', 'both'] as const;
+export type RecordingMode = (typeof RECORDING_MODES)[number];
+export const DEFAULT_RECORDING_MODE: RecordingMode = 'assist_only';
+
+/** True when the mode lets the Assist console record (`MediaRecorder`, Phase A section 9). */
+export function assistMayRecord(mode: RecordingMode | null | undefined): boolean {
+  const m = mode ?? DEFAULT_RECORDING_MODE;
+  return m === 'assist_only' || m === 'both';
+}
+
+/** True when the mode asks for the server recorder. */
+export function serverRecords(mode: RecordingMode | null | undefined): mode is 'server' | 'both' {
+  return mode === 'server' || mode === 'both';
+}
+
+/** Who made a recording (`recording.recorded_by`). */
+export const RECORDING_SOURCES = ['assist', 'server'] as const;
+export type RecordingSource = (typeof RECORDING_SOURCES)[number];
+
+/** Why server recording of a session stopped (`recording.server_stopped.reason`, `recorder.leave.reason`). */
+export const RECORDER_STOP_REASONS = [
+  'session_ended',
+  'recorder_left',
+  'track_ended',
+  'media_failed',
+  'limit_reached',
+  'disk_error',
+  'shutdown',
+] as const;
+export type RecorderStopReason = (typeof RECORDER_STOP_REASONS)[number];
+
+/** The far end of a relayed `webrtc.*` frame on the Desk side (A.2 section 7 N2); absent = `assist`. */
+export const WEBRTC_PEERS = ['assist', 'recorder'] as const;
+export type WebrtcPeer = (typeof WEBRTC_PEERS)[number];
+
+/** `recorderId` (A.2 section 2 P4). */
+export const RECORDER_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export const FILE_DIRECTIONS = ['assist_to_desk', 'desk_to_assist'] as const;
 export type FileDirection = (typeof FILE_DIRECTIONS)[number];
@@ -189,6 +231,14 @@ export const LIMITS = {
   deskClientStringMax: 32,
   browserVersionMax: 8,
   recordingRetentionDaysMax: 3650,
+  // ---------- Phase A.2 (docs/specs/phase-a2-recorder.md section 11) ----------
+  recorderJoinTimeoutMs: 10_000,
+  recorderAssignAttempts: 3,
+  recorderMaxSessionsDefault: 8,
+  recorderMaxSessionsMax: 256,
+  recorderFramesPerSec: 200,
+  recorderFramesBurst: 400,
+  recorderTokenMinProd: 32,
 } as const;
 
 export const DEFAULT_ANNOT_COLOR = '#f59e0b';

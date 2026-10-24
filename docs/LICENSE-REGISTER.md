@@ -27,5 +27,11 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | rrweb 2.1.7 (exact pin) with rrweb-snapshot, rrdom, @rrweb/types, @rrweb/utils, mitt, @xstate/fsm, base64-arraybuffer | MIT (all) | P2 DOM mirroring: replay in the Assist console's replayer frame (`apps/web`); `record()` in the extension capture script (`apps/extension`, bundled into `content.js`) | in use (Phase B, web and extension) |
 | @types/chrome 0.3.4 (+ @types/har-format) | MIT | extension API typings (`apps/extension`, dev only, not shipped) | in use (dev, Phase B) |
 | eslint-plugin-no-unsanitized 4.1.5 | MPL-2.0 (unmodified dev tool, nothing copied into our code, not shipped) | bans `innerHTML` and friends in `apps/extension` (section 12.1) | in use (dev, Phase B) |
-| pion/webrtc | MIT | server-side recorder | Phase A.2 |
+| pion/webrtc v4 (with pion/ice, interceptor, rtcp, rtp, dtls, srtp, sctp, sdp, stun, turn, transport, mdns, logging, randutil, datachannel) | MIT | server-side recorder (`services/recorder`): receive-only peer connection, RTP depacketising, NACK / PLI | in use (Phase A.2) |
+| at-wat/ebml-go | Apache-2.0 | server-side recorder: incremental WebM (Matroska) writer | in use (Phase A.2) |
+| gorilla/websocket | BSD-2-Clause | server-side recorder: `/signal` client | in use (Phase A.2) |
+| prometheus/client_golang (+ client_model, common, procfs; beorn7/perks, cespare/xxhash MIT; munnerz/goautoneg BSD-3-Clause) | Apache-2.0 | server-side recorder `/metrics` | in use (Phase A.2) |
+| golang.org/x/{crypto,net,sys,time}, google.golang.org/protobuf, google/uuid, wlynxg/anet | BSD-3-Clause | indirect dependencies of the recorder | in use (Phase A.2) |
+| Go toolchain and standard library (golang:1.27 build image) | BSD-3-Clause | builds `services/recorder` | in use (build only) |
+| distroless static-debian12 base image | Apache-2.0 (Debian packages under their own permissive licences) | recorder runtime image | self-hosted image |
 | RustDesk, MinIO source | AGPL | reference reading only, never copied | forbidden in repo |

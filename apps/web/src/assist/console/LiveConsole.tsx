@@ -1,6 +1,6 @@
 /** The live technician console for one session (contracts section 12 /app/sessions/:id). */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { SessionCreated } from '@indiansassist/shared';
+import { assistMayRecord, type Session, type SessionCreated } from '@indiansassist/shared';
 import { useAuth } from '../../auth/AuthContext';
 import { ChatPanel } from '../../components/ChatPanel';
 import { Dialog } from '../../components/Dialog';
@@ -19,6 +19,7 @@ import { AssistConsoleController } from './controller';
 import { EndedView, RecordingCard } from './EndedView';
 import { NetworkPanel } from './NetworkPanel';
 import { RemoteView } from './RemoteView';
+import { CONSOLE_RECORDING_DISABLED_TEXT, ServerRecordingBadge } from './ServerRecordingBadge';
 
 const PHASE_TEXT: Record<string, string> = {
   resuming: 'Reconnecting to the session...',
@@ -30,7 +31,17 @@ const PHASE_TEXT: Record<string, string> = {
   ended: 'Session ended',
 };
 
-export function LiveConsole({ sessionId, signal, cached, helloReady, deskLabel }: { sessionId: string; signal: SignalClient; cached: SessionCreated | undefined; helloReady: boolean; deskLabel: string }) {
+type LiveConsoleProps = {
+  sessionId: string;
+  signal: SignalClient;
+  cached: SessionCreated | undefined;
+  helloReady: boolean;
+  deskLabel: string;
+  /** The REST `Session` once loaded (A.2 M4: recording mode and server recording state). */
+  session?: Pick<Session, 'recordingMode' | 'serverRecording'> | null;
+};
+
+export function LiveConsole({ sessionId, signal, cached, helloReady, deskLabel, session }: LiveConsoleProps) {
   const [ctrl, setCtrl] = useState<AssistConsoleController | null>(null);
   const startArgs = useRef({ cached, helloReady });
   useEffect(() => {
@@ -40,6 +51,9 @@ export function LiveConsole({ sessionId, signal, cached, helloReady, deskLabel }
     setCtrl(c);
     return () => c.dispose();
   }, [signal, sessionId]);
+  useEffect(() => {
+    if (ctrl && session) ctrl.applySession(session);
+  }, [ctrl, session]);
   if (!ctrl) return <Spinner label="Opening the console" />;
   return <ConsoleView key={sessionId} ctrl={ctrl} sessionId={sessionId} signal={signal} deskLabel={deskLabel} />;
 }
@@ -108,7 +122,17 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
     );
   }
 
-  const recBtn = snap.recording === 'recording' ? (
+  const mayRecord = assistMayRecord(snap.recordingMode);
+  const recBtn = !mayRecord ? (
+    <span className="flex items-center gap-2">
+      <Button variant="secondary" size="sm" disabled aria-describedby="console-rec-disabled">
+        Record
+      </Button>
+      <span id="console-rec-disabled" className="text-xs text-slate-700 dark:text-slate-300">
+        {CONSOLE_RECORDING_DISABLED_TEXT}
+      </span>
+    </span>
+  ) : snap.recording === 'recording' ? (
     <Button variant="danger" size="sm" onClick={() => void ctrl.stopRecording()} aria-pressed="true">
       <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-white" /> Stop recording
     </Button>
@@ -125,6 +149,7 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
         <Badge tone={snap.phase === 'live' ? 'green' : 'amber'}>{humanise(snap.phase)}</Badge>
         {snap.recording === 'recording' && <Badge tone="red">Recording</Badge>}
         {snap.recording === 'failed' && snap.recordingFailure === 'recorder' && <Badge tone="red">Recording failed</Badge>}
+        <ServerRecordingBadge state={snap.serverRecording} />
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {recBtn}
           <ShortcutHelp extra={CONSOLE_SHORTCUTS} />

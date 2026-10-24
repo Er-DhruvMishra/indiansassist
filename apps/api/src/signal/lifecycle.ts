@@ -13,6 +13,7 @@ import { surfaceOf } from '../lib/mappers.js';
 import { isoOrNull, iso } from '../lib/time.js';
 import { endSessionQuietly, type EndedSession } from '../services/session-end.js';
 import { clearTimer, clearTimers, setTimer, type Conn, type Live } from './conn.js';
+import { onRecorderClosed, recorderOnEnded } from './recorder.js';
 import type { SignalHub } from './hub.js';
 
 const KNOCK_CLOSED_BY: Partial<Record<SessionEndReason, string>> = {
@@ -49,6 +50,7 @@ export async function notifyTokenPresence(hub: SignalHub, tokenId: string): Prom
 
 export async function onConnClosed(hub: SignalHub, conn: Conn): Promise<void> {
   const { ctx } = hub;
+  if (conn.side === 'recorder') return onRecorderClosed(hub, conn);
   if (conn.side === 'desk' && conn.desk) {
     const sid = conn.desk.sessionId;
     const live = sid ? hub.live.get(sid) : undefined;
@@ -123,11 +125,13 @@ export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promi
     surface: surfaceOf(s),
     recordingStarted: s.recordingStarted,
     reachedActive: s.startedAt !== null,
+    serverRecording: s.serverRecording,
   };
   const desk = hub.conn(live?.deskConnId);
   const assist = hub.conn(live?.assistConnId);
   desk?.send(msg);
   assist?.send(msg);
+  if (live) await recorderOnEnded(hub, live, msg);
   // No live entry here: the sockets of this session (if any) are piped from nodes whose owner is gone.
   if (!live) hub.bridge.endedWithoutOwner(s.id, msg);
   if (ended.previousState === 'knocked') {

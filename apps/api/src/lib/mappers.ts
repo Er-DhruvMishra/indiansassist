@@ -117,7 +117,13 @@ export function toToken(t: TokenRow, createdBy: UserRef, webOrigin: string, stat
   };
 }
 
-export type SessionRefs = { tokenCreatedBy: UserRef; assist: UserRef; recordingId: string | null };
+export type SessionRefs = {
+  tokenCreatedBy: UserRef;
+  assist: UserRef;
+  recordingId: string | null;
+  /** Phase A.2 M4. */
+  serverRecordingId?: string | null;
+};
 
 const SURFACES = new Set(['monitor', 'window', 'browser', 'unknown']);
 
@@ -153,6 +159,9 @@ export function toSession(s: SessionRow, refs: SessionRefs): Session {
     consentScope: s.consentScope ?? null,
     consentBackstage: s.consentBackstage ?? null,
     deskClient: (s.deskClient as Session['deskClient']) ?? null,
+    recordingMode: s.recordingMode ?? null,
+    serverRecording: s.serverRecording,
+    serverRecordingId: refs.serverRecordingId ?? null,
   };
 }
 
@@ -187,6 +196,7 @@ export function toRecording(r: RecordingRow): Recording {
     createdAt: iso(r.createdAt),
     storedAt: isoOrNull(r.storedAt),
     deletedAt: isoOrNull(r.deletedAt),
+    recordedBy: r.recordedBy,
   };
 }
 

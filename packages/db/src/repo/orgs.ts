@@ -1,6 +1,6 @@
 /** org repository. `data_region` is set once at creation and is immutable (rule R1), enforced here and by trigger. */
 import { randomBytes } from 'node:crypto';
-import { isRegion, type PackageTier, type Region } from '@indiansassist/shared';
+import { isRegion, type PackageTier, type RecordingMode, type Region } from '@indiansassist/shared';
 import { eq } from 'drizzle-orm';
 import type { Executor } from '../client.js';
 import { NotFoundError, RegionImmutableError } from '../errors.js';
@@ -25,6 +25,8 @@ export type OrgPatch = {
   /** Phase B 11.1 (stored as given; read through mergePolicy). */
   extensionPolicy?: Record<string, unknown>;
   recordingRetentionDays?: number | null;
+  /** Phase A.2 section 3. */
+  recordingMode?: RecordingMode;
 };
 
 export function generateAuditPepper(): string {
@@ -69,7 +71,7 @@ export async function isSlugTaken(exec: Executor, slug: string): Promise<boolean
   return (await getOrgBySlug(exec, slug)) !== null;
 }
 
-const PATCHABLE = new Set<string>(['name', 'branding', 'planTier', 'ssoConfig', 'extensionPolicy', 'recordingRetentionDays']);
+const PATCHABLE = new Set<string>(['name', 'branding', 'planTier', 'ssoConfig', 'extensionPolicy', 'recordingRetentionDays', 'recordingMode']);
 
 /**
  * Updates mutable org columns. Throws RegionImmutableError when the patch carries `dataRegion` (or its column

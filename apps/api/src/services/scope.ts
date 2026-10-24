@@ -3,6 +3,7 @@
  * cross-org objects are `404 not_found`; same-org objects outside a technician's `own` scope are `403 forbidden`.
  * `own` for sessions = `assist_user_id` is the caller OR `token.created_by` is the caller.
  */
+import { assistMayRecord } from '@indiansassist/shared';
 import { findTokenByTid, getSession, type SessionRow, type TokenRow } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
@@ -48,4 +49,16 @@ export function requireSessionAssist(p: Principal, s: SessionRow): void {
 /** Recordings and file attestations exist only for sessions that reached `active` (consent was given). */
 export function requireReachedActive(s: SessionRow): void {
   if (s.startedAt === null) fail('forbidden', 'the session never reached active (no consent was given)');
+}
+
+/**
+ * Phase A.2 section 3: the Assist console may record a P1 session only under `assist_only` / `both` (null = before
+ * A.2 = `assist_only`). The server recorder captures P1 video only, so other tiers are refused only under `off`.
+ */
+export function assistMayRecordSession(s: Pick<SessionRow, 'tier' | 'recordingMode'>): boolean {
+  return s.tier === 'p1_browser' ? assistMayRecord(s.recordingMode) : s.recordingMode !== 'off';
+}
+
+export function requireAssistMayRecord(s: Pick<SessionRow, 'tier' | 'recordingMode'>): void {
+  if (!assistMayRecordSession(s)) fail('forbidden', 'console recording is disabled by the organisation policy');
 }

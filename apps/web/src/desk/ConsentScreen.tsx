@@ -8,6 +8,7 @@ import { Alert, Button } from '../components/ui';
 import { safeAccent } from '../lib/contrast';
 import { safeLogo } from './brand';
 import type { DeskController, DeskSnapshot } from './deskController';
+import { serverRecordingNotice } from './deskMedia';
 import { DeskLayout } from './DeskLayout';
 
 export function ConsentScreen({ ctrl, snap }: { ctrl: DeskController; snap: DeskSnapshot }) {
@@ -17,6 +18,8 @@ export function ConsentScreen({ ctrl, snap }: { ctrl: DeskController; snap: Desk
   if (!created) return null;
   const org = created.org;
   const busy = snap.phase !== 'consent';
+  // A.2 U1 / M2: the server recording is part of what the Desk consents to, shown before the picker.
+  const recordingNotice = serverRecordingNotice(created.recordingMode, org.displayName, snap.hello?.region);
   return (
     <DeskLayout brand={org}>
       <div className="rounded-lg border-t-4 bg-white p-5 shadow-sm dark:bg-slate-900" style={{ borderTopColor: safeAccent(org.accentColor) }}>
@@ -50,6 +53,12 @@ export function ConsentScreen({ ctrl, snap }: { ctrl: DeskController; snap: Desk
             <input type="checkbox" className="mt-1 h-5 w-5" checked={ready} onChange={(e) => setReady(e.target.checked)} aria-required="true" />
             <span>I have closed or hidden anything private</span>
           </label>
+          {recordingNotice && (
+            <p className="mt-3 flex items-start gap-2 border-t border-slate-300 pt-3 dark:border-slate-600" data-testid="server-recording-notice">
+              <span aria-hidden="true" className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-red-700" />
+              <span>{recordingNotice}</span>
+            </p>
+          )}
         </section>
         {snap.notice && <div className="mb-3"><Alert tone="amber">{snap.notice}</Alert></div>}
         <div className="flex flex-wrap gap-2" aria-live="polite">

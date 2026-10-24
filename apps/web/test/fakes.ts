@@ -56,6 +56,22 @@ class FakeChannel extends EventTarget {
   }
 }
 
+/** An RTCRtpSender double: `replaceTrack` calls are recorded. */
+export class FakeSender {
+  replaced: (MediaStreamTrack | null)[] = [];
+  constructor(public track: MediaStreamTrack | null) {}
+  async replaceTrack(track: MediaStreamTrack | null): Promise<void> {
+    this.track = track;
+    this.replaced.push(track);
+  }
+}
+
+export type FakeTransceiver = {
+  direction: RTCRtpTransceiverDirection;
+  sender: FakeSender;
+  receiver: { track: { kind: string } };
+};
+
 export class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
   static reset(): void {
@@ -66,6 +82,9 @@ export class FakePeerConnection {
   localDescription: { type: string; sdp: string } | null = null;
   channels: FakeChannel[] = [];
   tracks: MediaStreamTrack[] = [];
+  transceivers: FakeTransceiver[] = [];
+  remoteDescription: RTCSessionDescriptionInit | null = null;
+  candidates: (RTCIceCandidateInit | undefined)[] = [];
   closed = false;
   onnegotiationneeded: (() => void) | null = null;
   onicecandidate: ((e: { candidate: null }) => void) | null = null;
@@ -80,16 +99,40 @@ export class FakePeerConnection {
     this.channels.push(ch);
     return ch;
   }
-  addTrack(track: MediaStreamTrack): object {
+  /** Reuses a transceiver of the same kind created by a remote offer and not yet sending (as browsers do). */
+  addTrack(track: MediaStreamTrack): FakeSender {
     this.tracks.push(track);
-    return { track };
+    const free = this.transceivers.find((t) => t.receiver.track.kind === track.kind && t.sender.track === null && t.direction === 'recvonly');
+    if (free) {
+      free.sender.track = track;
+      free.direction = 'sendrecv';
+      return free.sender;
+    }
+    const sender = new FakeSender(track);
+    this.transceivers.push({ direction: 'sendrecv', sender, receiver: { track: { kind: track.kind } } });
+    return sender;
   }
   removeTrack(): void {}
-  async setLocalDescription(): Promise<void> {
-    this.localDescription = { type: 'offer', sdp: 'v=0 fake' };
+  getTransceivers(): FakeTransceiver[] {
+    return this.transceivers;
   }
-  async setRemoteDescription(): Promise<void> {}
-  async addIceCandidate(): Promise<void> {}
+  async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'answer', sdp: 'v=0 fake answer' };
+  }
+  async setLocalDescription(desc?: RTCSessionDescriptionInit): Promise<void> {
+    this.localDescription = desc?.sdp ? { type: desc.type ?? 'answer', sdp: desc.sdp } : { type: 'offer', sdp: 'v=0 fake' };
+  }
+  /** A remote offer adds one `recvonly` transceiver per `m=video` / `m=audio` line. */
+  async setRemoteDescription(desc?: RTCSessionDescriptionInit): Promise<void> {
+    this.remoteDescription = desc ?? null;
+    if (desc?.type !== 'offer') return;
+    for (const m of (desc.sdp ?? '').matchAll(/^m=(video|audio)/gm)) {
+      this.transceivers.push({ direction: 'recvonly', sender: new FakeSender(null), receiver: { track: { kind: m[1]! } } });
+    }
+  }
+  async addIceCandidate(c?: RTCIceCandidateInit): Promise<void> {
+    this.candidates.push(c);
+  }
   getConfiguration(): RTCConfiguration {
     return this.config;
   }

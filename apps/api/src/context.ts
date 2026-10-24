@@ -24,6 +24,8 @@ export type Timing = {
   eventGraceMs: number;
   /** How often a live socket's cookie principal is re-read from auth_session / user (section 7.2). */
   authRecheckMs: number;
+  /** Phase A.2: how long a recorder has to `recorder.join` an assignment. */
+  recorderJoinTimeoutMs: number;
 };
 
 export const DEFAULT_TIMING: Timing = {
@@ -36,6 +38,7 @@ export const DEFAULT_TIMING: Timing = {
   tickMs: 1_000,
   eventGraceMs: 60_000,
   authRecheckMs: 30_000,
+  recorderJoinTimeoutMs: 10_000,
 };
 
 export type AppContext = {

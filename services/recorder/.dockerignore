@@ -1,0 +1,7 @@
+data/
+*.webm
+*.test
+*.out
+Dockerfile
+.dockerignore
+README.md

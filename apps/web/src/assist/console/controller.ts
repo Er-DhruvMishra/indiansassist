@@ -3,75 +3,22 @@
  * immutable snapshots through `subscribe` / `snapshot`. Uses the shell's signaling socket (the accepting
  * socket is the session's Assist participant). Hard rule 2 is `teardown()`.
  */
-import type { DcAnnot, Recording, SessionCreated, SessionEnded } from '@indiansassist/shared';
-import { EMPTY_ANNOT, applyAnnot, pruneAnnot, type AnnotState } from '../../lib/annotation';
+import { assistMayRecord, type DcAnnot, type Session, type SessionCreated, type SessionEnded } from '@indiansassist/shared';
+import { EMPTY_ANNOT, applyAnnot, pruneAnnot } from '../../lib/annotation';
 import { errorMessage } from '../../lib/api';
 import { sessionsApi } from '../../lib/endpoints';
 import { IceRecovery } from '../../lib/iceRecovery';
-import { PeerLink, type ChatItem } from '../../lib/link';
-import type { Transfer } from '../../lib/fileTransfer';
+import { PeerLink } from '../../lib/link';
 import { toRtcIceServers } from '../../lib/peer';
 import { SessionControllerBase, type GetUserMedia } from '../../lib/sessionBase';
 import type { SignalClient } from '../../lib/signal';
-import { EMPTY_STATS, computeNetStats, type NetStats } from '../../lib/stats';
+import { computeNetStats, type NetStats } from '../../lib/stats';
 import { asClient } from '../../lib/wire';
-import { ConsoleRecording, type RecorderFactory, type RecordingFailure, type RecordingPhase } from './consoleRecording';
+import { ConsoleRecording, type RecorderFactory } from './consoleRecording';
+import { CONSOLE_INITIAL, serverRecordingFromPolicy, type ConsoleSnapshot } from './consoleState';
 
 export type { RecordingPhase } from './consoleRecording';
-export type ConsolePhase = 'resuming' | 'waiting_consent' | 'connecting' | 'live' | 'reconnecting' | 'ending' | 'ended';
-
-export type ConsoleSnapshot = {
-  phase: ConsolePhase;
-  created: SessionCreated | null;
-  remoteVideo: MediaStream | null;
-  remoteAudio: MediaStream | null;
-  connectionState: RTCPeerConnectionState;
-  chat: ChatItem[];
-  peerTyping: boolean;
-  transfers: Transfer[];
-  annot: AnnotState;
-  voiceOn: boolean;
-  muted: boolean;
-  peerMuted: boolean | null;
-  recording: RecordingPhase;
-  recordingUsed: boolean;
-  recordingFailure: RecordingFailure;
-  uploadProgress: number;
-  recordingResult: Recording | null;
-  net: NetStats;
-  /** Time to first frame (section 13.2): `consent.changed granted` to the first drawn remote frame. */
-  ttffMs: number | null;
-  relayOnly: boolean;
-  ended: SessionEnded | null;
-  notice: string | null;
-  error: string | null;
-};
-
-const INITIAL: ConsoleSnapshot = {
-  phase: 'resuming',
-  created: null,
-  remoteVideo: null,
-  remoteAudio: null,
-  connectionState: 'new',
-  chat: [],
-  peerTyping: false,
-  transfers: [],
-  annot: EMPTY_ANNOT,
-  voiceOn: false,
-  muted: false,
-  peerMuted: null,
-  recording: 'idle',
-  recordingUsed: false,
-  recordingFailure: null,
-  uploadProgress: 0,
-  recordingResult: null,
-  net: EMPTY_STATS,
-  ttffMs: null,
-  relayOnly: false,
-  ended: null,
-  notice: null,
-  error: null,
-};
+export type { ConsolePhase, ConsoleSnapshot, ServerRecordingState } from './consoleState';
 
 export type ControllerDeps = {
   signal: SignalClient;
@@ -98,9 +45,11 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
   private statTick = 0;
   private lastStatsSentAt = 0;
   private consentGrantedAt: number | null = null;
+  /** A.2 U4: a live server-source `session.recording` arrived; a later REST load never overrides it. */
+  private serverRecordingSeen = false;
 
   constructor(private readonly deps: ControllerDeps) {
-    super(INITIAL, 'assist', deps.getUserMedia);
+    super(CONSOLE_INITIAL, 'assist', deps.getUserMedia);
     this.rec = new ConsoleRecording({
       sessionId: deps.sessionId,
       set: (p) => this.set(p),
@@ -159,6 +108,12 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
         this.link?.peer.refreshIce(this.iceServers, false);
       })),
       s.on('chat.message', mine((m) => this.receiveChat(m))),
+      // A.2 S1 / S3: the API copies the server recorder's state to the Assist (also on assist.resume).
+      s.on('session.recording', mine((m) => {
+        if (m.source !== 'server') return;
+        this.serverRecordingSeen = true;
+        this.set({ serverRecording: m.recording ? 'on' : 'stopped' });
+      })),
       s.on('session.ended', mine((m: SessionEnded) => {
         this.teardown();
         this.set({ phase: 'ended', ended: m });
@@ -185,7 +140,9 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
 
   private onCreated(m: SessionCreated): void {
     this.iceServers = toRtcIceServers(m.iceServers ?? []);
-    this.set({ created: m, error: null });
+    const recordingMode = m.recordingMode ?? this.snap.recordingMode;
+    const serverRecording = serverRecordingFromPolicy(this.snap.serverRecording, recordingMode, undefined, this.serverRecordingSeen);
+    this.set({ created: m, error: null, recordingMode, serverRecording });
     if (m.state === 'active') {
       // Assist resume of an active session: the Desk rebuilds its connection and sends a fresh offer.
       this.closeLink();
@@ -341,8 +298,20 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
 
   // ---------- recording (section 9) ----------
 
+  /** A.2 section 3: modes `off` / `server` refuse the console recording (the API answers 403 as well). */
+  get mayRecord(): boolean {
+    return assistMayRecord(this.snap.recordingMode);
+  }
+
   startRecording(canvas: HTMLCanvasElement | null): void {
-    this.rec.start(canvas);
+    if (this.mayRecord) this.rec.start(canvas);
+  }
+
+  /** The REST `Session` of the page (A.2 M4): fills the mode when `session.created` had none, and the badge. */
+  applySession(d: Pick<Session, 'recordingMode' | 'serverRecording'>): void {
+    const recordingMode = this.snap.recordingMode ?? d.recordingMode ?? null;
+    const serverRecording = serverRecordingFromPolicy(this.snap.serverRecording, recordingMode, d.serverRecording, this.serverRecordingSeen);
+    this.set({ recordingMode, serverRecording });
   }
 
   /** Stops and uploads. `notifyPeer` is false during teardown (nothing more is sent on ia.ctrl). */

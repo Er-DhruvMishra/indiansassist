@@ -23,8 +23,10 @@ import {
 } from '../enums.js';
 import { sanitiseText, SANITISE_LIMITS } from './sanitise.js';
 import { P2_AUDIT_ACTIONS, P2_CHAIN_SCHEMAS } from './actions-p2.js';
+import { A2_AUDIT_ACTIONS, A2_CHAIN_SCHEMAS, recordingFailedDataSchema, recordingStoredDataSchema } from './actions-a2.js';
 
 export * from './actions-p2.js';
+export * from './actions-a2.js';
 
 export const AUDIT_ACTIONS = [
   'auth.signup',
@@ -61,6 +63,8 @@ export const AUDIT_ACTIONS = [
   'session.supervisor_joined',
   // Phase B (docs/specs/phase-b-contracts.md section 3.6)
   ...P2_AUDIT_ACTIONS,
+  // Phase A.2 (docs/specs/phase-a2-recorder.md section 6)
+  ...A2_AUDIT_ACTIONS,
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -144,14 +148,9 @@ const SCHEMAS = {
   'file.sent': fileData,
   'file.received': fileData,
   'recording.started': empty,
-  'recording.stored': z.strictObject({
-    recordingId: id,
-    sha256: hash,
-    bytes: int,
-    mime: text(255),
-    storageKey: text(),
-  }),
-  'recording.failed': z.strictObject({ recordingId: id, error: text(SANITISE_LIMITS.error) }),
+  // Phase A.2: optional `source: 'server'` (server recordings only).
+  'recording.stored': recordingStoredDataSchema,
+  'recording.failed': recordingFailedDataSchema,
   // `suppressed`: attempts on the same (connection, session) since the previous entry that were coalesced (SEC-05).
   'signal.forbidden': z.strictObject({
     connectionId: id,
@@ -177,6 +176,7 @@ const SCHEMAS = {
     'session.supervisor_joined is reserved and not written in Phase A',
   ),
   ...P2_CHAIN_SCHEMAS,
+  ...A2_CHAIN_SCHEMAS,
 } satisfies Record<AuditAction, z.ZodType>;
 
 export type AuditDataSchemas = typeof SCHEMAS;

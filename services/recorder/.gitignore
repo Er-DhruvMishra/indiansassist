@@ -1,0 +1,6 @@
+# Working recordings (OUT_DIR default) and build output
+data/
+/recorder
+/recorder.exe
+*.test
+*.out

@@ -11,6 +11,7 @@ import {
   type ExtensionPolicy,
   type MirrorScope,
   type PackageTier,
+  type RecordingMode,
   type SessionPath,
   type SessionState,
   type SignalErrorCode,
@@ -36,6 +37,9 @@ export type DeskInfo = {
   client: DeskClient | null;
 };
 
+/** A helloed recorder socket (Phase A.2 section 4). */
+export type RecorderInfo = { recorderId: string; maxSessions: number };
+
 /** Where a Conn's frames go. */
 export interface Transport {
   isOpen(): boolean;
@@ -57,8 +61,9 @@ export function wsTransport(ws: WebSocket): Transport {
 const MAX_ROUTES = 64;
 
 export class Conn {
-  side: 'assist' | 'desk' | null = null;
+  side: 'assist' | 'desk' | 'recorder' | null = null;
   desk: DeskInfo | null = null;
+  recorder: RecorderInfo | null = null;
   readonly openedAt = Date.now();
   lastInbound = Date.now();
   lastPingAt = Date.now();
@@ -72,7 +77,8 @@ export class Conn {
    * (e.g. the Desk's final `session.end` / `desk.consent revoked`), then onConnClosed runs.
    */
   terminated = false;
-  readonly bucket = new TokenBucket(20, 60);
+  /** Replaced by a larger bucket once a recorder says hello (A.2 H3). */
+  bucket = new TokenBucket(20, 60);
   /**
    * `ping` / `pong` / `session.end` / `desk.consent` skip the frame bucket (Phase B Y25); this separate, generous
    * bucket only stops a flood of them.
@@ -153,6 +159,22 @@ export type RelayCounters = { mirrorFrames: number; mirrorBytes: number; control
 
 export type LiveConsent = { level: ConsentLevel; scope: MirrorScope; backstage: boolean };
 
+/** Server recorder state of a live session (Phase A.2 section 6). */
+export type LiveRecorder = {
+  /** Open assignment: the socket asked to join, its deadline, sockets already tried this activation. */
+  assignedConnId: string | null;
+  assignedUntil: number;
+  tried: Set<string>;
+  resume: boolean;
+  /** The joined (or paused) recorder socket and its id; kept while paused for a resume. */
+  connId: string | null;
+  recorderId: string | null;
+  joined: boolean;
+  /** `recording.server_started` / `recording.server_stopped` written. */
+  started: boolean;
+  stopped: boolean;
+};
+
 export type Live = {
   id: string;
   orgId: string;
@@ -165,6 +187,9 @@ export type Live = {
   /** The org extension policy of a P2 session, loaded at first use (live sessions are not re-policed). */
   policy: ExtensionPolicy | null;
   relay: RelayCounters;
+  /** Phase A.2 M1 snapshot (null = before A.2). */
+  recordingMode: RecordingMode | null;
+  recorder: LiveRecorder;
   /** Sliding window of relayed `data` lengths (`[atMs, chars]`) for the per-session mirror budget. */
   relayWindow: [number, number][];
   /** `control.relay` per direction, 10 / s (Phase B 4.6). */
@@ -196,6 +221,8 @@ type LiveSource = {
   consentLevel?: ConsentLevel | null;
   consentScope?: MirrorScope | null;
   consentBackstage?: boolean | null;
+  recordingMode?: RecordingMode | null;
+  serverRecording?: boolean;
 };
 
 /** The consent triple of a session row, or null when it has none (P1, or not yet granted). */
@@ -214,6 +241,18 @@ export function newLive(s: LiveSource): Live {
     consent: consentOfRow(s),
     policy: null,
     relay: { mirrorFrames: 0, mirrorBytes: 0, controlFrames: 0, dropped: 0 },
+    recordingMode: s.recordingMode ?? null,
+    recorder: {
+      assignedConnId: null,
+      assignedUntil: 0,
+      tried: new Set(),
+      resume: false,
+      connId: null,
+      recorderId: null,
+      joined: false,
+      started: s.serverRecording === true,
+      stopped: false,
+    },
     relayWindow: [],
     controlBuckets: {
       assist: new TokenBucket(LIMITS.controlRelayPerSec, LIMITS.controlRelayPerSec),

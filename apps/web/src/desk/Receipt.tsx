@@ -53,6 +53,8 @@ export function Receipt({ snap, brand }: { snap: DeskSnapshot; brand?: DeskBrand
           <dd>{receipt.shared}</dd>
           <dt className="font-medium">Recorded</dt>
           <dd>{receipt.recorded ? 'Yes, the technician recorded this session' : 'No'}</dd>
+          <dt className="font-medium">Server recording</dt>
+          <dd>{receipt.serverRecording ? 'Yes' : 'No'}</dd>
           <dt className="font-medium">Files</dt>
           <dd>
             {receipt.files.length === 0 ? (

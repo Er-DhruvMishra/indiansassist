@@ -29,6 +29,8 @@ export type ConsentReceipt = {
   shared: string;
   files: ReceiptFile[];
   recorded: boolean;
+  /** Phase A.2 U3: the server recorder joined this session (`session.ended.serverRecording`, absent = false). */
+  serverRecording: boolean;
   hashChainTail: string | null;
   generatedAt: string;
 };
@@ -69,6 +71,7 @@ export function buildReceipt(input: {
     shared: surfaceText(surface),
     files: input.files,
     recorded: ended.recordingStarted || input.recordingSeen,
+    serverRecording: ended.serverRecording ?? false,
     hashChainTail: ended.hashChainTail,
     generatedAt: (input.now ?? new Date()).toISOString(),
   };
@@ -88,6 +91,7 @@ export function receiptToText(r: ConsentReceipt): string {
     `End reason:        ${r.endReason.replace(/_/g, ' ')}`,
     `What was shared:   ${r.shared}`,
     `Recorded:          ${r.recorded ? 'yes, the technician recorded this session' : 'no'}`,
+    `Server recording:  ${r.serverRecording ? 'yes' : 'no'}`,
     `Audit chain tail:  ${r.hashChainTail ?? 'not available'} (at session end)`,
     '',
     `Files (${r.files.length}):`,

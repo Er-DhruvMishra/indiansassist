@@ -2,13 +2,15 @@
  * Org policies (docs/specs/phase-b-contracts.md section 11.3): the extension policy (GET any role, PATCH org_admin)
  * merged over DEFAULT_EXTENSION_POLICY with the read-only built-in deny list, and the recording retention policy
  * (Y26). Both PATCH routes write `org.policy_updated { fields }` and are limited to 10 / minute per user. Live
- * sessions are not re-policed: a session uses the policy sent at its `session.created`.
+ * sessions are not re-policed: a session uses the policy sent at its `session.created`. Phase A.2 adds the recording
+ * policy (docs/specs/phase-a2-recorder.md section 3 M3), snapshotted into each session at accept.
  */
 import {
   applyPolicyPatch,
   BUILTIN_DENY_LIST,
   extensionPolicyPatchSchema,
   mergePolicy,
+  recordingPolicySchema,
   retentionPolicySchema,
   type ExtensionPolicyResponse,
 } from '@indiansassist/shared';
@@ -70,5 +72,27 @@ export async function policyRoutes(app: FastifyInstance, ctx: AppContext): Promi
       return o;
     });
     return { recordingRetentionDays: org.recordingRetentionDays ?? null };
+  });
+
+  app.get('/api/v1/orgs/current/policy/recording', async (req) => {
+    const p = await authenticate(ctx, req);
+    return { recordingMode: p.org.recordingMode };
+  });
+
+  app.patch('/api/v1/orgs/current/policy/recording', async (req) => {
+    const p = await authenticate(ctx, req, ['org_admin']);
+    await patchLimit(ctx, p);
+    const body = parseOr400(recordingPolicySchema, req.body);
+    if (body.recordingMode === p.org.recordingMode) return { recordingMode: p.org.recordingMode };
+    const org = await ctx.db.transaction(async (tx) => {
+      const o = await updateOrg(tx, p.org.id, { recordingMode: body.recordingMode });
+      await writeAudit(ctx, tx, o, {
+        actor: userActor(p.user),
+        action: 'org.policy_updated',
+        data: { fields: ['recordingMode'] },
+      });
+      return o;
+    });
+    return { recordingMode: org.recordingMode };
   });
 }

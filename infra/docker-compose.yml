@@ -223,6 +223,8 @@ services:
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RATE_LIMIT_DISABLED: "false"
+      # Phase A.2 server recorder service token (docs/specs/phase-a2-recorder.md section 2 P2); empty = disabled.
+      RECORDER_TOKEN: ${RECORDER_TOKEN:-}
     volumes:
       - apidata:/data
     depends_on:
@@ -242,6 +244,41 @@ services:
       start_period: 20s
     networks: [backend, frontend]
     # 4000 and 9464 are NOT published; the api is reached only through web (section 11.3).
+
+  # Phase A.2 server-side recorder (docs/specs/phase-a2-recorder.md section 13). It talks to the api directly on
+  # the compose network (never through nginx) and receives the Desk's media on the published UDP range.
+  recorder:
+    build:
+      context: ../services/recorder
+      dockerfile: Dockerfile
+    image: indiansassist/recorder:${IA_VERSION:-local}
+    profiles: [recorder]
+    <<: [*restart, *logging]
+    environment:
+      API_URL: http://api:4000
+      SIGNAL_URL: ws://api:4000/signal
+      RECORDER_TOKEN: ${RECORDER_TOKEN:-}
+      RECORDER_ID: ${RECORDER_ID:-recorder-1}
+      REGION: ${DEFAULT_REGION:-in-mum}
+      OUT_DIR: /data/recorder
+      HTTP_ADDR: ":9470"
+      MAX_SESSIONS: ${RECORDER_MAX_SESSIONS:-8}
+      MAX_DURATION: ${RECORDER_MAX_DURATION:-4h}
+      UPLOAD_RETRIES: ${RECORDER_UPLOAD_RETRIES:-5}
+      KEEP_FILES: ${RECORDER_KEEP_FILES:-false}
+      UDP_PORT_MIN: ${RECORDER_UDP_PORT_MIN:-50000}
+      UDP_PORT_MAX: ${RECORDER_UDP_PORT_MAX:-50100}
+      NAT_1TO1_IPS: ${RECORDER_PUBLIC_IP:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - recorderdata:/data
+    ports:
+      - "${RECORDER_UDP_PORT_MIN:-50000}-${RECORDER_UDP_PORT_MAX:-50100}:${RECORDER_UDP_PORT_MIN:-50000}-${RECORDER_UDP_PORT_MAX:-50100}/udp"
+    depends_on:
+      api:
+        condition: service_healthy
+    # 9470 (/healthz, /metrics) is NOT published.
+    networks: [frontend]
 
   web:
     build:
@@ -304,4 +341,5 @@ volumes:
   garagemeta: {}
   garagedata: {}
   apidata: {}
+  recorderdata: {}
   acme: {}

@@ -3,6 +3,8 @@
  * snapshots. Consent gate (D2): `getDisplayMedia` runs only from `share()`, which is reachable only in the
  * `consent` phase (after `session.created`); the peer connection is built only after `consent.ok`.
  * Hard rule 2 is `teardown()`, applied before every screen change caused by an end or a resume (D9).
+ * Phase A.2: a second peer connection toward the server recorder (`deskRecorder.ts`) carries the same tracks;
+ * `webrtc.*` frames tagged `peer: 'recorder'` go to it, every other one to the Assist connection.
  *
  * Local end (prd-F1): Stop / Revoke / Decline end the session on this computer at once and for good. The
  * end frame is sent now or, while the socket reconnects, right after the next `desk.hello.ok` re-registers
@@ -22,33 +24,17 @@ import { errorMessage } from '../lib/api';
 import { IceRecovery } from '../lib/iceRecovery';
 import { PeerLink } from '../lib/link';
 import { toRtcIceServers } from '../lib/peer';
-import { SessionControllerBase, type GetUserMedia } from '../lib/sessionBase';
+import { SessionControllerBase } from '../lib/sessionBase';
 import { SignalClient, type SignalStatus } from '../lib/signal';
 import { removeStore, writeStore } from '../lib/storage';
 import { DeskAttestations } from './deskAttest';
 import { displayMediaOptions, localEnded, surfaceOf } from './deskMedia';
-import { DESK_INITIAL, type DeskPhase, type DeskSnapshot } from './deskTypes';
+import { DeskRecorderPeer } from './deskRecorder';
+import { DESK_FATAL_CODES as FATAL, DESK_INITIAL, LOCAL_END_FALLBACK_MS, type DeskDeps, type DeskPhase, type DeskSnapshot } from './deskTypes';
 
-export type { DeskPhase, DeskSnapshot } from './deskTypes';
+export type { DeskDeps, DeskPhase, DeskSnapshot } from './deskTypes';
+export { LOCAL_END_FALLBACK_MS } from './deskTypes';
 export { displayMediaOptions, surfaceOf } from './deskMedia';
-
-export type DeskDeps = {
-  url: string;
-  token: string;
-  deskLabel?: string;
-  resume?: { sessionId: string; resumeKey: string } | null;
-  onSession?: (sessionId: string) => void;
-  getDisplayMedia?: (o: DisplayMediaStreamOptions) => Promise<MediaStream>;
-  getUserMedia?: GetUserMedia;
-  WebSocketImpl?: typeof WebSocket;
-  RTCPeerConnectionImpl?: typeof RTCPeerConnection;
-  pollMs?: number;
-};
-
-const FATAL = new Set(['token_malformed', 'token_bad_signature', 'token_not_found', 'token_gone', 'region_mismatch', 'token_busy', 'join_unsupported', 'not_authenticated']);
-
-/** How long the Desk waits for the server's `session.ended` before showing its local receipt. */
-export const LOCAL_END_FALLBACK_MS = 5000;
 
 export class DeskController extends SessionControllerBase<DeskSnapshot> {
   readonly signal: SignalClient;
@@ -62,6 +48,8 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
   /** The end frame that could not be sent (socket reconnecting); delivered after the next resume. */
   private endPending: ClientSignalMessage | null = null;
   private recovery: IceRecovery | null = null;
+  /** Phase A.2 N3: the receive-only server recorder's connection (same tracks as the Assist one). */
+  private readonly recorder: DeskRecorderPeer;
 
   constructor(private readonly deps: DeskDeps) {
     super(deps.resume ? { ...DESK_INITIAL, sessionId: deps.resume.sessionId } : DESK_INITIAL, 'desk', deps.getUserMedia);
@@ -79,6 +67,7 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
       onStatus: (s, code) => this.onStatus(s, code),
     });
     this.attestations = new DeskAttestations(this.signal, () => this.snap.sessionId);
+    this.recorder = new DeskRecorderPeer(this.signal, deps.RTCPeerConnectionImpl);
     this.wire();
   }
 
@@ -164,11 +153,13 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
       this.buildLink();
       this.set({ phase: 'sharing', sharingSince: this.snap.sharingSince ?? Date.now() });
     });
-    s.on('webrtc.offer', mine((m) => void this.link?.handleSignal({ t: 'webrtc.offer', sdp: m.sdp })));
-    s.on('webrtc.answer', mine((m) => void this.link?.handleSignal({ t: 'webrtc.answer', sdp: m.sdp })));
-    s.on('webrtc.ice', mine((m) => void this.link?.handleSignal({ t: 'webrtc.ice', candidate: m.candidate })));
+    // A.2 N2: `peer: 'recorder'` frames belong to the recorder connection; untagged ones to the Assist one.
+    s.on('webrtc.offer', mine((m) => void (m.peer === 'recorder' ? this.onRecorderOffer(m.sdp) : this.link?.handleSignal({ t: 'webrtc.offer', sdp: m.sdp }))));
+    s.on('webrtc.answer', mine((m) => void (m.peer === 'recorder' ? this.recorder.answer(m.sdp) : this.link?.handleSignal({ t: 'webrtc.answer', sdp: m.sdp }))));
+    s.on('webrtc.ice', mine((m) => void (m.peer === 'recorder' ? this.recorder.ice(m.candidate) : this.link?.handleSignal({ t: 'webrtc.ice', candidate: m.candidate }))));
     s.on('assist.reconnected', mine((m) => {
       if (m.iceServers) this.iceServers = toRtcIceServers(m.iceServers);
+      this.recorder.close(); // A.2 S3: an Assist rebuild never keeps a stale recorder connection
       if (m.state === 'active' && this.snap.localStream) {
         // Hard rule 2 minus the capture track: a fresh connection, same screen (section 7.5).
         this.closeLink();
@@ -179,8 +170,12 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     s.on('ice.refresh', mine((m) => {
       this.iceServers = toRtcIceServers(m.iceServers);
       this.link?.peer.refreshIce(this.iceServers, true);
+      this.recorder.refreshIce(this.iceServers);
     }));
-    s.on('session.recording', mine((m) => this.setRecording({ ws: m.recording })));
+    s.on('session.recording', mine((m) => {
+      if (m.source === 'server' && !m.recording) this.recorder.close(); // A.2 S3: the recorder stopped
+      this.setRecording(m.source === 'server' ? { server: m.recording } : { ws: m.recording });
+    }));
     s.on('chat.message', mine((m) => this.receiveChat(m)));
     s.on('event.ok', (m) => this.attestations.acknowledge(m.re));
     s.on('session.ended', mine((m: SessionEnded) => this.onEnded(m)));
@@ -214,12 +209,26 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     this.set({ phase: 'ended', ended: m });
   }
 
-  /** D3: the dot shows while either source says true; each source only changes its own flag (prd-F5). */
-  private setRecording(p: { ws?: boolean; ctrl?: boolean }): void {
+  /** D3 / A.2 S1: the dot shows while any source says true; each source only changes its own flag (prd-F5). */
+  private setRecording(p: { ws?: boolean; ctrl?: boolean; server?: boolean }): void {
     const recordingWs = p.ws ?? this.snap.recordingWs;
     const recordingCtrl = p.ctrl ?? this.snap.recordingCtrl;
-    const recording = recordingWs || recordingCtrl;
-    this.set({ recordingWs, recordingCtrl, recording, recordingSeen: this.snap.recordingSeen || recording });
+    const recordingServer = p.server ?? this.snap.recordingServer;
+    const recording = recordingWs || recordingCtrl || recordingServer;
+    const recordingSeen = this.snap.recordingSeen || recordingWs || recordingCtrl;
+    this.set({ recordingWs, recordingCtrl, recordingServer, recording, recordingSeen, serverRecordingSeen: this.snap.serverRecordingSeen || recordingServer });
+  }
+
+  /** A.2 N3: accepted only while sharing, under mode `server` / `both`, without a data channel. */
+  private onRecorderOffer(sdp: string): Promise<boolean> {
+    const { sessionId, phase, created, localStream } = this.snap;
+    return this.recorder.offer(sdp, { sessionId, sharing: phase === 'sharing', recordingMode: created?.recordingMode, iceServers: this.iceServers, screen: localStream, mic: this.mic });
+  }
+
+  /** Voice on / off also attaches / detaches the microphone on the recorder connection (no renegotiation). */
+  override async toggleVoice(): Promise<void> {
+    await super.toggleVoice();
+    this.recorder.setMic(this.mic?.getAudioTracks()[0] ?? null);
   }
 
   // ---------- consent (D1, D2, D4, D5) ----------
@@ -298,7 +307,8 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
     const { phase, sessionId, created } = this.snap;
     if (phase !== 'ending' || !sessionId || !created) return;
     const why = reason ?? (this.snap.sharingSince ? 'desk_stopped' : 'consent_revoked');
-    const ended = localEnded({ sessionId, reason: why, sharingSince: this.snap.sharingSince, assist: created.assist, surface: this.snap.surface, recordingSeen: this.snap.recordingSeen });
+    const { sharingSince, surface, recordingSeen, serverRecordingSeen } = this.snap;
+    const ended = localEnded({ sessionId, reason: why, sharingSince, assist: created.assist, surface, recordingSeen, serverRecordingSeen });
     this.set({ phase: 'ended', ended });
   }
 
@@ -366,11 +376,12 @@ export class DeskController extends SessionControllerBase<DeskSnapshot> {
 
   /** Hard rule 2: stop every local track (screen and microphone), close channels and the connection. */
   teardown(): void {
+    this.recorder.close();
     this.closeLink();
     for (const t of this.snap.localStream?.getTracks() ?? []) t.stop();
     this.stopMic();
     // No recording runs on a share that ended; the next share starts without the dot (correctness-F11).
-    this.setRecording({ ws: false, ctrl: false });
+    this.setRecording({ ws: false, ctrl: false, server: false });
     this.set({ localStream: null, annot: EMPTY_ANNOT });
   }
 

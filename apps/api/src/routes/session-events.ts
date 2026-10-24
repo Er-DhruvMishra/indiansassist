@@ -29,7 +29,7 @@ import { TECH_ROLES } from '../lib/rbac.js';
 import { parseOr400 } from '../lib/validate.js';
 import { TokenBucket } from '../limiter.js';
 import { authenticate, type Principal } from '../plugins/auth.js';
-import { requireReachedActive, requireSessionAssist, scopedSession } from '../services/scope.js';
+import { requireAssistMayRecord, requireReachedActive, requireSessionAssist, scopedSession } from '../services/scope.js';
 import { MAX_ATTESTED_FILE_ID } from '../signal/desk-events.js';
 
 type Body = ReturnType<typeof sessionEventRequestSchema.parse>;
@@ -64,6 +64,7 @@ export async function sessionEventRoutes(app: FastifyInstance, ctx: AppContext):
 }
 
 async function recordingStarted(ctx: AppContext, p: Principal, session: SessionRow, reply: FastifyReply) {
+  requireAssistMayRecord(session); // Phase A.2 section 3
   const existing = await findSessionAuditByAction(ctx.db, session.id, 'recording.started');
   if (existing) return reply.status(200).send(toAuditEntry(existing));
   const entry = await ctx.db.transaction(async (tx) => {

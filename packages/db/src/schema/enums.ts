@@ -14,6 +14,8 @@ import {
   INTEGRATION_TYPES,
   PACKAGE_TIERS,
   PARTICIPANT_ROLES,
+  RECORDING_MODES,
+  RECORDING_SOURCES,
   RECORDING_STATUSES,
   REGIONS,
   SESSION_END_REASONS,
@@ -45,3 +47,6 @@ export const deviceStatusEnum = pgEnum('device_status', DEVICE_STATUSES);
 // Phase B (docs/specs/phase-b-contracts.md section 11.1)
 export const consentLevelEnum = pgEnum('consent_level', CONSENT_LEVELS);
 export const mirrorScopeEnum = pgEnum('mirror_scope', MIRROR_SCOPES);
+// Phase A.2 (docs/specs/phase-a2-recorder.md section 9)
+export const recordingModeEnum = pgEnum('recording_mode', RECORDING_MODES);
+export const recordingSourceEnum = pgEnum('recording_source', RECORDING_SOURCES);

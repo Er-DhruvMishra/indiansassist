@@ -77,6 +77,7 @@ export type TransitionSet = Partial<
     | 'consentLevel'
     | 'consentScope'
     | 'consentBackstage'
+    | 'recordingMode'
   >
 >;
 
@@ -172,10 +173,12 @@ export type SessionPatch = Partial<
     | 'consentLevel'
     | 'consentBackstage'
     | 'deskClient'
+    | 'recordingMode'
   >
 >;
 
 const PATCHABLE = new Set([
+  'recordingMode',
   'consentLevel',
   'consentBackstage',
   'deskClient',
@@ -193,6 +196,16 @@ export async function updateSession(exec: Executor, id: string, patch: SessionPa
   const [row] = await exec.update(session).set(patch).where(eq(session.id, id)).returning();
   if (!row) throw new NotFoundError('session', id);
   return row;
+}
+
+/** Sets `server_recording` once (Phase A.2 section 6); true only for the first call. */
+export async function markServerRecording(exec: Executor, id: string): Promise<boolean> {
+  const rows = await exec
+    .update(session)
+    .set({ serverRecording: true })
+    .where(and(eq(session.id, id), eq(session.serverRecording, false)))
+    .returning({ id: session.id });
+  return rows.length > 0;
 }
 
 /** Sets `recording_started` once; true only for the first call (deduplication, section 6.8). */

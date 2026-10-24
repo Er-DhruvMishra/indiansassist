@@ -20,8 +20,14 @@ import {
 import type { AppContext } from '../context.js';
 import { fail, HttpError } from '../errors.js';
 import { systemActor, writeAudit, type Actor } from '../lib/audit.js';
+import { requireAssistMayRecord } from './scope.js';
 
 const STALE_UPLOAD_MS = 60 * 60_000;
+
+/** Phase A.2: `source: 'server'` on the entries of a server recording only (Phase A shapes unchanged). */
+function sourceOf(rec: Pick<RecordingRow, 'recordedBy'>): { source?: 'server' } {
+  return rec.recordedBy === 'server' ? { source: 'server' } : {};
+}
 
 /** Storage key suffix: `jsonl.gz` for rrweb mirror recordings (Phase B 4.7), `webm` otherwise (section 9). */
 function storageExt(mime: string): string {
@@ -54,6 +60,7 @@ export async function assertCanUpload(
   declaredBytes: number,
 ): Promise<void> {
   if (s.startedAt === null) fail('forbidden', 'the session never reached active (no consent was given)');
+  requireAssistMayRecord(s);
   const q = ctx.config.recordingQuota;
   if (s.endedAt && Date.now() > s.endedAt.getTime() + q.uploadWindowSec * 1000)
     fail('already_ended', 'the upload window for this session has closed');
@@ -129,7 +136,14 @@ export async function finaliseRecording(
       sessionId: rec.sessionId,
       actor,
       action: 'recording.stored',
-      data: { recordingId: rec.id, sha256: result.sha256, bytes: result.bytes, mime: rec.mime, storageKey: rec.storageKey },
+      data: {
+        recordingId: rec.id,
+        sha256: result.sha256,
+        bytes: result.bytes,
+        mime: rec.mime,
+        storageKey: rec.storageKey,
+        ...sourceOf(rec),
+      },
     });
     return setRecordingChainedInto(tx, rec.id, entry.id);
   });
@@ -149,7 +163,7 @@ export async function failRecording(
       sessionId: rec.sessionId,
       actor,
       action: 'recording.failed',
-      data: { recordingId: rec.id, error },
+      data: { recordingId: rec.id, error, ...sourceOf(rec) },
     });
   });
 }

@@ -46,6 +46,17 @@ export abstract class HubApi {
     await onSessionEnded(this.hub, ended);
   }
 
+  /**
+   * Phase A.2 section 6: the recorder id whose `recording.server_stopped { reason: 'session_ended' }` the end
+   * transaction must write (null when none was started or it already stopped); marks it stopped.
+   */
+  recorderStopForEnd(sessionId: string): string | null {
+    const r = this.live.get(sessionId)?.recorder;
+    if (!r || !r.started || r.stopped || r.connId === null || r.recorderId === null) return null;
+    r.stopped = true;
+    return r.recorderId;
+  }
+
   tokenRevoked(tokenId: string): void {
     onTokenRevoked(this.hub, tokenId);
     this.bridge.broadcast({ e: 'token-revoked', tokenId });

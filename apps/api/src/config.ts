@@ -112,6 +112,8 @@ const envSchema = z.object({
   EXTENSION_MIN_VERSION: str('0.2.0'),
   MIRROR_RELAY_BUDGET_BYTES: int(LIMITS.mirrorRelayBudgetBytes),
   SIGNUP_PLAN_TIER: z.enum(PACKAGE_TIERS).optional().default('p2_extension'),
+  // Phase A.2 (docs/specs/phase-a2-recorder.md section 13): empty = server recorder disabled.
+  RECORDER_TOKEN: str(''),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -160,6 +162,8 @@ export type Config = {
   mirrorRelayBudgetBytes: number;
   /** `org.plan_tier` of orgs created by signup (billing is out of scope; Phase B ships P2). */
   signupPlanTier: PackageTier;
+  /** Phase A.2 service token of the server recorder; '' = recorder disabled. */
+  recorderToken: string;
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
   dataDir: string;
@@ -265,6 +269,8 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     if (!webOrigin.startsWith('https:') || !apiOrigin.startsWith('https:'))
       problems.push('WEB_ORIGIN and API_ORIGIN must be https: in production');
     if (servedRegions.length !== 1) problems.push('SERVED_REGIONS must name exactly one region in production');
+    if (e.RECORDER_TOKEN !== '' && e.RECORDER_TOKEN.length < LIMITS.recorderTokenMinProd)
+      problems.push(`RECORDER_TOKEN must be >= ${LIMITS.recorderTokenMinProd} chars when set`);
   }
   if (e.PRESENCE_DRIVER === 'redis' && e.REDIS_URL === '') problems.push('REDIS_URL is required with redis presence');
   if (e.STORAGE_DRIVER === 's3') {
@@ -331,6 +337,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     },
     mirrorRelayBudgetBytes: e.MIRROR_RELAY_BUDGET_BYTES > 0 ? e.MIRROR_RELAY_BUDGET_BYTES : LIMITS.mirrorRelayBudgetBytes,
     signupPlanTier: e.SIGNUP_PLAN_TIER,
+    recorderToken: e.RECORDER_TOKEN,
     repoRoot,
     dataDir,
   };

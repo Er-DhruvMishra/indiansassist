@@ -1,7 +1,7 @@
 /** Tenancy and identity tables (contracts section 4.2): org, user, technician_seat, auth_session, login_attempt. */
 import { sql } from 'drizzle-orm';
 import { boolean, char, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { packageTierEnum, regionEnum, userRoleEnum, userStatusEnum } from './enums.js';
+import { packageTierEnum, recordingModeEnum, regionEnum, userRoleEnum, userStatusEnum } from './enums.js';
 
 /** `timestamp(..., { withTimezone: true, mode: 'date' })` as section 4 requires. */
 export const tstz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -36,6 +36,8 @@ export const org = pgTable(
     extensionPolicy: jsonb('extension_policy').$type<Record<string, unknown>>().notNull().default({}),
     /** Phase B Y26: null keeps recordings until deleted manually; 1..3650. */
     recordingRetentionDays: integer('recording_retention_days'),
+    /** Phase A.2 section 3: org recording policy. */
+    recordingMode: recordingModeEnum('recording_mode').notNull().default('assist_only'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -47,6 +47,7 @@ export function validateInfra(root = ROOT) {
       'VALKEY_PASSWORD',
       'S3_ACCESS_KEY',
       'S3_SECRET_KEY',
+      'RECORDER_TOKEN',
     ];
     for (const k of secrets) {
       if (!env.has(k)) problems.push(`${k} is not documented`);

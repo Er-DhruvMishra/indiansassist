@@ -29,6 +29,7 @@ import { auditRoutes } from './routes/audit.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { iceRoutes } from './routes/ice.js';
+import { internalRecordingRoutes } from './routes/internal-recordings.js';
 import { orgRoutes } from './routes/orgs.js';
 import { recordingRoutes } from './routes/recordings.js';
 import { sessionEventRoutes } from './routes/session-events.js';
@@ -119,6 +120,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await auditRoutes(app, ctx);
   await recordingRoutes(app, ctx);
   await iceRoutes(app, ctx);
+  await internalRecordingRoutes(app, ctx);
 
   ctx.hub.attach(app);
   await ctx.hub.start();

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { LIMITS } from '../enums.js';
 import { utf8Encode } from '../encoding.js';
 import * as m from './signal-messages.js';
+import * as r from './signal-recorder.js';
 
 /** Every signaling message, each `t` exactly once. */
 export const signalMessageSchema = z.discriminatedUnion('t', [
@@ -47,6 +48,13 @@ export const signalMessageSchema = z.discriminatedUnion('t', [
   m.sessionEndedSchema,
   m.eventOkSchema,
   m.signalErrorSchema,
+  r.recorderHelloSchema,
+  r.recorderJoinSchema,
+  r.recorderLeaveSchema,
+  r.recorderHelloOkSchema,
+  r.recorderAssignSchema,
+  r.recorderJoinedSchema,
+  r.recorderPauseSchema,
 ]);
 export type SignalMessage = z.infer<typeof signalMessageSchema>;
 export type SignalType = SignalMessage['t'];
@@ -76,6 +84,9 @@ export const clientSignalMessageSchema = z.discriminatedUnion('t', [
   m.deskConsentBackstageSchema,
   m.mirrorRelaySchema,
   m.controlRelaySchema,
+  r.recorderHelloSchema,
+  r.recorderJoinSchema,
+  r.recorderLeaveSchema,
 ]);
 export type ClientSignalMessage = z.infer<typeof clientSignalMessageSchema>;
 
@@ -108,6 +119,10 @@ export const serverSignalMessageSchema = z.discriminatedUnion('t', [
   m.consentLevelOkSchema,
   m.mirrorRelaySchema,
   m.controlRelaySchema,
+  r.recorderHelloOkSchema,
+  r.recorderAssignSchema,
+  r.recorderJoinedSchema,
+  r.recorderPauseSchema,
 ]);
 export type ServerSignalMessage = z.infer<typeof serverSignalMessageSchema>;
 

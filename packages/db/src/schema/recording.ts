@@ -1,7 +1,8 @@
 /** Recordings and the integration placeholder (contracts section 4.2: recording, integration). */
-import { bigint, boolean, char, index, integer, jsonb, pgTable, text, unique, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { bigint, boolean, char, check, index, integer, jsonb, pgTable, text, unique, uuid } from 'drizzle-orm/pg-core';
 import { auditEntry } from './audit.js';
-import { integrationTypeEnum, recordingStatusEnum, regionEnum } from './enums.js';
+import { integrationTypeEnum, recordingSourceEnum, recordingStatusEnum, regionEnum } from './enums.js';
 import { createdAt, org, tstz, updatedAt, user } from './org.js';
 import { session } from './session.js';
 
@@ -14,11 +15,11 @@ export const recording = pgTable(
       .references(() => org.id),
     sessionId: uuid('session_id')
       .notNull()
-      .unique('recording_session_id_unique')
       .references(() => session.id),
-    uploadedBy: uuid('uploaded_by')
-      .notNull()
-      .references(() => user.id),
+    /** Phase A.2 Z1: null for server recordings (the recorder is not a user). */
+    uploadedBy: uuid('uploaded_by').references(() => user.id),
+    /** Phase A.2 section 9: one recording per session per source. */
+    recordedBy: recordingSourceEnum('recorded_by').notNull().default('assist'),
     status: recordingStatusEnum('status').notNull().default('uploading'),
     storageKey: text('storage_key').notNull().unique('recording_storage_key_unique'),
     mime: text('mime').notNull().default('video/webm'),
@@ -35,7 +36,11 @@ export const recording = pgTable(
     deletedAt: tstz('deleted_at'),
     deletedBy: uuid('deleted_by').references(() => user.id),
   },
-  (t) => [index('recording_org_id_idx').on(t.orgId)],
+  (t) => [
+    index('recording_org_id_idx').on(t.orgId),
+    unique('recording_session_source_unique').on(t.sessionId, t.recordedBy),
+    check('recording_uploader_present', sql`recorded_by = 'server' or uploaded_by is not null`),
+  ],
 );
 
 export const integration = pgTable(

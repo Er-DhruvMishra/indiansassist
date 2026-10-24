@@ -4,7 +4,7 @@
  * relay carried messages, `session.ended` and closing the participant rows; after commit the signaling hub pushes
  * `session.ended` / `knock.closed` and applies the socket rules.
  */
-import type { SessionEndReason, SessionState } from '@indiansassist/shared';
+import { recorderActor, type SessionEndReason, type SessionState } from '@indiansassist/shared';
 import {
   closeAllParticipants,
   getOrgOrThrow,
@@ -39,6 +39,7 @@ export type EndedSession = { session: SessionRow; previousState: SessionState; o
 export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: EndOptions): Promise<EndedSession> {
   const chatCount = await ctx.hub.chatCount(sessionId);
   const relay = await ctx.hub.relayCounters(sessionId);
+  const recorderId = ctx.hub.recorderStopForEnd(sessionId);
   const result = await ctx.db.transaction(async (tx) => {
     const current = await getSession(tx, sessionId);
     if (!current) throw new Error(`session ${sessionId} not found`);
@@ -48,6 +49,14 @@ export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: E
       ...(opts.from ? { from: opts.from } : {}),
     });
     if (opts.before) await opts.before(tx, org, current);
+    // Phase A.2 section 6: the server recorder stops with the session, before `chat.relayed` / `session.ended`.
+    if (recorderId !== null)
+      await writeAudit(ctx, tx, org, {
+        sessionId,
+        actor: recorderActor(recorderId),
+        action: 'recording.server_stopped',
+        data: { recorderId, reason: 'session_ended' },
+      });
     if (chatCount > 0)
       await writeAudit(ctx, tx, org, {
         sessionId,

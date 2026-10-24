@@ -112,7 +112,11 @@ export async function handleAssistAccept(hub: SignalHub, conn: Conn, msg: Signal
   const { s, tok, p } = target;
   const org = await orgOf(hub, s.orgId);
   const row = await ctx.db.transaction(async (tx) => {
-    await transitionSession(tx, s.id, 'accepted', { from: 'knocked', set: { assistUserId: p.user.id } });
+    // Phase A.2 M1: the org recording policy is snapshotted at accept.
+    await transitionSession(tx, s.id, 'accepted', {
+      from: 'knocked',
+      set: { assistUserId: p.user.id, recordingMode: org.recordingMode },
+    });
     await resetTokenDenied(tx, tok.id);
     await writeAudit(ctx, tx, org, {
       sessionId: s.id,
@@ -209,6 +213,7 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
   const s = (await getSession(ctx.db, s0.id))!;
   ensureLive(hub, s);
   conn.send({ ...sessionCreatedMsg(hub, s, org, { id: p.user.id, name: p.user.name }, 'assist'), ...re(msg.id) });
+  if (live.recorder.joined) conn.send({ t: 'session.recording', sessionId: s.id, recording: true, source: 'server' });
   scheduleIceRefresh(hub, live, 'assist');
   const desk = hub.conn(live.deskConnId);
   if (desk) {

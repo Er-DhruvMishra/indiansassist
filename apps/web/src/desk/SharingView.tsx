@@ -12,6 +12,7 @@ import { RemoteAudio, VoiceControls } from '../components/VoiceControls';
 import { useNow } from '../hooks/useAsync';
 import { fmtDuration } from '../lib/format';
 import type { DeskController, DeskSnapshot } from './deskController';
+import { recordingLabel } from './deskMedia';
 import { SelfPreview } from './SelfPreview';
 
 function useSharingFavicon(on: boolean): void {
@@ -43,7 +44,7 @@ export function SharingBanner({ ctrl, snap, onPreview }: { ctrl: DeskController;
       {snap.recording && (
         <span className="flex items-center gap-1.5 font-semibold" role="status">
           <span aria-hidden="true" className="h-3 w-3 rounded-full bg-white ring-2 ring-red-300" />
-          Recording
+          {recordingLabel(snap)}
         </span>
       )}
       <span className="font-mono" aria-label="Sharing time">

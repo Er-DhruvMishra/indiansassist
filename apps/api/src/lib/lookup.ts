@@ -27,16 +27,18 @@ export async function hydrateSessions(exec: Executor, rows: SessionRow[]): Promi
     .where(inArray(tokenTable.id, tokenIds));
   const creatorOf = new Map(toks.map((t) => [t.id, t.createdBy]));
   const recs = await exec
-    .select({ id: recording.id, sessionId: recording.sessionId })
+    .select({ id: recording.id, sessionId: recording.sessionId, recordedBy: recording.recordedBy })
     .from(recording)
     .where(inArray(recording.sessionId, rows.map((r) => r.id)));
-  const recOf = new Map(recs.map((r) => [r.sessionId, r.id]));
+  const recOf = new Map(recs.filter((r) => r.recordedBy === 'assist').map((r) => [r.sessionId, r.id]));
+  const serverRecOf = new Map(recs.filter((r) => r.recordedBy === 'server').map((r) => [r.sessionId, r.id]));
   const names = await userRefs(exec, [...rows.map((r) => r.assistUserId), ...toks.map((t) => t.createdBy)]);
   return rows.map((r) =>
     toSession(r, {
       tokenCreatedBy: refOf(names, creatorOf.get(r.tokenId) ?? r.assistUserId),
       assist: refOf(names, r.assistUserId),
       recordingId: recOf.get(r.id) ?? null,
+      serverRecordingId: serverRecOf.get(r.id) ?? null,
     }),
   );
 }

@@ -6,6 +6,7 @@ import type * as ses from './rest-sessions.js';
 import type * as sig from './signal-messages.js';
 import type * as dc from './datachannel.js';
 import type * as pol from '../extension/policy.js';
+import type * as rec from './signal-recorder.js';
 
 export type ApiErrorBody = z.infer<typeof core.apiErrorSchema>;
 export type PageQuery = z.infer<typeof core.pageQuerySchema>;
@@ -64,6 +65,9 @@ export type IceResponse = z.infer<typeof ses.iceResponseSchema>;
 export type ResidencyReport = z.infer<typeof ses.residencyReportSchema>;
 export type ExtensionPolicyResponse = z.infer<typeof pol.extensionPolicyResponseSchema>;
 export type RetentionPolicy = z.infer<typeof core.retentionPolicySchema>;
+// Phase A.2 (docs/specs/phase-a2-recorder.md)
+export type RecordingPolicy = z.infer<typeof rec.recordingPolicySchema>;
+export type InternalRecordingMeta = z.infer<typeof rec.internalRecordingMetaSchema>;
 
 export type IceCandidateInit = z.infer<typeof sig.iceCandidateInitSchema>;
 export type AssistHello = z.infer<typeof sig.assistHelloSchema>;

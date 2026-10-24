@@ -24,6 +24,7 @@ import type { Conn } from './conn.js';
 import type { SignalHub } from './hub.js';
 import { checkGrant } from './desk-consent.js';
 import { performKnock } from './knock.js';
+import { onSessionActive, pauseRecorder } from './recorder.js';
 import { cancelGrace, markDeskWaiting, notifyTokenPresence, startDeskGrace } from './lifecycle.js';
 import {
   deskIce,
@@ -188,6 +189,7 @@ export async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, r
   if (wasActive) {
     ctx.metrics.sessionsActive.dec();
     startConsentTimer(hub, live);
+    pauseRecorder(hub, live);
   }
 }
 
@@ -283,6 +285,7 @@ export async function handleDeskConsent(hub: SignalHub, conn: Conn, msg: SignalO
     conn.send({ t: 'consent.ok', ...re(msg.id), sessionId: s.id, state: 'active', consentState: 'granted', ...deskIce(hub, s.id) });
     assistConn?.send({ t: 'consent.changed', sessionId: s.id, state: 'granted', surface, ...(c ?? {}) });
     scheduleIceRefresh(hub, live, 'desk');
+    await onSessionActive(hub, live);
     return;
   }
   // Section 7.4: consent can be revoked only once it was asked for (consent_pending) or given (active).

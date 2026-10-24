@@ -7,6 +7,7 @@ import {
   mirrorScopeEnum,
   packageTierEnum,
   participantRoleEnum,
+  recordingModeEnum,
   regionEnum,
   sessionEndReasonEnum,
   sessionPathEnum,
@@ -55,6 +56,10 @@ export const session = pgTable(
     consentScope: mirrorScopeEnum('consent_scope'),
     consentBackstage: boolean('consent_backstage'),
     deskClient: jsonb('desk_client').$type<Record<string, unknown>>(),
+    /** Phase A.2 M1: the org recording policy snapshotted at accept (null = before A.2, treated as assist_only). */
+    recordingMode: recordingModeEnum('recording_mode'),
+    /** Phase A.2: set when `recording.server_started` was written. */
+    serverRecording: boolean('server_recording').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

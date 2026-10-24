@@ -1,6 +1,17 @@
 /** REST schemas: sessions, audit, recordings, ICE, residency (contracts 6.3, 6.8-6.11). */
 import { z } from 'zod';
-import { CONSENT_LEVELS, DESK_BROWSERS, DESK_CLIENT_KINDS, DESK_OSES, LIMITS, MIRROR_SCOPES, RRWEB_RECORDING_MIME, SESSION_END_REASONS } from '../enums.js';
+import {
+  CONSENT_LEVELS,
+  DESK_BROWSERS,
+  DESK_CLIENT_KINDS,
+  DESK_OSES,
+  LIMITS,
+  MIRROR_SCOPES,
+  RECORDING_MODES,
+  RECORDING_SOURCES,
+  RRWEB_RECORDING_MIME,
+  SESSION_END_REASONS,
+} from '../enums.js';
 import { ASSIST_EVENT_DATA, ASSIST_EVENT_REASON_ACTIONS, type AssistEventP2Action } from '../audit/actions-p2.js';
 import {
   actorTypeSchema,
@@ -65,6 +76,10 @@ export const sessionSchema = z.object({
     })
     .nullable()
     .optional(),
+  // Phase A.2 M4 (always sent by the api; optional so earlier fixtures still parse).
+  recordingMode: z.enum(RECORDING_MODES).nullable().optional(),
+  serverRecording: z.boolean().optional(),
+  serverRecordingId: uuidSchema.nullable().optional(),
 });
 
 export const sessionFileSchema = z.object({
@@ -265,6 +280,8 @@ export const recordingSchema = z.object({
   storedAt: isoTimestampSchema.nullable(),
   /** Phase B Y26: set when the object was deleted (manual or retention); always sent by the api. */
   deletedAt: isoTimestampSchema.nullable().optional(),
+  /** Phase A.2 M4: who made the recording (always sent by the api). */
+  recordedBy: z.enum(RECORDING_SOURCES).optional(),
 });
 
 /** Multipart field `meta` of POST /sessions/:id/recordings (parsed from its JSON string). */

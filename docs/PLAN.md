@@ -80,6 +80,8 @@ See `docs/adr/`. Highlights: TypeScript backend (Fastify), Drizzle + Postgres (P
 
 **Phase A: done.** Every Phase A deliverable in section 3 is built against `docs/specs/phase-a-contracts.md`, except the items listed as out of Phase A. Gates: `pnpm smoke` passes 26/26 and the P1 Playwright run (`pnpm e2e`) passes. The pion recorder (A.2) and full SSO (Phase E) stay deferred as planned.
 
+**Phase A.2 (server-side recorder): implemented, not yet reviewed or committed.** Contract `docs/specs/phase-a2-recorder.md`. Go service `services/recorder` (pion/webrtc v4, ebml-go WebM, prometheus); api recorder participant, org recording policy, internal upload and ICE; Desk second peer connection and consent text; Assist "Server recording" badge. Gates: `pnpm recorder:test` (26 Go tests), `pnpm smoke:recorder` 12/12. Not yet covered: a browser e2e with real media into the recorder, multi-node recorder bridging (contract Z5) and recorder hand-over (Z6).
+
 **Phase B (Package 2): implemented; the review fix round is integrated.** The contract is `docs/specs/phase-b-contracts.md`. All gates pass on the working tree: build, typecheck, lint, unit tests (shared 195, db 58 + 3 skipped, api 138, web 160, extension 125), `pnpm test:scripts` 24, `pnpm validate:infra`, `pnpm smoke` 26/26, `pnpm smoke:p2` 14/14, `pnpm e2e` (1 test, 16 steps) and `pnpm e2e:ext` (4 specs: bandwidth, control, extension, side panel). In the review round:
 - The recorder now re-masks revealed values. It holds lines while a `mask.request` is open (SEC-P2-02, prd-F1).
 - Keys follow the frame rule in both input modes (prd-F2, SEC-P2-04).

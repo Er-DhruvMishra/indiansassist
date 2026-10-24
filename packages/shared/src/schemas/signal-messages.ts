@@ -31,6 +31,9 @@ import {
   LIMITS,
   MIRROR_SCOPES,
   MIRROR_TRANSPORTS,
+  RECORDING_MODES,
+  RECORDING_SOURCES,
+  WEBRTC_PEERS,
 } from '../enums.js';
 import { extensionPolicySchema } from '../extension/policy.js';
 import { controlMessageSchema } from '../extension/control.js';
@@ -103,14 +106,17 @@ export const deskConsentSchema = msg('desk.consent', {
   surface: consentSurfaceSchema.optional(),
   extension: extensionConsentSchema.optional(),
 });
+/** Phase A.2 N2: the Desk-side far end of a relayed frame; absent = `assist`. The server sets / strips it. */
+const peer = { peer: z.enum(WEBRTC_PEERS).optional() };
 /** `restart: true` = offer from a brand-new RTCPeerConnection; the receiver rebuilds its own first (Y23). */
 export const webrtcOfferSchema = msg('webrtc.offer', {
   sessionId,
   sdp: z.string().max(60000),
   restart: z.boolean().optional(),
+  ...peer,
 });
-export const webrtcAnswerSchema = msg('webrtc.answer', { sessionId, sdp: z.string().max(60000) });
-export const webrtcIceSchema = msg('webrtc.ice', { sessionId, candidate: iceCandidateInitSchema.nullable() });
+export const webrtcAnswerSchema = msg('webrtc.answer', { sessionId, sdp: z.string().max(60000), ...peer });
+export const webrtcIceSchema = msg('webrtc.ice', { sessionId, candidate: iceCandidateInitSchema.nullable(), ...peer });
 export const chatMessageSchema = msg('chat.message', {
   sessionId,
   msgId: uuidSchema,
@@ -253,6 +259,8 @@ export const sessionCreatedSchema = msg('session.created', {
   desk: z.object({ label: z.string() }),
   org: brandingPublicSchema,
   polite: z.boolean(),
+  /** Phase A.2 M2: the session's recording policy snapshot (always sent; optional for pre-A.2 fixtures). */
+  recordingMode: z.enum(RECORDING_MODES).optional(),
   ...optionalIce,
 });
 export const consentOkSchema = msg('consent.ok', {
@@ -270,7 +278,12 @@ export const consentChangedSchema = msg('consent.changed', {
   backstage: z.boolean().optional(),
 });
 export const consentLevelOkSchema = msg('consent.level_ok', { sessionId, level: consentLevel, backstage: z.boolean() });
-export const sessionRecordingSchema = msg('session.recording', { sessionId, recording: z.boolean() });
+/** `source` (Phase A.2 section 5): absent = `assist`. */
+export const sessionRecordingSchema = msg('session.recording', {
+  sessionId,
+  recording: z.boolean(),
+  source: z.enum(RECORDING_SOURCES).optional(),
+});
 export const iceRefreshSchema = msg('ice.refresh', {
   sessionId,
   iceServers: z.array(iceServerSchema),
@@ -298,6 +311,8 @@ export const sessionEndedSchema = msg('session.ended', {
   surface: consentSurfaceSchema.nullable(),
   recordingStarted: z.boolean(),
   reachedActive: z.boolean(),
+  /** Phase A.2 U3: the server recorder joined this session. */
+  serverRecording: z.boolean().optional(),
 });
 export const eventOkSchema = msg('event.ok', { sessionId, entryId: uuidSchema });
 export const signalErrorSchema = msg('error', {

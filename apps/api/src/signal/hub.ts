@@ -11,6 +11,7 @@ import {
   ASSIST_CLIENT_TYPES,
   BUCKET_EXEMPT_TYPES,
   DESK_CLIENT_TYPES,
+  RECORDER_CLIENT_TYPES,
   isRegionServed,
   parseClientSignal,
   SESSION_COOKIE_NAME,
@@ -42,6 +43,7 @@ import { ForbiddenGuard } from './forbidden.js';
 import { HubApi } from './hub-api.js';
 import { onConnClosed } from './lifecycle.js';
 import { handleChatMessage, handleSessionEnd, handleWebrtc } from './relay.js';
+import { handleRecorderHello, handleRecorderJoin, handleRecorderLeave } from './recorder.js';
 
 type Handler = (hub: SignalHub, conn: Conn, msg: never) => Promise<void>;
 
@@ -64,10 +66,13 @@ const HANDLERS: Partial<Record<ClientSignalMessage['t'], Handler>> = {
   'desk.consent_backstage': handleDeskConsentBackstage as Handler,
   'mirror.relay': handleMirrorRelay as Handler,
   'control.relay': handleControlRelay as Handler,
+  'recorder.join': handleRecorderJoin as Handler,
+  'recorder.leave': handleRecorderLeave as Handler,
 };
 
 const ASSIST_TYPES = new Set<string>(ASSIST_CLIENT_TYPES);
 const DESK_TYPES = new Set<string>(DESK_CLIENT_TYPES);
+const RECORDER_TYPES = new Set<string>(RECORDER_CLIENT_TYPES);
 const EXEMPT_TYPES = new Set<string>(BUCKET_EXEMPT_TYPES);
 const T_RE = /^\s*\{\s*"t"\s*:\s*"([a-z._]{1,40})"/;
 
@@ -209,7 +214,7 @@ export class SignalHub extends HubApi {
     const re = msg.id;
     if (msg.t === 'ping') return conn.send({ t: 'pong', ...(re !== undefined ? { re } : {}) });
     if (msg.t === 'pong') return;
-    const hello = msg.t === 'assist.hello' || msg.t === 'desk.hello';
+    const hello = msg.t === 'assist.hello' || msg.t === 'desk.hello' || msg.t === 'recorder.hello';
     if (hello && conn.helloed) return conn.error('bad_state', 'hello already completed', re);
     if (msg.t === 'assist.hello' && conn.extensionOrigin) {
       conn.error('forbidden', 'an extension origin may only connect as a Desk', re);
@@ -219,8 +224,9 @@ export class SignalHub extends HubApi {
     let handler: Handler | undefined;
     if (msg.t === 'assist.hello') handler = handleAssistHello as Handler;
     else if (msg.t === 'desk.hello') handler = handleDeskHello as Handler;
+    else if (msg.t === 'recorder.hello') handler = handleRecorderHello as Handler;
     else {
-      const allowed = conn.side === 'assist' ? ASSIST_TYPES : DESK_TYPES;
+      const allowed = conn.side === 'assist' ? ASSIST_TYPES : conn.side === 'recorder' ? RECORDER_TYPES : DESK_TYPES;
       if (!allowed.has(msg.t)) return conn.error('forbidden', `${msg.t} is not allowed for this side`, re);
       handler = HANDLERS[msg.t];
     }

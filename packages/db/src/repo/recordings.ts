@@ -1,5 +1,5 @@
-/** recording repository (contracts sections 4.2, 6.10, 9). One recording per session in Phase A. */
-import { LIMITS, type Region } from '@indiansassist/shared';
+/** recording repository (contracts sections 4.2, 6.10, 9). One recording per session per source (Phase A.2 Z1). */
+import { LIMITS, type RecordingSource, type Region } from '@indiansassist/shared';
 import { and, asc, eq, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Executor } from '../client.js';
 import { NotFoundError } from '../errors.js';
@@ -9,7 +9,9 @@ export type InsertRecordingInput = {
   id?: string;
   orgId: string;
   sessionId: string;
-  uploadedBy: string;
+  /** Null only for server recordings (Phase A.2 Z1). */
+  uploadedBy: string | null;
+  recordedBy?: RecordingSource;
   storageKey: string;
   region: Region;
   mime?: string;
@@ -32,6 +34,7 @@ export async function insertRecording(exec: Executor, input: InsertRecordingInpu
       orgId: input.orgId,
       sessionId: input.sessionId,
       uploadedBy: input.uploadedBy,
+      recordedBy: input.recordedBy ?? 'assist',
       storageKey: input.storageKey,
       region: input.region,
       mime: input.mime ?? 'video/webm',
@@ -50,8 +53,17 @@ export async function getRecording(exec: Executor, id: string): Promise<Recordin
   return row ?? null;
 }
 
-export async function getRecordingBySession(exec: Executor, sessionId: string): Promise<RecordingRow | null> {
-  const [row] = await exec.select().from(recording).where(eq(recording.sessionId, sessionId)).limit(1);
+/** The session's recording of one source (default the Assist's, Phase A behaviour). */
+export async function getRecordingBySession(
+  exec: Executor,
+  sessionId: string,
+  source: RecordingSource = 'assist',
+): Promise<RecordingRow | null> {
+  const [row] = await exec
+    .select()
+    .from(recording)
+    .where(and(eq(recording.sessionId, sessionId), eq(recording.recordedBy, source)))
+    .limit(1);
   return row ?? null;
 }
 

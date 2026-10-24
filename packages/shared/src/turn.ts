@@ -10,7 +10,8 @@ export type IceServer = { urls: string[]; username?: string; credential?: string
 export type IceConfig = { iceServers: IceServer[]; iceTtl: number; iceExpiresAt: string };
 
 /** `user:<userId>` for the Assist, `desk:<sessionId>` for the Desk. */
-export type TurnPrincipal = `user:${string}` | `desk:${string}`;
+/** `recorder:<recorderId>` is the Phase A.2 service principal (docs/specs/phase-a2-recorder.md section 10). */
+export type TurnPrincipal = `user:${string}` | `desk:${string}` | `recorder:${string}`;
 
 /** `base64(HMAC-SHA1(key = secret, message = username))`. */
 export function turnCredential(secret: string, username: string): string {

@@ -22,6 +22,7 @@ export * from './schemas/rest-core.js';
 export * from './schemas/rest-tokens.js';
 export * from './schemas/rest-sessions.js';
 export * from './schemas/signal-messages.js';
+export * from './schemas/signal-recorder.js';
 export * from './schemas/signal.js';
 export * from './schemas/datachannel.js';
 export * from './extension/deny-list.js';

@@ -7,6 +7,8 @@ import {
   CONSENT_LEVELS,
   CONSENT_STATES,
   MIRROR_SCOPES,
+  RECORDING_MODES,
+  RECORDING_SOURCES,
   DEVICE_STATUSES,
   FILE_DIRECTIONS,
   INTEGRATION_TYPES,
@@ -77,6 +79,8 @@ const ENUMS: Record<string, readonly string[]> = {
   device_status: DEVICE_STATUSES,
   consent_level: CONSENT_LEVELS,
   mirror_scope: MIRROR_SCOPES,
+  recording_mode: RECORDING_MODES,
+  recording_source: RECORDING_SOURCES,
 };
 
 describe('migrations', () => {
@@ -126,10 +130,10 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(4);
+    expect(rows[0]!.n).toBe(5);
   });
 
-  it('commit a journal with the init, append_only, open-session index and Phase B migrations', () => {
+  it('commit a journal with the init, append_only, open-session index, Phase B and A.2 recorder migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
@@ -138,6 +142,7 @@ describe('migrations', () => {
       '0001_append_only',
       '0002_session_token_open_unique',
       '0003_phase_b',
+      '0004_recorder',
     ]);
   });
 

@@ -109,11 +109,13 @@ export class ForbiddenGuard {
 /** The guard key of a socket: `user:<id>` for an authenticated Assist, `desk:<tokenId>` for a Desk. */
 export function forbiddenKey(conn: {
   id: string;
-  side: 'assist' | 'desk' | null;
+  side: 'assist' | 'desk' | 'recorder' | null;
   principal: { user: { id: string } } | null;
   desk: { tokenId: string } | null;
+  recorder?: { recorderId: string } | null;
 }): string {
   if (conn.side === 'assist' && conn.principal) return `user:${conn.principal.user.id}`;
+  if (conn.side === 'recorder' && conn.recorder) return `recorder:${conn.recorder.recorderId}`;
   if (conn.desk) return `desk:${conn.desk.tokenId}`;
   return `conn:${conn.id}`;
 }

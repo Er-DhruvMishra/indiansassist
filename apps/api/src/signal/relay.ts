@@ -21,7 +21,8 @@ export async function authorizeSession(
   re?: string,
 ): Promise<Live | null> {
   const live = hub.live.get(sessionId);
-  const registered = conn.side === 'assist' ? live?.assistConnId : live?.deskConnId;
+  const registered =
+    conn.side === 'assist' ? live?.assistConnId : conn.side === 'recorder' ? live?.recorder.connId : live?.deskConnId;
   if (live && registered === conn.id) return live;
   await refuse(hub, conn, sessionId, messageType, re);
   return null;
@@ -68,11 +69,26 @@ function peerOf(hub: SignalHub, conn: Conn, live: Live): Conn | null {
 
 type WebrtcMsg = SignalOf<'webrtc.offer'> | SignalOf<'webrtc.answer'> | SignalOf<'webrtc.ice'>;
 
+/**
+ * Hard rule 1 plus the Phase A.2 N2 routing: recorder frames go to the Desk tagged `peer: 'recorder'` (only while
+ * the recorder is joined, S2); Desk frames tagged `peer: 'recorder'` go to the recorder, others to the Assist;
+ * Assist frames reach the Desk with any `peer` removed, so an Assist cannot impersonate the recorder.
+ */
 export async function handleWebrtc(hub: SignalHub, conn: Conn, msg: WebrtcMsg): Promise<void> {
   const live = await authorizeSession(hub, conn, msg.sessionId, msg.t, msg.id);
   if (!live) return;
   if (live.state !== 'active')
     return conn.error('consent_required', 'media is relayed only after accept and consent', msg.id);
+  const { peer, ...rest } = msg;
+  if (conn.side === 'recorder') {
+    if (!live.recorder.joined) return conn.error('consent_required', 'the recorder is not joined', msg.id);
+    return hub.conn(live.deskConnId)?.send({ ...rest, peer: 'recorder' });
+  }
+  if (conn.side === 'desk' && peer === 'recorder') {
+    if (!live.recorder.joined) return conn.error('consent_required', 'no recorder is joined', msg.id);
+    return hub.conn(live.recorder.connId)?.send({ ...rest, peer: 'recorder' });
+  }
+  if (conn.side === 'assist') return hub.conn(live.deskConnId)?.send(rest);
   peerOf(hub, conn, live)?.sendRaw(JSON.stringify(msg));
 }
 

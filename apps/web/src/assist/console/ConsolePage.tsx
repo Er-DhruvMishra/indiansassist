@@ -36,8 +36,8 @@ export function ConsolePage() {
 
   if (cached && signal?.client && can(me?.user.role, 'ws.assist')) {
     // Phase B 10: a P2 (extension) session mounts the mirror console instead of the video console.
-    const Live = cached.tier === 'p2_extension' ? MirrorLiveConsole : LiveConsole;
-    return <Live sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} />;
+    if (cached.tier === 'p2_extension') return <MirrorLiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} />;
+    return <LiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} session={d} />;
   }
   if (detail.loading) return <Spinner label="Loading session" />;
   if (!d) return <Alert>{errorMessage(detail.error)}</Alert>;
@@ -67,8 +67,8 @@ export function ConsolePage() {
 
   const isAssist = d.assist.id === me?.user.id;
   if (isAssist && signal?.client) {
-    const Live = d.tier === 'p2_extension' ? MirrorLiveConsole : LiveConsole;
-    return <Live sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} />;
+    if (d.tier === 'p2_extension') return <MirrorLiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} />;
+    return <LiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} session={d} />;
   }
 
   return (
