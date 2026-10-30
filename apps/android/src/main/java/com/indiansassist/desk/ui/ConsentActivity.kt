@@ -15,6 +15,11 @@ import android.widget.RadioGroup
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.indiansassist.desk.core.DeskPhase
+import kotlinx.coroutines.launch
 import com.indiansassist.desk.service.DeskAccessibilityService
 import com.indiansassist.desk.service.Indicator
 import com.indiansassist.desk.session.SessionHub
@@ -91,10 +96,18 @@ class ConsentActivity : ComponentActivity() {
             override fun onTick(ms: Long) { countdown.text = "This request expires in ${ms / 1000} s" }
             override fun onFinish() { if (!decided) finish() }
         }.start()
+        // A consent screen outlives its request only by mistake: close it once the session left consent_pending
+        // (consented, declined, ended by the Assist, or the 180 s deadline on the server).
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                SessionHub.state.collect { s -> if (!decided && (s.phase != DeskPhase.CONSENT_PENDING || s.ended != null)) finish() }
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        if (!decided && SessionHub.state.value.phase != DeskPhase.CONSENT_PENDING) return finish()
         refresh()
     }
 

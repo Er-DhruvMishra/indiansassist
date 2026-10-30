@@ -54,6 +54,7 @@ class DeskController(private val service: SessionService, private val token: Res
     private var poll: ScheduledFuture<*>? = null
     private val timers = mutableListOf<ScheduledFuture<*>>()
     private var levelSeq = 0
+    private var endA11yQueued = false
     private val levelWaiters = HashMap<String, String>() // desk.consent_level frame id -> ctl.req id
 
     override val sessionId: String get() = machine.sessionId ?: ""
@@ -127,7 +128,11 @@ class DeskController(private val service: SessionService, private val token: Res
             DeskEffect.Teardown -> { live?.teardown(); live = null; service.mediaStopped() }
             DeskEffect.FlushOutbox -> {
                 audit.flush(force = true).forEach { outbox.add(it) }
-                if (machine.sessionId != null && machine.phase != DeskPhase.IDLE) outbox.add(OutboxEntry("a11y.state", obj("enabled" to DeskAccessibilityService.isEnabled(service))))
+                // Section 3.8: a11y.state at session start and once at the end (the flush runs before and after teardown).
+                if (machine.sessionId != null && machine.phase != DeskPhase.IDLE && !endA11yQueued) {
+                    endA11yQueued = true
+                    outbox.add(OutboxEntry("a11y.state", obj("enabled" to DeskAccessibilityService.isEnabled(service))))
+                }
                 machine.sessionId?.let { sid -> repeat(10) { outbox.drain(sid) { f -> socket?.send(f) ?: false } } }
             }
             is DeskEffect.Recording -> SessionHub.update { it.copy(recording = e.on) }

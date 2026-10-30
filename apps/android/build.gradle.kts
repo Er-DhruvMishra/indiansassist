@@ -10,7 +10,10 @@ plugins {
 // Compiled region origins (contracts section 2.1): the app joins only through these. Debug builds add the
 // emulator's view of the host (10.0.2.2) so `pnpm dev` works; release builds carry production origins only.
 val releaseOrigins = "https://in.indiansassist.example"
-val debugOrigins = "http://10.0.2.2:4000,http://localhost:4000,https://in.indiansassist.example"
+// `IA_DEV_API` (env) or `-PiaDevApi=` moves the debug build's default api, e.g. http://localhost:4300 behind
+// `adb reverse tcp:4300 tcp:4300` for the live emulator e2e (tools/android-e2e.mjs); it joins the debug origins.
+val devApi = ((findProperty("iaDevApi") as String?) ?: System.getenv("IA_DEV_API") ?: "http://10.0.2.2:4000").trimEnd('/')
+val debugOrigins = listOf(devApi, "http://10.0.2.2:4000", "http://localhost:4000", "https://in.indiansassist.example").distinct().joinToString(",")
 
 android {
     namespace = "com.indiansassist.desk"
@@ -34,7 +37,7 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "REGION_ORIGINS", "\"$debugOrigins\"")
-            buildConfigField("String", "DEFAULT_API_ORIGIN", "\"http://10.0.2.2:4000\"")
+            buildConfigField("String", "DEFAULT_API_ORIGIN", "\"$devApi\"")
             buildConfigField("boolean", "DEV", "true")
             manifestPlaceholders["cleartext"] = "true"
         }

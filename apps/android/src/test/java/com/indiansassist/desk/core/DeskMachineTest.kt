@@ -74,6 +74,9 @@ class DeskMachineTest {
         assertTrue(iCtrl in 0 until iTear && iTear < iEnd)
         assertEquals("stop.sharing", (e[iCtrl] as DeskEffect.SendCtrl).msg.str("t"))
         assertTrue(DeskEffect.FlushOutbox in e)
+        // Attestations go out on the WS before the teardown closes the channels (the live e2e race), and once more after.
+        assertTrue(e.indexOf(DeskEffect.FlushOutbox) in (iCtrl + 1) until iTear)
+        assertTrue(e.lastIndexOf(DeskEffect.FlushOutbox) in (iTear + 1) until iEnd)
         assertEquals(DeskPhase.ENDING, m.phase)
         val ended = srv("t" to "session.ended", "sessionId" to "s1", "endReason" to "desk_stopped", "hashChainTail" to "abc", "reachedActive" to true)
         assertEquals(EndInfo("desk_stopped", local = false, hashChainTail = "abc", reachedActive = true), ended.one<DeskEffect.Ended>().info)

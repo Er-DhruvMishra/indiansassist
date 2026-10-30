@@ -32,8 +32,14 @@ object Ui {
         setBackgroundColor(Color.parseColor("#FAFAFA"))
         addView(child)
         setOnApplyWindowInsetsListener { v, insets ->
-            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.ime())
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            } else {
+                // Android 10 (min SDK 29): WindowInsets.Type does not exist; the system-window insets include the IME.
+                @Suppress("DEPRECATION")
+                v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            }
             insets
         }
     }

@@ -181,7 +181,10 @@ class LiveMedia(
         }
         inputExec.execute {
             when (val out = dispatcher.handle(req)) {
-                is ControlOutcome.Reply -> sendControl(out.res)
+                is ControlOutcome.Reply -> {
+                    DevLog.control(req.op, req.id, out.res, (req.parsed as? com.indiansassist.desk.core.AgentOp.Pointer)?.kind)
+                    sendControl(out.res)
+                }
                 is ControlOutcome.LevelPrompt -> exec.execute { host.levelPrompt(out.id, out.reason) }
             }
         }

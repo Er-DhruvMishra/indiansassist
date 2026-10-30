@@ -109,7 +109,7 @@ class DeskMachine(private val client: DeskClient, private val deskLabel: String?
             val sid = sessionId
             if (!isLive || sid == null) emptyList() else {
                 phase = DeskPhase.ENDING
-                listOf(DeskEffect.SendCtrl(obj("t" to "consent.revoked", "ts" to System.currentTimeMillis())), DeskEffect.Teardown, DeskEffect.FlushOutbox) +
+                listOf(DeskEffect.SendCtrl(obj("t" to "consent.revoked", "ts" to System.currentTimeMillis())), DeskEffect.FlushOutbox, DeskEffect.Teardown, DeskEffect.FlushOutbox) +
                     endFrame(DeskSignal.consentRevoked(sid))
             }
         }
@@ -141,6 +141,9 @@ class DeskMachine(private val client: DeskClient, private val deskLabel: String?
             else -> {
                 val out = mutableListOf<DeskEffect>()
                 if (sendStopSharing && isLive) out += DeskEffect.SendCtrl(obj("t" to "stop.sharing", "ts" to System.currentTimeMillis()))
+                // Attestations ride the WS, not the channels: send them before the teardown closes the channels, so
+                // they are chained even if the Assist ends the session the moment it sees the channels close.
+                if (isLive) out += DeskEffect.FlushOutbox
                 out += DeskEffect.Teardown
                 out += DeskEffect.FlushOutbox
                 phase = DeskPhase.ENDING

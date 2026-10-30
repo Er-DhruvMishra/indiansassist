@@ -32,6 +32,8 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class DeskAccessibilityService : AccessibilityService(), InputBackend {
     private var current: GestureDescription.StrokeDescription? = null
+    /** Where the open stroke's path ends: a continuation must start exactly there or the system cancels it. */
+    private var currentEnd: Pt? = null
 
     override fun onServiceConnected() {
         instance = this
@@ -66,31 +68,43 @@ class DeskAccessibilityService : AccessibilityService(), InputBackend {
         val b = GestureDescription.Builder()
         plan.strokes.forEach { s -> b.addStroke(GestureDescription.StrokeDescription(path(s.points), s.startMs, s.durationMs.coerceAtLeast(1))) }
         val total = plan.strokes.maxOf { it.startMs + it.durationMs }
-        return dispatch(b.build(), total)
+        return dispatch(b.build(), total, "gesture", plan.strokes.size)
     }
 
     override fun stroke(cmd: StrokeCommand): InputResult {
-        if (!allowed()) { current = null; return InputResult.OWN_WINDOW }
+        if (!allowed()) { current = null; currentEnd = null; return InputResult.OWN_WINDOW }
         val desc = when (cmd) {
             is StrokeCommand.Begin -> {
                 if (ownWindowAt(cmd.at)) return InputResult.OWN_WINDOW
+                currentEnd = Pt(cmd.at.x + 0.5f, cmd.at.y + 0.5f) // path() draws a one-point stroke as a 0.5 px segment
                 GestureDescription.StrokeDescription(path(listOf(cmd.at)), 0, 1, true)
             }
             is StrokeCommand.Continue -> {
                 val prev = current ?: return InputResult.OK
                 if (ownWindowAt(cmd.to)) {
                     current = null
+                    currentEnd = null
                     return InputResult.OWN_WINDOW
                 }
-                prev.continueStroke(path(listOf(cmd.from, cmd.to)), 0, cmd.durationMs.coerceAtLeast(1), cmd.willContinue)
+                // MotionEventInjector cancels a continuation that does not start at the previous segment's last point
+                // (the begin stroke ends 0.5 px off its tap point), and a zero-length segment is not a valid path.
+                val from = currentEnd ?: cmd.from
+                val to = if (from == cmd.to) Pt(cmd.to.x - 0.5f, cmd.to.y - 0.5f) else cmd.to
+                currentEnd = to
+                prev.continueStroke(path(listOf(from, to)), 0, cmd.durationMs.coerceAtLeast(1), cmd.willContinue)
             }
         }
         current = if (cmd is StrokeCommand.Continue && !cmd.willContinue) null else desc
+        if (current == null) currentEnd = null
         val dur = if (cmd is StrokeCommand.Continue) cmd.durationMs else 1
-        return dispatch(GestureDescription.Builder().addStroke(desc).build(), dur)
+        val kind = when (cmd) {
+            is StrokeCommand.Begin -> "stroke.begin"
+            is StrokeCommand.Continue -> if (cmd.willContinue) "stroke.continue" else "stroke.end"
+        }
+        return dispatch(GestureDescription.Builder().addStroke(desc).build(), dur, kind, 1)
     }
 
-    private fun dispatch(g: GestureDescription, durationMs: Long): InputResult {
+    private fun dispatch(g: GestureDescription, durationMs: Long, kind: String, strokes: Int): InputResult {
         DispatchWindows.record(SystemClock.uptimeMillis(), durationMs)
         val done = CountDownLatch(1)
         val result = AtomicReference(InputResult.FAILED)
@@ -99,9 +113,12 @@ class DeskAccessibilityService : AccessibilityService(), InputBackend {
             // A cancelled gesture is most often a FLAG_SECURE window (banking apps, some keyboards), section 12.4.
             override fun onCancelled(gestureDescription: GestureDescription?) { result.set(InputResult.SECURE_WINDOW); done.countDown() }
         }, null)
-        if (!accepted) return InputResult.FAILED
+        if (!accepted) {
+            DevLog.gesture(kind, accepted = false, result = "FAILED", strokes = strokes, durationMs = durationMs)
+            return InputResult.FAILED
+        }
         done.await(durationMs + 2_000, TimeUnit.MILLISECONDS)
-        return result.get()
+        return result.get().also { DevLog.gesture(kind, accepted = true, result = it.name, strokes = strokes, durationMs = durationMs) }
     }
 
     override fun nav(action: String): InputResult {

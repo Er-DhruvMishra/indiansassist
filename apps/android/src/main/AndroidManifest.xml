@@ -52,9 +52,12 @@
         </activity>
 
         <!-- Prompt activities: consent, file accept, level request. They filter obscured and injected touches. -->
-        <activity android:name=".ui.ConsentActivity" android:exported="false" android:excludeFromRecents="true" />
+        <!-- singleTop: both the in-app screen and the service start them; one instance only (a second consent
+             screen used to stay on top of the live session). -->
+        <activity android:name=".ui.ConsentActivity" android:exported="false" android:excludeFromRecents="true"
+            android:launchMode="singleTop" />
         <activity android:name=".ui.PromptActivity" android:exported="false" android:excludeFromRecents="true"
-            android:theme="@style/Theme.IndiansAssist.Dialog" />
+            android:launchMode="singleTop" android:theme="@style/Theme.IndiansAssist.Dialog" />
 
 
         <service
