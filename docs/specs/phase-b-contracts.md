@@ -365,7 +365,7 @@ Server: `RECORDING_MEDIA_TYPES` gains `application/x-ia-rrweb+jsonl` (no `codecs
 | `debugger` | `{ tabId, attached: boolean, cause?: 'request' \| 'level' \| 'navigation' \| 'pause' \| 'user' \| 'close' }` | attach / detach |
 | `paused` | `{ tabId, paused: boolean }` | Desk pause / resume |
 | `backstage` | `{ tabId, state: 'opened' \| 'closed' \| 'front' }` | §6 |
-| `prompt` | `{ id: string, promptKind: 'level' \| 'mask' \| 'attach', state: 'shown' \| 'answered', opId }` | a prompt card opened / closed on the Desk (`id` = the `ctl.req.id` that caused it) |
+| `prompt` | `{ id: string, promptKind: 'level' \| 'mask' \| 'attach', state: 'shown' \| 'answered', opId }` **(Phase C amendment:** `promptKind` gains `elevation` and `file`, sent by the native agent for its elevation Allow card and file-accept dialog, C §5.1) | a prompt card opened / closed on the Desk (`id` = the `ctl.req.id` that caused it) |
 
 Shared (`extension/control.ts`): `CONTROL_OPS` const tuple, `controlRequestSchema` (discriminated on `op`, strict args), `controlResponseSchema`, `controlEventSchema`, `controlMessageSchema`, `ControlMessage` union, `minLevelFor(op): ConsentLevel`, `CONTROL_ERROR_CODES = ['not_allowed', 'denied_url', 'no_such_tab', 'tab_paused', 'not_supported', 'not_in_scope', 'debugger_unavailable', 'refused', 'timeout', 'rate_limited', 'bad_args', 'internal']`. Every request gets exactly one response; the Assist times out after 10 s (`level.request`, `mask.request` and `mirror.attach` after 65 s: the Desk's 60 s prompt plus slack) and treats it as `{ code: 'timeout' }`.
 
