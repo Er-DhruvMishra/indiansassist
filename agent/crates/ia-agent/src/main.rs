@@ -78,11 +78,24 @@ fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
             std::process::exit(1);
         }
     };
+    // The dev session flags drive the (headless) e2e path: synthetic capture, keep-on-exit and a
+    // deterministic Stop. They are logged here and consumed by the session once the serve loop
+    // past `session.created` runs; `--stop-after` also sizes the signaling wait budget so an
+    // automated run is not cut short before the technician accepts.
+    if cli.synthetic_capture || cli.no_self_delete || cli.stop_after.is_some() {
+        tracing::info!(
+            synthetic_capture = cli.synthetic_capture,
+            no_self_delete = cli.no_self_delete,
+            stop_after = ?cli.stop_after,
+            "dev session flags"
+        );
+    }
+    let budget = cli
+        .stop_after
+        .map(|s| Duration::from_secs(s.saturating_add(10)))
+        .unwrap_or_else(|| Duration::from_secs(20));
     let outcome = rt.block_on(ia_agent::session::run_signaling(
-        cli,
-        &r.token,
-        r.source,
-        Duration::from_secs(20),
+        cli, &r.token, r.source, budget,
     ));
     match outcome {
         Ok(o) => println!("signaling outcome: {o:?}"),

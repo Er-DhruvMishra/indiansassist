@@ -98,12 +98,24 @@ CI-only steps. (The `aarch64` prebuilt libvpx is a CI prerequisite; this host bu
 
 ## Running
 
-Build a console (dev) exe you can drive from a terminal:
+Build a console (dev) exe you can drive from a terminal (also `pnpm agent:build:dev` from the repo root):
 
 ```sh
 cargo build --release -p ia-agent --features dev
 ./target/release/IndiansAssist.exe --help
 ```
+
+The dev build adds, beyond `--api-origin` / `--signal-url` / `--auto-consent <view|control|elevated>`:
+
+* `--synthetic-capture` — use the generated-frame capturer instead of DXGI/GDI, so a session runs on a headless
+  host (the Playwright `e2e:p3` and the loopback path).
+* `--no-self-delete` — keep the binary on exit (the §10 self-delete decision is still computed and logged).
+* `--stop-after <secs>` — once the session is live, Stop it after this many seconds (a deterministic end for an
+  automated run). It also sizes the signaling wait budget so the run is not cut short before the technician accepts.
+
+These feed the repo-root `pnpm e2e:p3` harness (`apps/web/e2e/package3.spec.ts` + `agent-harness.ts`), which signs
+up a p3_portable org in a browser, mints a token and spawns this binary as the Desk. The harness is in place; the
+assertions after the knock wait on the live serve loop below.
 
 Against a local API (`pnpm --filter @indiansassist/api dev`, signaling at
 `ws://localhost:4000/signal`):

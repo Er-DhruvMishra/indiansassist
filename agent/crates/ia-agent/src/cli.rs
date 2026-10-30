@@ -23,6 +23,15 @@ pub struct Cli {
     pub signal_url: Option<String>,
     /// `--auto-consent <view|control|elevated>` (debug builds only): skip the window.
     pub auto_consent: Option<AgentConsentLevel>,
+    /// `--synthetic-capture` (dev only): use the generated-frame capturer instead of DXGI/GDI
+    /// so a session can run on a headless host (the e2e / loopback path).
+    pub synthetic_capture: bool,
+    /// `--no-self-delete` (dev only): keep the binary on exit (skip the §10 self-delete spawn);
+    /// the decision is still computed and logged.
+    pub no_self_delete: bool,
+    /// `--stop-after <secs>` (dev only): once the session is live, Stop it after this many
+    /// seconds (so an automated run ends the session deterministically without a UI click).
+    pub stop_after: Option<u64>,
 }
 
 /// A credential captured from the command line, kept as the raw string so it can be
@@ -97,12 +106,27 @@ fn parse_dev_switches(cli: &mut Cli, args: &[String]) -> Result<(), CliError> {
     if let Some(level) = value_after(args, "--auto-consent") {
         cli.auto_consent = Some(parse_level(level)?);
     }
+    cli.synthetic_capture = args.iter().any(|a| a == "--synthetic-capture");
+    cli.no_self_delete = args.iter().any(|a| a == "--no-self-delete");
+    if let Some(v) = value_after(args, "--stop-after") {
+        cli.stop_after = Some(
+            v.parse()
+                .map_err(|_| CliError("--stop-after wants a whole number of seconds".into()))?,
+        );
+    }
     Ok(())
 }
 
 #[cfg(not(feature = "dev"))]
 fn parse_dev_switches(_cli: &mut Cli, args: &[String]) -> Result<(), CliError> {
-    for dev in ["--api-origin", "--signal-url", "--auto-consent"] {
+    for dev in [
+        "--api-origin",
+        "--signal-url",
+        "--auto-consent",
+        "--synthetic-capture",
+        "--no-self-delete",
+        "--stop-after",
+    ] {
         if args.iter().any(|a| a == dev) {
             return Err(CliError(format!(
                 "{dev} is available only in a development build"
@@ -140,8 +164,10 @@ OPTIONS:
     --url  <link>   An indiansassist://join deep link (takes the whole command tail).
     -h, --help      Print this help.
 
-Development builds also accept --api-origin <origin>, --signal-url <ws-url> and
---auto-consent <view|control|elevated> for local testing against `pnpm dev`.
+Development builds also accept --api-origin <origin>, --signal-url <ws-url>,
+--auto-consent <view|control|elevated>, --synthetic-capture (generated frames, no
+display), --no-self-delete (keep the binary) and --stop-after <secs> for local and
+automated testing against `pnpm dev`.
 
 With no code the connect window prompts for one. The agent shows a consent window
 before sharing and an always-on-top indicator while a session is live, and removes
@@ -194,6 +220,9 @@ mod tests {
     fn release_build_rejects_dev_switches() {
         assert!(p(&["--api-origin", "http://localhost:4000"]).is_err());
         assert!(p(&["--auto-consent", "control"]).is_err());
+        assert!(p(&["--synthetic-capture"]).is_err());
+        assert!(p(&["--no-self-delete"]).is_err());
+        assert!(p(&["--stop-after", "30"]).is_err());
     }
 
     #[cfg(feature = "dev")]
@@ -204,9 +233,26 @@ mod tests {
             "http://localhost:4000",
             "--auto-consent",
             "control",
+            "--synthetic-capture",
+            "--no-self-delete",
+            "--stop-after",
+            "30",
         ])
         .unwrap();
         assert_eq!(cli.api_origin.as_deref(), Some("http://localhost:4000"));
         assert_eq!(cli.auto_consent, Some(AgentConsentLevel::Control));
+        assert!(cli.synthetic_capture);
+        assert!(cli.no_self_delete);
+        assert_eq!(cli.stop_after, Some(30));
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn dev_flags_default_off_and_stop_after_rejects_non_numbers() {
+        let cli = p(&["--code", "ia1.abcdefgh"]).unwrap();
+        assert!(!cli.synthetic_capture);
+        assert!(!cli.no_self_delete);
+        assert_eq!(cli.stop_after, None);
+        assert!(p(&["--stop-after", "soon"]).is_err());
     }
 }

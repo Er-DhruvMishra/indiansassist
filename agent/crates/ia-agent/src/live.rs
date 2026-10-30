@@ -86,8 +86,19 @@ impl ControlServer {
     ) -> Option<(Value, SessionEffect)> {
         let req = CtlReq::parse(text)?;
         let d = dispatch(&req, &self.ctx());
+        // `ctl::dispatch` is platform-free and cannot know the real monitor geometry, so it
+        // answers `os.monitors` with an empty `monitors` array (contract §5.1); the serve seam
+        // fills in the consented monitors it holds so the console's monitor picker is populated.
+        let mut response = d.response;
+        if req.op == "os.monitors" {
+            if let Some(result) = response.get_mut("result").and_then(|r| r.as_object_mut()) {
+                if let Ok(monitors) = serde_json::to_value(&self.monitors) {
+                    result.insert("monitors".to_string(), monitors);
+                }
+            }
+        }
         let effect = self.apply(&d.action, &req, input_sink, clipboard);
-        Some((d.response, effect))
+        Some((response, effect))
     }
 
     fn apply(
@@ -338,6 +349,30 @@ mod tests {
                 reason: "driver".into()
             }
         );
+    }
+
+    #[test]
+    fn os_monitors_response_carries_the_real_monitor_list() {
+        let mut s = server(AgentConsentLevel::View);
+        let mut sink = MockSink::default();
+        let mut clip = MockClip::default();
+        let (res, effect) = s
+            .handle_text(
+                r#"{"t":"ctl.req","id":"m","op":"os.monitors","args":{}}"#,
+                &mut sink,
+                &mut clip,
+            )
+            .unwrap();
+        assert_eq!(res["ok"], serde_json::json!(true));
+        assert_eq!(effect, SessionEffect::None);
+        // The serve seam fills `monitors` (ctl::dispatch leaves it empty); the picker needs it.
+        let monitors = res["result"]["monitors"]
+            .as_array()
+            .expect("monitors array");
+        assert_eq!(monitors.len(), 2);
+        assert_eq!(monitors[0]["id"], serde_json::json!(1));
+        assert_eq!(monitors[1]["name"], serde_json::json!("M2"));
+        assert_eq!(res["result"]["selected"], serde_json::json!([1, 2]));
     }
 
     #[test]

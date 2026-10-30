@@ -75,13 +75,16 @@ Contract: [docs/specs/phase-c-contracts.md](docs/specs/phase-c-contracts.md). Ru
 (the Gradle wrapper in `apps/android` downloads Gradle).
 
 ```
-pnpm agent:build       # cargo build of the agent/ workspace (default features: pure Rust, no C toolchain)
-pnpm agent:test        # cargo test, incl. ia-core tests/shared_vectors.rs (cross-language fixtures)
+pnpm agent:build       # cargo build of the agent/ workspace (all features; MSVC host)
+pnpm agent:build:dev   # release build of the dev console binary (adds --synthetic-capture / --auto-consent / ...)
+pnpm agent:test        # cargo test, incl. the two-peer webrtc loopback and ia-core cross-language vectors
 pnpm agent:clippy      # clippy -D warnings
+pnpm agent:release     # signed-shape release build (default features; GUI-subsystem exe)
 pnpm agent:fixtures    # the generated name fixtures are current (rebuild packages/shared first)
 pnpm android:test      # Gradle testDebugUnitTest
 pnpm android:build     # Gradle assembleDebug
 pnpm smoke:p3          # Package 3 server-side flow; start the api with SIGNUP_PLAN_TIER=p3_portable
+pnpm e2e:p3            # Package 3 browser-vs-agent e2e (builds the dev binary, spawns it as the Desk)
 node scripts/seed-playbooks.mjs   # starter playbooks for an org created before Phase C (SEED_EMAIL / SEED_PASSWORD)
 ```
 
@@ -101,11 +104,21 @@ and frames, `agent-names.json`, `file-lists.json`) are loaded by the TypeScript,
 implementations are checked byte for byte against one file. Regenerate them with
 `node apps/android/tools/gen-phase-c-vectors.mjs` and `node scripts/gen-agent-fixtures.mjs`.
 
-What does not work yet: the agent's runnable session (`media` feature: webrtc-rs, encoders, UI) is not built on the
-gnu dev machine, so no real agent has joined the api yet (`smoke:p3` simulates it, without media); there is no
-`e2e:p3` / `agent.spec.ts` yet; the P3 console has no voice, no Assist-side recording and no File System Access
-receive path above 256 MiB; nginx does not yet set `proxy_buffering off` for `/api/v1/download/`. See docs/PLAN.md
-section 7.
+The agent's `media` build (webrtc-rs, libvpx, egui) compiles and links on the MSVC host; the two-peer webrtc
+loopback (`agent/crates/ia-agent/tests/loopback.rs`) negotiates, completes the `ia.sec` handshake with a matching
+SAS and carries a VP8 keyframe between two real peers. The dev console binary (`pnpm agent:build:dev`) accepts
+`--api-origin`, `--synthetic-capture`, `--auto-consent <level>`, `--no-self-delete` and `--stop-after <secs>`, and
+the `pnpm e2e:p3` harness (`apps/web/e2e/package3.spec.ts` + `agent-harness.ts`, a P3 branch of
+`playwright.config.ts`) signs up a p3_portable org, mints a token and spawns the binary as the Desk.
+
+What does not work yet: the agent's **live serve loop past `session.created`** is not wired — the real
+offer/answer/ICE exchange with the console, the data-channel decrypt-and-serve loops (`ia.control` -> SendInput /
+clipboard, `ia.chat`, `ia.files`, `ia.playbook`), the `agent.stats` timer, the DXGI capture and the egui event
+loop — so a real agent does not yet complete a session against the api and `pnpm e2e:p3` is not green yet (it runs
+through the knock; the steps after accept wait on the serve loop). The decision logic for every one of those is an
+implemented, tested `ia-core` / `ia-agent` module (see `agent/README.md` "implemented vs stubbed"). The P3 console
+also has no voice or Assist-side recording; nginx does not yet set `proxy_buffering off` for `/api/v1/download/`.
+See docs/PLAN.md section 7.
 
 ### Server-side recorder (Phase A.2, Go)
 
