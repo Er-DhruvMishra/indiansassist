@@ -199,6 +199,15 @@ export const CONTROL_ERROR_CODES = [
   'rate_limited',
   'bad_args',
   'internal',
+  // Phase C section 5.1 additions (native Desk).
+  'elevation_required',
+  'no_such_monitor',
+  'blocked_uipi',
+  'secure_desktop',
+  'secure_window',
+  'clipboard_off',
+  'hash_mismatch',
+  'busy',
 ] as const;
 export type ControlErrorCode = (typeof CONTROL_ERROR_CODES)[number];
 

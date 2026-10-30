@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application
+        android:name=".DeskApp"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_ia"
+        android:label="IndiansAssist"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.IndiansAssist"
+        android:usesCleartextTraffic="${cleartext}">
+
+        <!-- Token entry, waiting, in-session and ended screens (section 12.3). -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- App Link: https://<WEB_ORIGIN host>/join#t=... verified by /.well-known/assetlinks.json (section 12.5). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="in.indiansassist.example" />
+                <data android:path="/join" />
+                <data android:path="/download" />
+            </intent-filter>
+            <!-- Deep link indiansassist://join?t=<compact> or ?c=<12 digits> (section 2.5 L2). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="indiansassist" android:host="join" />
+            </intent-filter>
+        </activity>
+
+        <!-- Prompt activities: consent, file accept, level request. They filter obscured and injected touches. -->
+        <activity android:name=".ui.ConsentActivity" android:exported="false" android:excludeFromRecents="true" />
+        <activity android:name=".ui.PromptActivity" android:exported="false" android:excludeFromRecents="true"
+            android:theme="@style/Theme.IndiansAssist.Dialog" />
+
+
+        <service
+            android:name=".service.SessionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|microphone" />
+
+        <service
+            android:name=".service.DeskAccessibilityService"
+            android:exported="false"
+            android:label="IndiansAssist remote control"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
+        </service>
+    </application>
+</manifest>

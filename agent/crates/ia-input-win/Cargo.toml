@@ -1,0 +1,25 @@
+[package]
+name = "ia-input-win"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Windows OS-level input: W3C code -> PS/2 scancode table, virtual-desktop pointer mapping (§5.3-5.4), and SendInput / clipboard injection (behind `winapi`)."
+
+[features]
+default = []
+winapi = ["dep:windows"]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+] }

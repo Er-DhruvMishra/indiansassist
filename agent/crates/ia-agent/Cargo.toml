@@ -1,0 +1,49 @@
+[package]
+name = "ia-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The IndiansAssist Windows agent binary: token-source precedence, elevation hand-over flow, self-delete decision (pure, tested), and the webrtc-rs peer / encoders / signaling wiring behind the `media` feature (contract §11.1)."
+
+[[bin]]
+name = "IndiansAssist"
+path = "src/main.rs"
+
+[lib]
+name = "ia_agent"
+path = "src/lib.rs"
+
+[features]
+default = []
+# The full agent: webrtc-rs peer, VP8/VP9/H.264 encoders, signaling, egui UI, Win32.
+# Requires a C toolchain + nasm (libvpx, ring), absent on the gnu dev machine; built in CI
+# on the msvc targets. See agent/README.md.
+media = [
+    "dep:tokio",
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:webrtc",
+    "ia-input-win/winapi",
+    "ia-capture-win/winapi",
+    "ia-platform/winapi",
+    "ia-ui/gui",
+]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-input-win.workspace = true
+ia-capture-win.workspace = true
+ia-ui.workspace = true
+tracing.workspace = true
+
+tokio = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+webrtc = { version = "0.11.0", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+hex.workspace = true

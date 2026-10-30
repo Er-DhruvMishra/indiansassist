@@ -94,3 +94,10 @@ Open before Phase B can be called done:
 - **prd-F4 is partial.** The toast and bar texts inside closed shadow roots are not asserted by e2e.
 - **Known gap (§5.4).** A frame inside a closed shadow root cannot be seen by the frame rule.
 - The review-round changes are not committed yet.
+
+**Phase C (Package 3 + Android host): partly built, not reviewed or committed.** The contract is `docs/specs/phase-c-contracts.md`. Status on 27 Oct 2026:
+- **Agent (`agent/`, Rust):** the pure-Rust crates are built and tested on `x86_64-pc-windows-gnu`: `ia-core` (the `ia.sec` handshake and frames, ABR, join input, download and sidecar parsing, file names, playbook arguments, the op table), the platform traits, the scancode and coordinate mapping, the BGRA to I420 conversion and the UI model. `cargo fmt`, clippy `-D warnings` and 115 tests pass. The runnable session is not built: the WS client, webrtc-rs peer, encoders, capture and egui UI sit behind the `media`/`winapi`/`gui` features and need a C toolchain this machine does not have. The dev binary only resolves the token source.
+- **Android host (`apps/android`):** `assembleDebug` builds and `testDebugUnitTest` passes (72 tests). The emulator smoke needs the api's P3 path.
+- **Shared:** `src/agent/sec.ts` (with `@noble/curves` and `@noble/ciphers`), `agent/control.ts` and `agent/capabilities.ts`, and the section 13.1 enums and `LIMITS` are in. The cross-language fixtures are in `packages/shared/test/fixtures/agent/`, and the TypeScript, Rust and Kotlin tests all read them. The rest of section 13.1 is not done: the signal, consent, download and playbook schemas and the P3 audit actions.
+- **Not started:** the api and db side (migration `0005_phase_c`, native `desk.hello` and its tier gate, `desk.consent.native`, hand-over, playbooks REST, download endpoints) and the web side (`AgentConsole`, `SasConfirmDialog`, the P3 join page). `pnpm smoke:p3` exists and currently gives 1 passed, 1 failed, 8 skipped. `e2e:p3` (`apps/web/e2e/package3.spec.ts`) waits on all of the above.
+

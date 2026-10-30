@@ -32,3 +32,6 @@ export * from './extension/control.js';
 export * from './extension/handshake.js';
 export * from './extension/rrweb-sanitise.js';
 export type * from './schemas/types.js';
+export * from './agent/sec.js';
+export * from './agent/control.js';
+export * from './agent/capabilities.js';

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_description">Lets the technician you are sharing your screen with tap, swipe and type on this phone, only while a support session is active and only after you allowed control. It reads the focused text field only to insert typed text. Turn it off after the session.</string>
+</resources>

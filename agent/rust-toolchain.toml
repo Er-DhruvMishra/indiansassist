@@ -1,0 +1,7 @@
+# Phase C contract §11.3. The build machine's only usable toolchain is the gnu one
+# (rustup's self-contained MinGW linker; no MSVC tools, no C compiler, no nasm). Pin it
+# explicitly so cargo never auto-installs the msvc host (which cannot link here). CI adds
+# the msvc targets to a gnu-or-msvc host for the signed release build.
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"
+components = ["rustfmt", "clippy"]

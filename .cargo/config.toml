@@ -1,0 +1,14 @@
+# Repo-root cargo config for the agent/ Rust workspace (Phase C).
+#
+# The build machine runs the x86_64-pc-windows-gnu toolchain whose linker is
+# rustup's self-contained MinGW; there is NO MSVC toolchain and NO C compiler
+# (the bundled x86_64-w64-mingw32-gcc is a linker only, it has no cc1). The
+# default feature set therefore stays pure-Rust so `cargo build/test/clippy`
+# are green here. The `media`/`gui` features (webrtc-rs, libvpx, libopus,
+# rustls, cpal, egui) require a full C toolchain + nasm and are built in CI on
+# the msvc release targets. See agent/README.md.
+
+# The agent workspace lives at agent/; its default target dir is agent/target
+# (git-ignored). Static CRT is a RELEASE (msvc) concern: `+crt-static` behaves
+# differently on the gnu toolchain (contract §11.3), so it is applied only in the
+# CI release profile, not here — nothing is overridden for the dev build.

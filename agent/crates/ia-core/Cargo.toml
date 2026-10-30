@@ -1,0 +1,37 @@
+[package]
+name = "ia-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "IndiansAssist agent core: protocol types, ia.sec handshake + frame crypto, session state machine, ABR, token/sidecar/filename parsing, file sanitisation, playbook arg validation. Pure Rust; no platform or webrtc calls (contract §11.1)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+base64.workspace = true
+hex.workspace = true
+rand.workspace = true
+rand_core.workspace = true
+# Pin getrandom below 0.2.12: from 0.2.12 it links the Windows CSPRNG via `raw-dylib`,
+# which on the gnu toolchain needs `dlltool` + `as`; this machine's self-contained
+# toolchain has neither. 0.2.11 links `advapi32` the ordinary way (libadvapi32.a is
+# bundled). See agent/README.md.
+getrandom = "=0.2.11"
+regex.workspace = true
+url.workspace = true
+thiserror.workspace = true
+# NFC for the A F5 `sanitiseFileName` port; already in the tree through url -> idna (Unicode-3.0).
+icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
+
+[dev-dependencies]
+serde_json.workspace = true

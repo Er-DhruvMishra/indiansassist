@@ -1,0 +1,221 @@
+{
+  "v": 1,
+  "description": "Phase C wire names generated from @indiansassist/shared by scripts/gen-agent-fixtures.mjs. Asserted by packages/shared test/agent-names.test.ts, agent ia-core tests/shared_vectors.rs and apps/android HelpersParityTest.",
+  "agentConsentLevels": [
+    "view",
+    "control",
+    "elevated"
+  ],
+  "elevationLevels": [
+    "user",
+    "admin"
+  ],
+  "agentFeatures": [
+    "screen",
+    "multi_monitor",
+    "input",
+    "input_text",
+    "clipboard",
+    "files",
+    "chat",
+    "voice",
+    "elevation",
+    "playbooks",
+    "nav",
+    "input_lock",
+    "privacy_screen"
+  ],
+  "videoEncoders": [
+    "vp8",
+    "vp9",
+    "h264",
+    "av1"
+  ],
+  "qualityPresets": [
+    "auto",
+    "sharp",
+    "smooth",
+    "floor"
+  ],
+  "tokenSources": [
+    "arg",
+    "deeplink",
+    "sidecar",
+    "filename",
+    "clipboard",
+    "manual"
+  ],
+  "playbookInterpreters": [
+    "powershell",
+    "cmd",
+    "sh"
+  ],
+  "playbookErrors": [
+    "timeout",
+    "cancelled",
+    "spawn_failed",
+    "hash_mismatch",
+    "not_allowed",
+    "elevation_required",
+    "busy",
+    "output_error"
+  ],
+  "elevationDenyCauses": [
+    "refused",
+    "timeout",
+    "uac_cancelled",
+    "policy"
+  ],
+  "elevationFailErrors": [
+    "launch_failed",
+    "handover_expired",
+    "handover_rejected",
+    "connect_failed",
+    "uac_unavailable",
+    "image_mismatch"
+  ],
+  "navActions": [
+    "back",
+    "home",
+    "recents",
+    "notifications"
+  ],
+  "capturePaths": [
+    "dda",
+    "gdi",
+    "projection"
+  ],
+  "secFailReasons": [
+    "suite",
+    "commit",
+    "fingerprint",
+    "key",
+    "mac",
+    "timeout",
+    "replay",
+    "decrypt",
+    "oversize",
+    "channel"
+  ],
+  "p3DataChannelLabels": [
+    "ia.sec",
+    "ia.chat",
+    "ia.annot",
+    "ia.file",
+    "ia.ctrl",
+    "ia.control",
+    "ia.playbook"
+  ],
+  "secEncryptedLabels": [
+    "ia.control",
+    "ia.file",
+    "ia.playbook",
+    "ia.chat",
+    "ia.annot",
+    "ia.ctrl"
+  ],
+  "secLabelIds": {
+    "ia.control": 1,
+    "ia.file": 2,
+    "ia.playbook": 3,
+    "ia.chat": 4,
+    "ia.annot": 5,
+    "ia.ctrl": 6
+  },
+  "agentControlOps": [
+    "os.monitors",
+    "os.monitor.select",
+    "os.quality",
+    "os.pointer",
+    "os.scroll",
+    "os.key",
+    "os.text",
+    "os.nav",
+    "clipboard.set",
+    "os.input_lock",
+    "os.privacy_screen",
+    "level.request",
+    "elevation.request",
+    "playbook.run",
+    "playbook.cancel"
+  ],
+  "agentMinLevels": {
+    "os.monitors": "view",
+    "os.monitor.select": "view",
+    "os.quality": "view",
+    "os.pointer": "control",
+    "os.scroll": "control",
+    "os.key": "control",
+    "os.text": "control",
+    "os.nav": "control",
+    "clipboard.set": "control",
+    "os.input_lock": "elevated",
+    "os.privacy_screen": "elevated",
+    "level.request": "view",
+    "elevation.request": "control",
+    "playbook.run": "control",
+    "playbook.cancel": "control"
+  },
+  "agentControlErrorCodes": [
+    "elevation_required",
+    "no_such_monitor",
+    "blocked_uipi",
+    "secure_desktop",
+    "secure_window",
+    "clipboard_off",
+    "hash_mismatch",
+    "busy"
+  ],
+  "agentControlEventKinds": [
+    "monitors",
+    "capture",
+    "agent_level",
+    "clipboard",
+    "elevation",
+    "input_blocked"
+  ],
+  "wsCloseHandedOver": 4411,
+  "androidCapabilities": {
+    "monitors": 1,
+    "elevation": "user",
+    "features": [
+      "screen",
+      "input",
+      "input_text",
+      "nav",
+      "files",
+      "chat",
+      "voice"
+    ],
+    "encoders": [
+      "vp8",
+      "h264"
+    ],
+    "hwEncoder": true,
+    "interpreters": []
+  },
+  "limits": {
+    "secHandshakeTimeoutMs": 10000,
+    "secFrameMaxBytes": 131072,
+    "downloadGrantTtlSec": 120,
+    "downloadGrantMaxUses": 3,
+    "handoverTtlSec": 120,
+    "handoverMintsPer10Min": 3,
+    "iaconfigMaxBytes": 16384,
+    "clipboardMaxBytes": 65536,
+    "agentMaxKbps": 6000,
+    "agentStatsIntervalMs": 2000,
+    "pointerMovesPerSecNative": 60,
+    "textCharsPerSec": 400,
+    "textQueueMaxUnits": 2048,
+    "textBurstChars": 200,
+    "playbookBodyMaxBytes": 65536,
+    "playbookTimeoutMaxSec": 900,
+    "playbookOutputMaxBytes": 1048576,
+    "playbookCatalogueMax": 100,
+    "playbookManifestMaxBytes": 32768,
+    "playbookParamsMax": 16,
+    "fileMaxBytesNative": 2147483648,
+    "monitorsMax": 16
+  }
+}

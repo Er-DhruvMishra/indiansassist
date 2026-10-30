@@ -1,0 +1,29 @@
+[package]
+name = "ia-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Platform traits (Capturer, InputSink, ClipboardBridge, Elevation, SelfDelete, ProtocolHandler, KnownFolders) and the sys_lib late-binding loader, with Windows impls behind the `winapi` feature (contract §11.1, §14)."
+
+[features]
+# Default build is pure-Rust and compiles on x86_64-pc-windows-gnu with no C toolchain.
+default = []
+# CI (msvc) enables `winapi` to compile the Win32 syscall layer via the `windows` crate.
+winapi = ["dep:windows", "dep:libloading"]
+
+[dependencies]
+ia-core.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_Security",
+] }
+libloading = { version = "0.8.5", optional = true }

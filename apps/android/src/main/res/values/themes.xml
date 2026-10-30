@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.IndiansAssist" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#0F766E</item>
+        <item name="android:statusBarColor">#0F766E</item>
+    </style>
+    <style name="Theme.IndiansAssist.Dialog" parent="android:Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:colorAccent">#0F766E</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+    </style>
+</resources>

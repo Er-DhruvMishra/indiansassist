@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Section 12.2 (binding): window-state events only, generic feedback, window content only because ACTION_SET_TEXT
+     needs it, gestures; no key-event filtering and no screenshots. Power is gated on InputGuard.allow(). -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:notificationTimeout="100"
+    android:description="@string/a11y_description" />

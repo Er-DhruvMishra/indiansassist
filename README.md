@@ -68,6 +68,32 @@ is taken. `pnpm e2e:ext` also builds the extension into `apps/extension/dist-e2e
 Configuration: `apps/api/.env.example` (copy to `.env` at the repo root), `apps/web/.env.example` and
 `apps/extension/.env.example`; every variable has a dev default, so none is needed for local development.
 
+### Package 3: the portable agent (Rust) and the Android host (Phase C, in progress)
+
+Contract: [docs/specs/phase-c-contracts.md](docs/specs/phase-c-contracts.md). Rust 1.99 via rustup on the
+`x86_64-pc-windows-gnu` dev target (release builds are `-msvc` in CI only); the Android host needs the Android SDK
+(the Gradle wrapper in `apps/android` downloads Gradle).
+
+```
+pnpm agent:build       # cargo build of the agent/ workspace (default features: pure Rust, no C toolchain)
+pnpm agent:test        # cargo test, incl. ia-core tests/shared_vectors.rs (cross-language fixtures)
+pnpm agent:clippy      # clippy -D warnings
+pnpm agent:fixtures    # the generated name fixtures are current (rebuild packages/shared first)
+pnpm android:test      # Gradle testDebugUnitTest
+pnpm android:build     # Gradle assembleDebug
+pnpm smoke:p3          # Package 3 server-side flow; start the api with SIGNUP_PLAN_TIER=p3_portable
+```
+
+Every Phase C wire name is defined once in `@indiansassist/shared` (`src/agent/*`, `enums.ts`, `files.ts`). The
+cross-language fixtures under `packages/shared/test/fixtures/agent/` (`sec-vectors.json` for the `ia.sec` handshake
+and frames, `agent-names.json`, `file-lists.json`) are loaded by the TypeScript, Rust and Kotlin tests, so the three
+implementations are checked byte for byte against one file. Regenerate them with
+`node apps/android/tools/gen-phase-c-vectors.mjs` and `node scripts/gen-agent-fixtures.mjs`.
+
+What does not work yet: the api has no P3 path (native `desk.hello`, consent, hand-over, playbooks, downloads), so
+`pnpm smoke:p3` stops at its second step; the agent's runnable session (`media` feature: webrtc-rs, encoders, UI)
+is not built on the gnu dev machine, and there is no `e2e:p3` yet. See docs/PLAN.md section 7.
+
 ### Server-side recorder (Phase A.2, Go)
 
 `services/recorder` is a headless pion/webrtc peer of the **Desk** that writes a WebM of the shared screen (and the

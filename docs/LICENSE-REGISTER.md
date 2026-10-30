@@ -11,6 +11,7 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | node-postgres (pg) | MIT | Postgres driver | in use |
 | zod | MIT | validation | in use |
 | @noble/ed25519, @noble/hashes | MIT | token signing, hashing | in use |
+| @noble/curves 1.9.7, @noble/ciphers 1.3.0 | MIT | Phase C §1.3 `ia.sec` handshake (X25519) and XChaCha20-Poly1305 frames in `@indiansassist/shared` `agent/sec.ts` (console side) | in use (Phase C) |
 | argon2 | MIT | password hashing | in use |
 | React, Vite, Tailwind CSS | MIT | Assist console, Desk web room | in use |
 | Playwright (@playwright/test) and the Chromium build it downloads | Apache-2.0 (Chromium: BSD-3-Clause) | Package 1 two-browser e2e (`apps/web/e2e`) and the Package 2 extension e2e (`apps/extension/test/e2e`, unpacked extension in a persistent Chromium context); dev only, not shipped | in use (dev) |
@@ -34,4 +35,45 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | golang.org/x/{crypto,net,sys,time}, google.golang.org/protobuf, google/uuid, wlynxg/anet | BSD-3-Clause | indirect dependencies of the recorder | in use (Phase A.2) |
 | Go toolchain and standard library (golang:1.27 build image) | BSD-3-Clause | builds `services/recorder` | in use (build only) |
 | distroless static-debian12 base image | Apache-2.0 (Debian packages under their own permissive licences) | recorder runtime image | self-hosted image |
+| **Phase C portable agent (`agent/`, Rust)** | | | |
+| serde, serde_json | MIT OR Apache-2.0 | agent wire types (`ia-core`) | in use (Phase C) |
+| x25519-dalek | BSD-3-Clause | §1.3 X25519 key agreement | in use (Phase C) |
+| ed25519-dalek | BSD-3-Clause | compact-token / signed-sidecar verification | in use (Phase C) |
+| chacha20poly1305 | MIT OR Apache-2.0 | §1.3 XChaCha20-Poly1305 frame crypto | in use (Phase C) |
+| hkdf, sha2, hmac | MIT OR Apache-2.0 | §1.3 KDF, confirmation MAC, hashing | in use (Phase C) |
+| zeroize | MIT OR Apache-2.0 | wipe ephemeral keys | in use (Phase C) |
+| subtle | BSD-3-Clause | constant-time compares | in use (Phase C) |
+| base64, hex | MIT OR Apache-2.0 | base64url / hex encodings | in use (Phase C) |
+| rand, rand_core | MIT OR Apache-2.0 | CSPRNG (desk codes, ephemeral keys) | in use (Phase C) |
+| getrandom (pinned =0.2.11) | MIT OR Apache-2.0 | OS entropy; pinned below the 0.2.12 raw-dylib change for the gnu dev toolchain (see agent/README.md) | in use (Phase C) |
+| regex | MIT OR Apache-2.0 | filename grammar, cmd value rule, path allow-list | in use (Phase C) |
+| url | MIT OR Apache-2.0 | strict deep-link parsing (§2.5) | in use (Phase C) |
+| icu_normalizer 2.4 (+ icu_normalizer_data, icu_provider, icu_collections, zerovec; already pulled in by url -> idna) | Unicode-3.0 | NFC in the A F5 `sanitiseFileName` port (`ia_core::files`) | in use (Phase C) |
+| thiserror | MIT OR Apache-2.0 | error types | in use (Phase C) |
+| tracing, tracing-subscriber | MIT | structured logs (redacted per A §6) | in use (Phase C) |
+| windows (windows-rs) | MIT OR Apache-2.0 | DXGI/GDI, SendInput, registry, known folders, WinVerifyTrust | in use (Phase C, `winapi` feature) |
+| libloading | ISC | §14 late binding of non-KnownDLL system libraries | in use (Phase C, `winapi` feature) |
+| egui, eframe | MIT OR Apache-2.0 | consent/pill/panel UI | in use (Phase C, `gui` feature) |
+| tray-icon | MIT OR Apache-2.0 | tray icon | in use (Phase C, `gui` feature) |
+| tokio, tokio-tungstenite, futures-util | MIT (futures-util MIT OR Apache-2.0) | async runtime + `/signal` WS client | in use (Phase C, `media` feature) |
+| webrtc (webrtc-rs, with its ice/dtls/srtp/sctp/sdp/interceptor crates) | MIT OR Apache-2.0 | native WebRTC peer | in use (Phase C, `media` feature) |
+| libvpx (via vpx-sys/vpx), libopus (via audiopus/audiopus_sys) | BSD-3-Clause (wrappers MIT) | VP8/VP9 video, Opus audio | planned (Phase C `media` capture/encode path; built in CI) |
+| rav1e | BSD-2-Clause | AV1 (feature `av1`, off by default) | planned (Phase C, off by default) |
+| openh264 | BSD-2-Clause (Cisco binary caveat, §4.2: MPEG-LA royalty exposure; not shipped in the default build) | H.264 software (feature `h264-sw`, off by default) | planned (Phase C, off by default) |
+| yuvutils-rs | BSD-3-Clause OR Apache-2.0 | BGRA→I420 (SIMD; the self-contained converter is the interim path) | planned (Phase C capture path) |
+| fast_image_resize | MIT OR Apache-2.0 | ladder downscale | planned (Phase C capture path) |
+| image | MIT OR Apache-2.0 | org-logo decode with limits (§3.3) | planned (Phase C `gui`) |
+| cpal | MIT OR Apache-2.0 | WASAPI audio I/O | planned (Phase C `media` voice) |
+| crossbeam-channel | MIT OR Apache-2.0 | bounded capture/encode channels (§4.1) | planned (Phase C `media`) |
+| rustls, webpki-roots | Apache-2.0 / MIT / ISC (webpki-roots MPL-2.0) | TLS for the WS/HTTP client (no native-tls/schannel) | planned (Phase C `media`) |
+| **Phase C Android host (`apps/android`, Kotlin)** | | | |
+| io.getstream:stream-webrtc-android 1.3.10 (prebuilt Google libwebrtc) | Apache-2.0 (wrapper); libwebrtc BSD-3-Clause with its bundled third-party code (BoringSSL OpenSSL/ISC, libvpx BSD-3-Clause, libopus BSD-3-Clause, libyuv BSD-3-Clause, usrsctp BSD-3-Clause) | MediaProjection capture into a VideoTrack, MediaCodec / VP8 encode, SDP/ICE/DTLS-SRTP/SCTP, voice | in use (Phase C) |
+| com.google.crypto.tink:tink-android 1.18.0 (pinned; `subtle` X25519/HKDF/Ed25519 and `aead.internal.InsecureNonceXChaCha20Poly1305`) | Apache-2.0 | §1.3 handshake and frame crypto, compact-token Ed25519 verification | in use (Phase C) |
+| com.squareup.okhttp3:okhttp 4.12.0 (+ okio) | Apache-2.0 | `/signal` WebSocket (no Origin) and token lookup REST | in use (Phase C) |
+| org.jetbrains.kotlinx:kotlinx-serialization-json 1.9.0, kotlinx-coroutines-android 1.10.2, Kotlin stdlib and serialization compiler plugin 2.2.20 | Apache-2.0 | wire types, UI state flows | in use (Phase C) |
+| AndroidX core-ktx 1.16.0, activity-ktx 1.10.1, lifecycle-runtime-ktx 2.9.1 | Apache-2.0 | activities, result contracts, lifecycle | in use (Phase C) |
+| com.journeyapps:zxing-android-embedded 4.3.0 (+ com.google.zxing:core) | Apache-2.0 | QR scan of the join link (§12.3) | in use (Phase C) |
+| Android Gradle Plugin 9.0.1, Gradle 9.3.1 wrapper (`apps/android/gradlew`, gradle-wrapper.jar) | Apache-2.0 | Android build (dev/CI only, not shipped) | in use (build only) |
+| JUnit 4.13.2; AndroidX Test (ext-junit 1.2.1, runner 1.6.2, rules 1.6.1, UiAutomator 2.3.0) | EPL-1.0 (JUnit); Apache-2.0 (AndroidX Test) | JVM unit and instrumented tests (dev only, not shipped) | in use (dev) |
+| com.goterl:lazysodium-android | ISC | fallback only if Tink `subtle` becomes unusable (§12.1) | not used |
 | RustDesk, MinIO source | AGPL | reference reading only, never copied | forbidden in repo |
