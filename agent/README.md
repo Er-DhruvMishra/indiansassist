@@ -138,34 +138,62 @@ spawn / `MoveFileEx` wiring is the remaining self-delete work.
 ## What is implemented and what is still stubbed
 
 **Built and exercised on this MSVC host (default `media` + `winapi` + `gui`):**
-* `ia-core` in full, cross-checked on gnu.
+* `ia-core` in full, cross-checked on gnu. The live-session **decision logic** of §3-§10 is
+  now here as pure, tested modules: the encrypted `ia.control` dispatch with level / monitor /
+  clipboard / secure-desktop gating and the §5.1 error codes (`ctl`), the live consent state
+  machine incl. the raise/lower rules and the "elevated process, lower level re-imposes UIPI"
+  policy (`consent`), the `agent.stats` wire shape plus the §3.8 `control.input` (with the
+  `monitorId` inference and the `input.text_burst` threshold) and `clipboard.sync` aggregators
+  (`stats`), the "3 DDA failures in 5 s => GDI" fallback decision (`capture_decision`), the
+  A §8.3 file chunk codec + the streaming receiver (name/size/hash validation, collision-free
+  `(2)` naming) (`filexfer`), the §7.2 hand-over payload codec + §7.3 order of operations
+  (`handover`), the §8.4 playbook run checks (pinned-hash re-check, elevation gate) + the
+  stdin/cmd launch plan and `ranAs` (`playbook`), the §3.2/§3.5 teardown + Stop order + the
+  §10 self-delete decision (`teardown`), and the `voice` capability flag that drops when no
+  audio device is present (`types::windows_features`).
 * `ia-agent`: CLI parsing with the dev switches (`cli`), token-source precedence
   (`tokensource`), the SDP codec table + `MediaEngine` registration (`codecs`), the `ia.sec`
   handshake **driver** (`sechs`), the VP8 encoder over prebuilt libvpx (`vp8`), the synthetic
   capture source (`capture`), the webrtc-rs peer with per-monitor VP8 tracks + the seven data
   channels + `a=max-message-size:131072` (`peer`), the data-channel handshake + sample pump
-  (`channels`), the rustls `/signal` client with `desk.hello`/knock/poll (`signal`), and the
-  session orchestration (`session`).
+  (`channels`), the rustls `/signal` client with `desk.hello`/knock/poll (`signal`), the
+  session orchestration (`session`), and the **control-serving seam** (`live::ControlServer`)
+  that turns a decrypted `ia.control` frame into a `ctl.res` and drives the `InputSink` /
+  `ClipboardBridge` traits, unit-tested with a mock sink.
 * The `winapi` layer (DXGI/GDI capture scaffolding, monitor enumeration, `SendInput`
   injection + scancodes, registry protocol handler, known folders, `sys_lib`).
 * The `gui` view-model and its egui rendering (consent window, pill, panel).
 * Tests: all unit tests; the **two-peer webrtc loopback** (`tests/loopback.rs`
   `media_loopback`) — two real peers negotiate, complete the §1.3 handshake with matching
-  SAS, and a **VP8 keyframe arrives at the receiving peer**; Windows-only, skip-if-no-monitor
-  tests for monitor enumeration and `SendInput` coordinate mapping.
+  SAS, and a **VP8 keyframe arrives at the receiving peer**; the **headless fake-Assist
+  loopback** (same file) — over real `SecChannel`s the receiving party sends encrypted
+  `ctl.req os.input` and asserts `ctl.res ok` at `control` / `not_allowed` at `view`, round-
+  trips a chat message and its ack, offers a small file and asserts the saved name and bytes,
+  runs a `playbook.run` against a pinned manifest entry and asserts `pb.output` / `pb.end`
+  exit 0, and triggers Stop asserting the teardown order and the (dry-run) self-delete
+  decision; Windows-only, skip-if-no-monitor tests for monitor enumeration and `SendInput`.
 
 **Stubbed / not yet wired (needs the P3 API path, a display, or Phase D):**
-* The live session past `session.created`: consent-window event loop, the handshake run over
-  the real `ia.sec` channel in a live session, the encrypted `ia.control` op dispatch with
-  level gating, chat/file/voice channels, `agent.stats`, Stop/teardown, and the self-delete
-  spawn. The pieces exist as tested units and the loopback proves the media path; stitching
-  them into a live session waits on the dev API's P3 signaling.
-* **Voice**: the Opus encoder (`audiopus`) links and the capability is advertised, but the
-  cpal duplex capture/render loop and the audio RTP track are not wired — voice is effectively
-  deferred until the live path exists.
-* **Capture**: the GDI fallback + enumeration are real; the DXGI Desktop Duplication primary
-  path and the SIMD `yuvutils-rs`/`fast_image_resize` conversion are still to come (the
-  self-contained BT.601 converter in `ia-capture-win::convert` is the oracle).
+* **The live I/O glue past `session.created`.** The decision logic above is implemented and
+  tested; what still waits on the dev API's P3 signaling is the stitching: the egui consent-
+  window / pill / panel **event loop**, the async webrtc data-channel **serve loop** that
+  reads frames, opens them with the `SecChannel`, calls `live::ControlServer` per frame and
+  the stats timer, and the real-OS ends of each action (`SendInput`, clipboard set/listen,
+  monitor select, `agent.stats` emission). The handshake over the real `ia.sec` channel in a
+  live session reuses `channels::run_handshake` (proven by the loopback).
+* **Elevation**: the payload codec, the order of operations, the hand-over claim check and the
+  self-delete decision are tested; the real `ShellExecuteExW(runas)`, the named-pipe transport
+  and the `MOVEFILE_DELAY_UNTIL_REBOOT` / cmd-stub spawn stay behind `cfg(windows)` and are
+  driven once the live session exists.
+* **Voice**: the Opus encoder (`audiopus`) links and the capability flag is wired (off when no
+  device), but the cpal duplex capture/render loop and the audio RTP track are not wired.
+* **Capture**: the GDI fallback + enumeration are real and the DDA->GDI fallback *decision* is
+  tested (`capture_decision`); the DXGI Desktop Duplication primary path and the SIMD
+  `yuvutils-rs`/`fast_image_resize` conversion are still to come (the self-contained BT.601
+  converter in `ia-capture-win::convert` is the oracle).
+* **Playbooks / files**: the arg validation, hash re-check, launch plan, receiver and chunk
+  codec are tested; the actual process spawn (stdin/cmd/job object) and the `.iapart`
+  streaming-to-disk + Mark-of-the-Web wiring are the remaining platform work.
 * H.264 (Media Foundation) and AV1 (`rav1e`, feature `av1`) encoders are not built in the
   default set; VP8/VP9 via libvpx are.
 

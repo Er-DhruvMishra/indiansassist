@@ -285,9 +285,102 @@ pub struct PbEnd {
     pub ts: i64,
 }
 
+/// The pinned manifest entry the agent received at `session.created` (contract §8.3). Only
+/// the fields the agent's run checks need.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestEntry {
+    pub id: String,
+    pub body_hash: String,
+    pub requires_elevation: bool,
+}
+
+/// A `playbook.run` op's body-bearing args (contract §8.4), copied verbatim from the REST
+/// `202` reply by the console.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunRequest {
+    pub run_id: String,
+    pub playbook_id: String,
+    pub body_hash: String,
+    pub body: String,
+    pub interpreter: PlaybookInterpreter,
+    pub requires_elevation: bool,
+    pub timeout_sec: u32,
+}
+
+/// The agent's checks before running (contract §8.4). Each failure maps to a
+/// [`PlaybookError`] the caller puts on `ctl.res` and `pb.end`.
+pub fn check_run(
+    run: &RunRequest,
+    manifest: &[ManifestEntry],
+    integrity: crate::types::ElevationLevel,
+) -> Result<(), PlaybookError> {
+    use sha2::{Digest, Sha256};
+    let entry = manifest
+        .iter()
+        .find(|m| m.id == run.playbook_id)
+        .ok_or(PlaybookError::NotAllowed)?;
+    // sha256(body) === bodyHash === manifest.bodyHash (contract §8.4).
+    let computed = hex::encode(Sha256::digest(run.body.as_bytes()));
+    if !computed.eq_ignore_ascii_case(&run.body_hash)
+        || !run.body_hash.eq_ignore_ascii_case(&entry.body_hash)
+    {
+        return Err(PlaybookError::HashMismatch);
+    }
+    if run.requires_elevation != entry.requires_elevation {
+        return Err(PlaybookError::HashMismatch);
+    }
+    if run.requires_elevation && integrity != crate::types::ElevationLevel::Admin {
+        return Err(PlaybookError::ElevationRequired);
+    }
+    // `sh` is Android/Phase E; the Windows agent answers not_allowed for it.
+    if run.interpreter == PlaybookInterpreter::Sh {
+        return Err(PlaybookError::NotAllowed);
+    }
+    Ok(())
+}
+
+/// How a playbook is launched (contract §8.4 execution table). Pure decision; the binary
+/// performs the spawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchPlan {
+    pub interpreter: PlaybookInterpreter,
+    /// PowerShell: the body goes to the child's **stdin** (`-Command -`), no file on disk.
+    pub via_stdin: bool,
+    /// cmd: the body is written to a run file under the (user or admin) run dir.
+    pub via_run_file: bool,
+    /// `ranAs` on `pb.end`: `admin` only in the elevated instance for a `requiresElevation`
+    /// playbook; otherwise `user` (the limited linked token in the admin instance).
+    pub ran_as: &'static str,
+    pub create_no_window: bool,
+}
+
+/// Decide the launch plan (contract §8.4).
+pub fn launch_plan(
+    interpreter: PlaybookInterpreter,
+    requires_elevation: bool,
+    integrity: crate::types::ElevationLevel,
+) -> LaunchPlan {
+    let admin_instance = integrity == crate::types::ElevationLevel::Admin;
+    let ran_as = if requires_elevation && admin_instance {
+        "admin"
+    } else {
+        // A non-`requiresElevation` playbook in the admin instance runs under the limited
+        // linked token (`ranAs: 'user'`, §8.4).
+        "user"
+    };
+    LaunchPlan {
+        interpreter,
+        via_stdin: interpreter == PlaybookInterpreter::Powershell,
+        via_run_file: interpreter == PlaybookInterpreter::Cmd,
+        ran_as,
+        create_no_window: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ElevationLevel;
     use serde_json::json;
 
     fn args(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
@@ -457,5 +550,77 @@ mod tests {
         };
         let j = serde_json::to_string(&end).unwrap();
         assert_eq!(serde_json::from_str::<PbEnd>(&j).unwrap(), end);
+    }
+
+    fn run_req(body: &str, requires_elevation: bool) -> RunRequest {
+        use sha2::{Digest, Sha256};
+        RunRequest {
+            run_id: "ab".repeat(16),
+            playbook_id: "pb-1".into(),
+            body_hash: hex::encode(Sha256::digest(body.as_bytes())),
+            body: body.into(),
+            interpreter: PlaybookInterpreter::Powershell,
+            requires_elevation,
+            timeout_sec: 120,
+        }
+    }
+
+    #[test]
+    fn check_run_passes_when_hash_and_elevation_agree() {
+        let run = run_req("Write-Output 'hi'", false);
+        let manifest = vec![ManifestEntry {
+            id: "pb-1".into(),
+            body_hash: run.body_hash.clone(),
+            requires_elevation: false,
+        }];
+        assert_eq!(check_run(&run, &manifest, ElevationLevel::User), Ok(()));
+    }
+
+    #[test]
+    fn check_run_rejects_unknown_tampered_and_under_privileged() {
+        let run = run_req("whoami", true);
+        // playbookId not in manifest => not_allowed
+        assert_eq!(
+            check_run(&run, &[], ElevationLevel::Admin),
+            Err(PlaybookError::NotAllowed)
+        );
+        // hash mismatch
+        let bad_hash = vec![ManifestEntry {
+            id: "pb-1".into(),
+            body_hash: "00".repeat(32),
+            requires_elevation: true,
+        }];
+        assert_eq!(
+            check_run(&run, &bad_hash, ElevationLevel::Admin),
+            Err(PlaybookError::HashMismatch)
+        );
+        // requiresElevation but a user instance
+        let good = vec![ManifestEntry {
+            id: "pb-1".into(),
+            body_hash: run.body_hash.clone(),
+            requires_elevation: true,
+        }];
+        assert_eq!(
+            check_run(&run, &good, ElevationLevel::User),
+            Err(PlaybookError::ElevationRequired)
+        );
+        assert_eq!(check_run(&run, &good, ElevationLevel::Admin), Ok(()));
+    }
+
+    #[test]
+    fn launch_plan_matches_contract() {
+        let ps = launch_plan(PlaybookInterpreter::Powershell, false, ElevationLevel::User);
+        assert!(ps.via_stdin && !ps.via_run_file);
+        assert_eq!(ps.ran_as, "user");
+
+        let cmd = launch_plan(PlaybookInterpreter::Cmd, false, ElevationLevel::User);
+        assert!(cmd.via_run_file && !cmd.via_stdin);
+
+        // requiresElevation in the admin instance => ranAs admin.
+        let admin = launch_plan(PlaybookInterpreter::Powershell, true, ElevationLevel::Admin);
+        assert_eq!(admin.ran_as, "admin");
+        // non-requiresElevation in the admin instance still runs as user (limited token).
+        let as_user = launch_plan(PlaybookInterpreter::Cmd, false, ElevationLevel::Admin);
+        assert_eq!(as_user.ran_as, "user");
     }
 }

@@ -20,14 +20,21 @@
 
 pub mod abr;
 pub mod canonical;
+pub mod capture_decision;
+pub mod consent;
 pub mod control;
+pub mod ctl;
 pub mod download;
 pub mod files;
+pub mod filexfer;
+pub mod handover;
 pub mod join_input;
 pub mod playbook;
 pub mod sec;
 pub mod secchan;
 pub mod state;
+pub mod stats;
+pub mod teardown;
 pub mod types;
 
 /// Protocol-wide error for parsing / validation failures surfaced to the agent.

@@ -88,35 +88,10 @@ impl ElevationState {
     }
 }
 
-/// Which process this is at exit, for the self-delete decision (§10).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcessRole {
-    /// Ran the whole session unelevated.
-    UserStandalone,
-    /// The user instance that handed the session to an elevated child.
-    UserHandedOver,
-    /// The elevated child that holds the session at exit.
-    ElevatedChild,
-}
-
-/// Whether this process self-deletes on exit (contract §10 D1/D3). Exactly one instance
-/// deletes — the one holding the session — and never when the Desk chose Keep (D5).
-pub fn deletes_on_exit(role: ProcessRole, kept: bool) -> bool {
-    if kept {
-        return false; // D5: Keep skips self delete
-    }
-    match role {
-        ProcessRole::UserStandalone => true,  // D1/D2
-        ProcessRole::UserHandedOver => false, // D3: the handed-over instance does not delete
-        ProcessRole::ElevatedChild => true,   // D3: the child deletes (MOVEFILE_DELAY_UNTIL_REBOOT)
-    }
-}
-
-/// The elevated child uses `MOVEFILE_DELAY_UNTIL_REBOOT` and runs no user-writable stub
-/// (§10 D3); the user instance uses the cmd stub (§10 D2).
-pub fn uses_reboot_delete(role: ProcessRole) -> bool {
-    role == ProcessRole::ElevatedChild
-}
+// The self-delete decision (§10) is pure session-lifecycle logic and lives in
+// `ia_core::teardown` so the headless loopback test can assert it too; re-exported here
+// because the elevation flow is where it is consumed.
+pub use ia_core::teardown::{deletes_on_exit, uses_reboot_delete, ProcessRole};
 
 /// The hand-over hello's claimed client fields the server checks (§7.2 (4)); the agent
 /// builds them from the parent's measured state. Returns whether the child's claim is

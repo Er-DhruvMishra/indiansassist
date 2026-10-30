@@ -1,0 +1,699 @@
+//! Encrypted `ia.control` request dispatch (contract §5.1): parse a `ctl.req`, gate it by
+//! the live consent level (`view | control | elevated`), the Desk clipboard toggle, the
+//! consented-monitor set and the secure-desktop state, and return the `ctl.res` plus the
+//! side effect to perform. Pure: the actual `SendInput` / clipboard / capture calls live in
+//! the `-win` crates and are driven from the agent binary by matching on [`Action`].
+//!
+//! The error codes are exactly `CONTROL_ERROR_CODES` + the §5.1 additions
+//! ([`crate::control::AGENT_CONTROL_ERROR_CODES`]).
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::control::{agent_min_level_for, is_agent_control_op};
+use crate::types::{
+    agent_level_at_least, AgentConsentLevel, ElevationLevel, Modifiers, QualityPreset,
+};
+
+/// A parsed `ctl.req` (contract §5.1 envelope). `args` stays a `Value` and is interpreted
+/// per op by [`dispatch`].
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CtlReq {
+    pub id: String,
+    pub op: String,
+    #[serde(default)]
+    pub args: Value,
+}
+
+impl CtlReq {
+    /// Parse a `ctl.req` frame; `None` when `t` is not `ctl.req` or the shape is wrong.
+    pub fn parse(json_text: &str) -> Option<CtlReq> {
+        let v: Value = serde_json::from_str(json_text).ok()?;
+        if v.get("t").and_then(|t| t.as_str()) != Some("ctl.req") {
+            return None;
+        }
+        let id = v.get("id")?.as_str()?.to_string();
+        let op = v.get("op")?.as_str()?.to_string();
+        let args = v.get("args").cloned().unwrap_or(Value::Null);
+        Some(CtlReq { id, op, args })
+    }
+}
+
+/// The side effect a successful (or event-driven) op asks the agent to perform. The pure
+/// dispatcher decides *whether* and *what*; the binary performs it on the OS.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    /// Reply only (e.g. `os.monitors`, a `not_supported` op): nothing to do on the OS.
+    None,
+    Pointer {
+        monitor_id: u32,
+        kind: PointerKind,
+        nx: f32,
+        ny: f32,
+        button: u8,
+        modifiers: Modifiers,
+    },
+    Scroll {
+        monitor_id: u32,
+        nx: f32,
+        ny: f32,
+        dx: i32,
+        dy: i32,
+    },
+    Key {
+        kind: KeyKind,
+        key: String,
+        code: String,
+        modifiers: Modifiers,
+    },
+    Text {
+        text: String,
+    },
+    ClipboardSet {
+        text: String,
+    },
+    SelectMonitors {
+        monitor_ids: Vec<u32>,
+    },
+    Quality {
+        preset: QualityPreset,
+    },
+    /// Assist asks for `control` (shows the Allow/Refuse card, §3.4).
+    LevelRequest {
+        level: AgentConsentLevel,
+        reason: String,
+    },
+    /// Assist asks for admin rights (shows the elevation card, §7.3).
+    ElevationRequest {
+        reason: String,
+    },
+    /// A validated run op to hand to the playbook runner (§8.4).
+    PlaybookRun {
+        run_id: String,
+        playbook_id: String,
+        body_hash: String,
+        body: String,
+        requires_elevation: bool,
+    },
+    PlaybookCancel {
+        run_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerKind {
+    Move,
+    Down,
+    Up,
+    Click,
+    Dblclick,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyKind {
+    Down,
+    Up,
+    Press,
+}
+
+/// The live context the dispatcher gates against (contract §3.4, §5.5).
+#[derive(Debug, Clone)]
+pub struct DispatchCtx {
+    pub level: AgentConsentLevel,
+    pub integrity: ElevationLevel,
+    /// Desk clipboard switch (default off, §3.3/§5.6).
+    pub clipboard_enabled: bool,
+    /// Monitors the Desk consented to and that currently exist (ids).
+    pub consented_monitors: Vec<u32>,
+    /// True while the UAC secure desktop is up: every input/capture op answers `secure_desktop`.
+    pub secure_desktop: bool,
+}
+
+impl DispatchCtx {
+    fn has_monitor(&self, id: u32) -> bool {
+        self.consented_monitors.contains(&id)
+    }
+}
+
+/// The dispatch outcome: the `ctl.res` JSON to seal back and the [`Action`] to perform.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dispatched {
+    pub response: Value,
+    pub action: Action,
+    /// `true` when the op was refused (counts as `refused` in the §3.8 `control.input` aggregate).
+    pub refused: bool,
+}
+
+fn ok_res(id: &str, result: Value) -> Value {
+    json!({ "t": "ctl.res", "id": id, "ok": true, "result": result })
+}
+
+fn err_res(id: &str, code: &str, message: Option<&str>) -> Value {
+    let mut e = json!({ "t": "ctl.res", "id": id, "ok": false, "error": code });
+    if let Some(m) = message {
+        e["message"] = json!(m);
+    }
+    e
+}
+
+fn refused(id: &str, code: &str, message: Option<&str>) -> Dispatched {
+    Dispatched {
+        response: err_res(id, code, message),
+        action: Action::None,
+        refused: true,
+    }
+}
+
+fn modifiers_of(args: &Value) -> Modifiers {
+    serde_json::from_value(args.get("modifiers").cloned().unwrap_or(Value::Null))
+        .unwrap_or_default()
+}
+
+/// Dispatch one request against the live context (contract §5.1). Never panics; a malformed
+/// op or args answers `bad_args`, an unknown op `not_supported`.
+pub fn dispatch(req: &CtlReq, ctx: &DispatchCtx) -> Dispatched {
+    let id = req.id.as_str();
+
+    if !is_agent_control_op(&req.op) {
+        return Dispatched {
+            response: err_res(id, "not_supported", None),
+            action: Action::None,
+            refused: false,
+        };
+    }
+
+    // `requiresElevation` only matters for playbook.run's min level.
+    let requires_elevation = req
+        .args
+        .get("requiresElevation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let min_level = match agent_min_level_for(&req.op, requires_elevation) {
+        Some(l) => l,
+        None => return refused(id, "not_supported", None),
+    };
+
+    // Level gate first (contract §5.1 "refused with not_allowed below control").
+    if !agent_level_at_least(ctx.level, min_level) {
+        let code = if min_level == AgentConsentLevel::Elevated && req.op == "playbook.run" {
+            "elevation_required"
+        } else {
+            "not_allowed"
+        };
+        return refused(id, code, None);
+    }
+
+    // The secure desktop blocks every input/capture-affecting op (§5.5).
+    if ctx.secure_desktop && is_input_op(&req.op) {
+        return refused(id, "secure_desktop", None);
+    }
+
+    match req.op.as_str() {
+        "os.monitors" => Dispatched {
+            response: ok_res(
+                id,
+                json!({ "monitors": [], "selected": ctx.consented_monitors }),
+            ),
+            action: Action::None,
+            refused: false,
+        },
+        "os.monitor.select" => dispatch_monitor_select(id, &req.args, ctx),
+        "os.quality" => dispatch_quality(id, &req.args),
+        "os.pointer" => dispatch_pointer(id, &req.args, ctx),
+        "os.scroll" => dispatch_scroll(id, &req.args, ctx),
+        "os.key" => dispatch_key(id, &req.args),
+        "os.text" => dispatch_text(id, &req.args),
+        "os.nav" => refused(id, "not_supported", Some("nav")),
+        "clipboard.set" => dispatch_clipboard_set(id, &req.args, ctx),
+        "os.input_lock" | "os.privacy_screen" => refused(id, "not_supported", Some("phase_d")),
+        "level.request" => dispatch_level_request(id, &req.args),
+        "elevation.request" => dispatch_elevation_request(id, &req.args),
+        "playbook.run" => dispatch_playbook_run(id, req, ctx),
+        "playbook.cancel" => dispatch_playbook_cancel(id, &req.args),
+        _ => refused(id, "not_supported", None),
+    }
+}
+
+fn is_input_op(op: &str) -> bool {
+    matches!(
+        op,
+        "os.pointer" | "os.scroll" | "os.key" | "os.text" | "os.nav" | "clipboard.set"
+    )
+}
+
+fn dispatch_monitor_select(id: &str, args: &Value, ctx: &DispatchCtx) -> Dispatched {
+    let ids: Vec<u32> = match args.get("monitorIds").and_then(|v| v.as_array()) {
+        Some(a) => a
+            .iter()
+            .filter_map(|v| v.as_u64().map(|n| n as u32))
+            .collect(),
+        None => return refused(id, "bad_args", None),
+    };
+    if ids.is_empty() || ids.iter().any(|m| !ctx.has_monitor(*m)) {
+        return refused(id, "no_such_monitor", None);
+    }
+    Dispatched {
+        response: ok_res(id, json!({ "selected": ids })),
+        action: Action::SelectMonitors { monitor_ids: ids },
+        refused: false,
+    }
+}
+
+fn dispatch_quality(id: &str, args: &Value) -> Dispatched {
+    let preset: Option<QualityPreset> =
+        serde_json::from_value(args.get("preset").cloned().unwrap_or(Value::Null)).ok();
+    match preset {
+        Some(preset) => Dispatched {
+            response: ok_res(
+                id,
+                json!({ "preset": preset, "rung": serde_json::Value::Null }),
+            ),
+            action: Action::Quality { preset },
+            refused: false,
+        },
+        None => refused(id, "bad_args", None),
+    }
+}
+
+fn dispatch_pointer(id: &str, args: &Value, ctx: &DispatchCtx) -> Dispatched {
+    let monitor_id = match args.get("monitorId").and_then(|v| v.as_u64()) {
+        Some(n) => n as u32,
+        None => return refused(id, "bad_args", None),
+    };
+    if !ctx.has_monitor(monitor_id) {
+        return refused(id, "no_such_monitor", None);
+    }
+    let kind: Option<PointerKind> =
+        serde_json::from_value(args.get("kind").cloned().unwrap_or(Value::Null)).ok();
+    let (Some(kind), Some(nx), Some(ny)) = (
+        kind,
+        args.get("nx").and_then(|v| v.as_f64()),
+        args.get("ny").and_then(|v| v.as_f64()),
+    ) else {
+        return refused(id, "bad_args", None);
+    };
+    let button = args.get("button").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    if button > 4 {
+        return refused(id, "bad_args", None);
+    }
+    Dispatched {
+        response: ok_res(id, json!({})),
+        action: Action::Pointer {
+            monitor_id,
+            kind,
+            nx: nx as f32,
+            ny: ny as f32,
+            button,
+            modifiers: modifiers_of(args),
+        },
+        refused: false,
+    }
+}
+
+fn dispatch_scroll(id: &str, args: &Value, ctx: &DispatchCtx) -> Dispatched {
+    let monitor_id = match args.get("monitorId").and_then(|v| v.as_u64()) {
+        Some(n) => n as u32,
+        None => return refused(id, "bad_args", None),
+    };
+    if !ctx.has_monitor(monitor_id) {
+        return refused(id, "no_such_monitor", None);
+    }
+    let (Some(nx), Some(ny), Some(dx), Some(dy)) = (
+        args.get("nx").and_then(|v| v.as_f64()),
+        args.get("ny").and_then(|v| v.as_f64()),
+        args.get("dx").and_then(|v| v.as_i64()),
+        args.get("dy").and_then(|v| v.as_i64()),
+    ) else {
+        return refused(id, "bad_args", None);
+    };
+    if !(-20..=20).contains(&dx) || !(-20..=20).contains(&dy) {
+        return refused(id, "bad_args", None);
+    }
+    Dispatched {
+        response: ok_res(id, json!({})),
+        action: Action::Scroll {
+            monitor_id,
+            nx: nx as f32,
+            ny: ny as f32,
+            dx: dx as i32,
+            dy: dy as i32,
+        },
+        refused: false,
+    }
+}
+
+fn dispatch_key(id: &str, args: &Value) -> Dispatched {
+    let kind: Option<KeyKind> =
+        serde_json::from_value(args.get("kind").cloned().unwrap_or(Value::Null)).ok();
+    let (Some(kind), Some(key), Some(code)) = (
+        kind,
+        args.get("key").and_then(|v| v.as_str()),
+        args.get("code").and_then(|v| v.as_str()),
+    ) else {
+        return refused(id, "bad_args", None);
+    };
+    if key.is_empty() || key.len() > 64 || code.is_empty() || code.len() > 64 {
+        return refused(id, "bad_args", None);
+    }
+    let modifiers = modifiers_of(args);
+    // The SAS combination (Ctrl+Alt+Delete) cannot be injected (§5.4).
+    if code == "Delete" && modifiers.ctrl && modifiers.alt {
+        return Dispatched {
+            response: err_res(id, "not_supported", Some("sas")),
+            action: Action::None,
+            refused: true,
+        };
+    }
+    Dispatched {
+        response: ok_res(id, json!({})),
+        action: Action::Key {
+            kind,
+            key: key.to_string(),
+            code: code.to_string(),
+            modifiers,
+        },
+        refused: false,
+    }
+}
+
+fn dispatch_text(id: &str, args: &Value) -> Dispatched {
+    let text = match args.get("text").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() && t.chars().count() <= 1024 => t.to_string(),
+        _ => return refused(id, "bad_args", None),
+    };
+    Dispatched {
+        response: ok_res(id, json!({})),
+        action: Action::Text { text },
+        refused: false,
+    }
+}
+
+fn dispatch_clipboard_set(id: &str, args: &Value, ctx: &DispatchCtx) -> Dispatched {
+    if !ctx.clipboard_enabled {
+        return refused(id, "clipboard_off", None);
+    }
+    let text = match args.get("text").and_then(|v| v.as_str()) {
+        Some(t) if t.len() <= crate::types::limits::CLIPBOARD_MAX_BYTES => t.to_string(),
+        _ => return refused(id, "bad_args", None),
+    };
+    Dispatched {
+        response: ok_res(id, json!({})),
+        action: Action::ClipboardSet { text },
+        refused: false,
+    }
+}
+
+fn dispatch_level_request(id: &str, args: &Value) -> Dispatched {
+    // `level.request` accepts only `control` for the agent; `elevated` answers bad_args (§3.4).
+    let level: Option<AgentConsentLevel> =
+        serde_json::from_value(args.get("level").cloned().unwrap_or(Value::Null)).ok();
+    let reason = args
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    match level {
+        Some(AgentConsentLevel::Control) => Dispatched {
+            response: ok_res(id, json!({ "level": "control" })),
+            action: Action::LevelRequest {
+                level: AgentConsentLevel::Control,
+                reason,
+            },
+            refused: false,
+        },
+        _ => refused(id, "bad_args", None),
+    }
+}
+
+fn dispatch_elevation_request(id: &str, args: &Value) -> Dispatched {
+    let reason = match args.get("reason").and_then(|v| v.as_str()) {
+        Some(r) if !r.is_empty() && r.chars().count() <= 500 => r.to_string(),
+        _ => return refused(id, "bad_args", None),
+    };
+    Dispatched {
+        // The op returns `{ accepted: true }` at once; the outcome is event-driven (§7.3).
+        response: ok_res(id, json!({ "accepted": true })),
+        action: Action::ElevationRequest { reason },
+        refused: false,
+    }
+}
+
+fn dispatch_playbook_run(id: &str, req: &CtlReq, _ctx: &DispatchCtx) -> Dispatched {
+    let args = &req.args;
+    let (Some(run_id), Some(playbook_id), Some(body_hash), Some(body)) = (
+        args.get("runId").and_then(|v| v.as_str()),
+        args.get("playbookId").and_then(|v| v.as_str()),
+        args.get("bodyHash").and_then(|v| v.as_str()),
+        args.get("body").and_then(|v| v.as_str()),
+    ) else {
+        return refused(id, "bad_args", None);
+    };
+    // `ctl.req.id` must equal `runId` (contract §8.4, so both reporters pair on opId).
+    if req.id != run_id {
+        return refused(id, "bad_args", None);
+    }
+    let requires_elevation = args
+        .get("requiresElevation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Dispatched {
+        response: ok_res(id, json!({ "accepted": true })),
+        action: Action::PlaybookRun {
+            run_id: run_id.to_string(),
+            playbook_id: playbook_id.to_string(),
+            body_hash: body_hash.to_string(),
+            body: body.to_string(),
+            requires_elevation,
+        },
+        refused: false,
+    }
+}
+
+fn dispatch_playbook_cancel(id: &str, args: &Value) -> Dispatched {
+    let run_id = match args.get("runId").and_then(|v| v.as_str()) {
+        Some(r) if !r.is_empty() => r.to_string(),
+        _ => return refused(id, "bad_args", None),
+    };
+    // `ctl.req.id` must equal `runId + ":cancel"` (contract §8.4).
+    if id != format!("{run_id}:cancel") {
+        return refused(id, "bad_args", None);
+    }
+    Dispatched {
+        response: ok_res(id, json!({ "cancelled": true })),
+        action: Action::PlaybookCancel { run_id },
+        refused: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx(level: AgentConsentLevel) -> DispatchCtx {
+        DispatchCtx {
+            level,
+            integrity: ElevationLevel::User,
+            clipboard_enabled: false,
+            consented_monitors: vec![1, 2],
+            secure_desktop: false,
+        }
+    }
+
+    fn req(op: &str, id: &str, args: Value) -> CtlReq {
+        CtlReq {
+            id: id.into(),
+            op: op.into(),
+            args,
+        }
+    }
+
+    #[test]
+    fn parse_ctl_req() {
+        let r = CtlReq::parse(r#"{"t":"ctl.req","id":"7","op":"os.monitors","args":{}}"#).unwrap();
+        assert_eq!(r.op, "os.monitors");
+        assert_eq!(r.id, "7");
+        assert!(CtlReq::parse(r#"{"t":"ctl.res","id":"7"}"#).is_none());
+    }
+
+    #[test]
+    fn os_monitors_allowed_at_view() {
+        let d = dispatch(
+            &req("os.monitors", "1", json!({})),
+            &ctx(AgentConsentLevel::View),
+        );
+        assert_eq!(d.response["ok"], json!(true));
+        assert_eq!(d.action, Action::None);
+        assert!(!d.refused);
+    }
+
+    #[test]
+    fn pointer_needs_control_and_is_refused_at_view() {
+        let p = req(
+            "os.pointer",
+            "9",
+            json!({ "monitorId": 1, "kind": "move", "nx": 0.5, "ny": 0.5 }),
+        );
+        // view => not_allowed
+        let d = dispatch(&p, &ctx(AgentConsentLevel::View));
+        assert_eq!(d.response["error"], json!("not_allowed"));
+        assert!(d.refused);
+        // control => an InjectPointer action and ok
+        let d = dispatch(&p, &ctx(AgentConsentLevel::Control));
+        assert_eq!(d.response["ok"], json!(true));
+        assert!(matches!(d.action, Action::Pointer { monitor_id: 1, .. }));
+    }
+
+    #[test]
+    fn pointer_on_unconsented_monitor_is_no_such_monitor() {
+        let p = req(
+            "os.pointer",
+            "9",
+            json!({ "monitorId": 7, "kind": "move", "nx": 0.5, "ny": 0.5 }),
+        );
+        let d = dispatch(&p, &ctx(AgentConsentLevel::Control));
+        assert_eq!(d.response["error"], json!("no_such_monitor"));
+    }
+
+    #[test]
+    fn clipboard_set_gated_on_the_desk_switch() {
+        let c = req("clipboard.set", "3", json!({ "text": "hi" }));
+        let d = dispatch(&c, &ctx(AgentConsentLevel::Control));
+        assert_eq!(d.response["error"], json!("clipboard_off"));
+        let mut cx = ctx(AgentConsentLevel::Control);
+        cx.clipboard_enabled = true;
+        let d = dispatch(&c, &cx);
+        assert_eq!(d.response["ok"], json!(true));
+        assert!(matches!(d.action, Action::ClipboardSet { .. }));
+    }
+
+    #[test]
+    fn secure_desktop_blocks_input_only() {
+        let mut cx = ctx(AgentConsentLevel::Control);
+        cx.secure_desktop = true;
+        let p = req(
+            "os.pointer",
+            "9",
+            json!({ "monitorId": 1, "kind": "click", "nx": 0.1, "ny": 0.1 }),
+        );
+        assert_eq!(dispatch(&p, &cx).response["error"], json!("secure_desktop"));
+        // os.monitors is not an input op, so it still works.
+        assert_eq!(
+            dispatch(&req("os.monitors", "1", json!({})), &cx).response["ok"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn ctrl_alt_delete_is_not_supported() {
+        let k = req(
+            "os.key",
+            "k",
+            json!({ "kind": "press", "key": "Delete", "code": "Delete",
+                    "modifiers": { "ctrl": true, "shift": false, "alt": true, "meta": false } }),
+        );
+        let d = dispatch(&k, &ctx(AgentConsentLevel::Control));
+        assert_eq!(d.response["error"], json!("not_supported"));
+        assert_eq!(d.response["message"], json!("sas"));
+    }
+
+    #[test]
+    fn input_lock_and_privacy_answer_phase_d() {
+        let mut cx = ctx(AgentConsentLevel::Elevated);
+        cx.integrity = ElevationLevel::Admin;
+        let d = dispatch(&req("os.input_lock", "l", json!({ "locked": true })), &cx);
+        assert_eq!(d.response["error"], json!("not_supported"));
+        assert_eq!(d.response["message"], json!("phase_d"));
+    }
+
+    #[test]
+    fn unknown_op_is_not_supported_and_not_counted_refused() {
+        let d = dispatch(
+            &req("tab.list", "t", json!({})),
+            &ctx(AgentConsentLevel::Control),
+        );
+        assert_eq!(d.response["error"], json!("not_supported"));
+        assert!(!d.refused);
+    }
+
+    #[test]
+    fn elevation_request_requires_control_and_accepts_at_once() {
+        let r = req(
+            "elevation.request",
+            "e",
+            json!({ "reason": "install a driver" }),
+        );
+        assert_eq!(
+            dispatch(&r, &ctx(AgentConsentLevel::View)).response["error"],
+            json!("not_allowed")
+        );
+        let d = dispatch(&r, &ctx(AgentConsentLevel::Control));
+        assert_eq!(d.response["result"]["accepted"], json!(true));
+        assert!(matches!(d.action, Action::ElevationRequest { .. }));
+    }
+
+    #[test]
+    fn playbook_run_requires_elevated_when_flagged_and_id_must_equal_run_id() {
+        let run_id = "ab".repeat(16);
+        let good = req(
+            "playbook.run",
+            &run_id,
+            json!({ "runId": run_id, "playbookId": "p", "bodyHash": "h", "body": "echo",
+                    "requiresElevation": false }),
+        );
+        let d = dispatch(&good, &ctx(AgentConsentLevel::Control));
+        assert!(matches!(d.action, Action::PlaybookRun { .. }));
+
+        // requiresElevation at control => elevation_required
+        let needs = req(
+            "playbook.run",
+            &run_id,
+            json!({ "runId": run_id, "playbookId": "p", "bodyHash": "h", "body": "x",
+                    "requiresElevation": true }),
+        );
+        assert_eq!(
+            dispatch(&needs, &ctx(AgentConsentLevel::Control)).response["error"],
+            json!("elevation_required")
+        );
+
+        // ctl.req.id != runId => bad_args
+        let mismatched = req(
+            "playbook.run",
+            "wrong",
+            json!({ "runId": run_id, "playbookId": "p", "bodyHash": "h", "body": "x",
+                    "requiresElevation": false }),
+        );
+        assert_eq!(
+            dispatch(&mismatched, &ctx(AgentConsentLevel::Control)).response["error"],
+            json!("bad_args")
+        );
+    }
+
+    #[test]
+    fn nav_is_not_supported_on_windows() {
+        let d = dispatch(
+            &req("os.nav", "n", json!({ "action": "back" })),
+            &ctx(AgentConsentLevel::Control),
+        );
+        assert_eq!(d.response["error"], json!("not_supported"));
+        assert_eq!(d.response["message"], json!("nav"));
+    }
+
+    #[test]
+    fn monitor_select_validates_the_set() {
+        let ok = req("os.monitor.select", "m", json!({ "monitorIds": [1, 2] }));
+        let d = dispatch(&ok, &ctx(AgentConsentLevel::View));
+        assert_eq!(
+            d.action,
+            Action::SelectMonitors {
+                monitor_ids: vec![1, 2]
+            }
+        );
+        let bad = req("os.monitor.select", "m", json!({ "monitorIds": [1, 9] }));
+        assert_eq!(
+            dispatch(&bad, &ctx(AgentConsentLevel::View)).response["error"],
+            json!("no_such_monitor")
+        );
+    }
+}

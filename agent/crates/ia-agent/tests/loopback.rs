@@ -198,6 +198,270 @@ fn desk_to_assist(assist_channel: &mut ia_core::secchan::SecChannel, frame: &[u8
 }
 
 // ---------------------------------------------------------------------------
+// Fake Assist over encrypted channels (contract §15.2): the receiving party drives
+// real `ia.control` / `ia.chat` / `ia.file` / `ia.playbook` frames through the live-session
+// logic in `ia-core` and asserts the Desk's answers — the dispatch, gating, file receive,
+// playbook checks and teardown the contract requires, with no OS capture or input.
+// ---------------------------------------------------------------------------
+
+/// Open a matching Desk/Assist `SecChannel` pair for `label` from a completed handshake.
+fn channel_pair(
+    kd: &SessionKeys,
+    ka: &SessionKeys,
+    label: &str,
+) -> (ia_core::secchan::SecChannel, ia_core::secchan::SecChannel) {
+    let mut desk_set = SecChannelSet::new();
+    let mut assist_set = SecChannelSet::new();
+    let desk = desk_set
+        .open(
+            Operator::Desk,
+            "loopback-session",
+            label,
+            0,
+            kd.k_d2a,
+            kd.k_a2d,
+        )
+        .unwrap();
+    let assist = assist_set
+        .open(
+            Operator::Assist,
+            "loopback-session",
+            label,
+            0,
+            ka.k_d2a,
+            ka.k_a2d,
+        )
+        .unwrap();
+    (desk, assist)
+}
+
+#[test]
+fn fake_assist_control_ops_are_gated_by_level() {
+    use ia_core::ctl::{dispatch, Action, CtlReq, DispatchCtx};
+    use ia_core::types::{AgentConsentLevel, ElevationLevel};
+
+    let (kd, ka, _) = handshake();
+    let (mut desk, mut assist) = channel_pair(&kd, &ka, "ia.control");
+
+    let ctx = |level| DispatchCtx {
+        level,
+        integrity: ElevationLevel::User,
+        clipboard_enabled: false,
+        consented_monitors: vec![1],
+        secure_desktop: false,
+    };
+
+    // The fake Assist sends an encrypted `os.pointer` (an input op) at `control`.
+    let req = r#"{"t":"ctl.req","id":"42","op":"os.pointer","args":{"monitorId":1,"kind":"click","nx":0.5,"ny":0.5,"button":0}}"#;
+    let frame = assist.seal_text(req).unwrap();
+    let opened = assist_to_desk(&mut desk, &frame); // Desk receives it
+    let parsed = CtlReq::parse(&opened).unwrap();
+
+    let d = dispatch(&parsed, &ctx(AgentConsentLevel::Control));
+    assert!(matches!(d.action, Action::Pointer { monitor_id: 1, .. }));
+    let res_frame = desk.seal_text(&d.response.to_string()).unwrap();
+    let res_text = desk_to_assist(&mut assist, &res_frame); // Assist reads ctl.res
+    let res: serde_json::Value = serde_json::from_str(&res_text).unwrap();
+    assert_eq!(res["id"], serde_json::json!("42"));
+    assert_eq!(res["ok"], serde_json::json!(true));
+
+    // The same op below `control` (view) is refused `not_allowed`.
+    let req2 = r#"{"t":"ctl.req","id":"43","op":"os.pointer","args":{"monitorId":1,"kind":"move","nx":0.1,"ny":0.1,"button":0}}"#;
+    let frame = assist.seal_text(req2).unwrap();
+    let opened = assist_to_desk(&mut desk, &frame);
+    let d = dispatch(
+        &CtlReq::parse(&opened).unwrap(),
+        &ctx(AgentConsentLevel::View),
+    );
+    assert!(d.refused);
+    let res_frame = desk.seal_text(&d.response.to_string()).unwrap();
+    let res: serde_json::Value =
+        serde_json::from_str(&desk_to_assist(&mut assist, &res_frame)).unwrap();
+    assert_eq!(res["error"], serde_json::json!("not_allowed"));
+}
+
+#[test]
+fn fake_assist_chat_message_is_acked() {
+    let (kd, ka, _) = handshake();
+    let (mut desk, mut assist) = channel_pair(&kd, &ka, "ia.chat");
+
+    // Assist -> Desk chat.message (A §8.1 JSON as a text frame).
+    let chat = r#"{"t":"chat","id":"m1","from":"assist","text":"are you there?","ts":1}"#;
+    let frame = assist.seal_text(chat).unwrap();
+    let opened = assist_to_desk(&mut desk, &frame);
+    let msg: serde_json::Value = serde_json::from_str(&opened).unwrap();
+    assert_eq!(msg["t"], serde_json::json!("chat"));
+
+    // The Desk panel acknowledges (A §8.1 chat.ack) — the round-trip the console expects.
+    let ack = serde_json::json!({ "t": "chat.ack", "id": msg["id"], "ts": 2 }).to_string();
+    let ack_frame = desk.seal_text(&ack).unwrap();
+    let back: serde_json::Value =
+        serde_json::from_str(&desk_to_assist(&mut assist, &ack_frame)).unwrap();
+    assert_eq!(back["t"], serde_json::json!("chat.ack"));
+    assert_eq!(back["id"], serde_json::json!("m1"));
+}
+
+#[test]
+fn fake_assist_file_offer_is_received_to_the_right_name_and_bytes() {
+    use ia_core::filexfer::{encode_file_chunk, FileOffer, Receiver, FILE_CHUNK_SIZE};
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+
+    let (kd, ka, _) = handshake();
+    let (mut desk, mut assist) = channel_pair(&kd, &ka, "ia.file");
+
+    let data = b"support bundle contents".to_vec();
+    let sha = hex::encode(Sha256::digest(&data));
+    // Assist -> Desk file.offer (text frame).
+    let offer_json = serde_json::json!({
+        "t": "file.offer", "fileId": 7, "name": "report (1).txt", "size": data.len(),
+        "mime": "text/plain", "sha256": sha, "chunkSize": FILE_CHUNK_SIZE, "chunks": 1, "ts": 1
+    })
+    .to_string();
+    let frame = assist.seal_text(&offer_json).unwrap();
+    let opened = assist_to_desk(&mut desk, &frame);
+    let offer = FileOffer::parse(&opened).unwrap();
+
+    let (mut recv, accepted) = Receiver::accept(&offer, &HashSet::new()).unwrap();
+    assert_eq!(accepted.final_name, "report (1).txt");
+    assert!(!accepted.executable);
+
+    // Assist -> Desk one binary chunk.
+    let chunk = encode_file_chunk(offer.file_id, 0, &data);
+    let cframe = assist.seal_binary(&chunk).unwrap();
+    let opened_chunk = desk.open(&cframe).unwrap();
+    assert!(!opened_chunk.text);
+    let (fid, idx, payload) =
+        ia_core::filexfer::decode_file_chunk(&opened_chunk.plaintext).unwrap();
+    assert_eq!(fid, 7);
+    recv.on_chunk(idx, payload).unwrap();
+
+    let (name, bytes) = recv.finish().unwrap();
+    assert_eq!(name, "report (1).txt");
+    assert_eq!(bytes, data);
+}
+
+#[test]
+fn fake_assist_playbook_run_streams_output_and_exit_code() {
+    use ia_core::ctl::{dispatch, Action, CtlReq, DispatchCtx};
+    use ia_core::playbook::{check_run, ManifestEntry, PbEnd, PbOutput, RunRequest};
+    use ia_core::types::{AgentConsentLevel, ElevationLevel, PlaybookInterpreter};
+    use sha2::{Digest, Sha256};
+
+    let (kd, ka, _) = handshake();
+    let (mut desk_ctl, mut assist_ctl) = channel_pair(&kd, &ka, "ia.control");
+    let (mut desk_pb, mut assist_pb) = channel_pair(&kd, &ka, "ia.playbook");
+
+    let body = "Write-Output 'ok'";
+    let body_hash = hex::encode(Sha256::digest(body.as_bytes()));
+    let run_id = "ab".repeat(16);
+    let manifest = vec![ManifestEntry {
+        id: "pb-1".into(),
+        body_hash: body_hash.clone(),
+        requires_elevation: false,
+    }];
+
+    // Assist -> Desk playbook.run on ia.control (ctl.req.id === runId, §8.4).
+    let req = serde_json::json!({
+        "t": "ctl.req", "id": run_id, "op": "playbook.run",
+        "args": { "runId": run_id, "playbookId": "pb-1", "bodyHash": body_hash,
+                  "body": body, "interpreter": "powershell", "requiresElevation": false,
+                  "timeoutSec": 120 }
+    })
+    .to_string();
+    let frame = assist_ctl.seal_text(&req).unwrap();
+    let opened = assist_to_desk(&mut desk_ctl, &frame);
+    let d = dispatch(
+        &CtlReq::parse(&opened).unwrap(),
+        &DispatchCtx {
+            level: AgentConsentLevel::Control,
+            integrity: ElevationLevel::User,
+            clipboard_enabled: false,
+            consented_monitors: vec![1],
+            secure_desktop: false,
+        },
+    );
+    let Action::PlaybookRun {
+        run_id: rid,
+        playbook_id,
+        body_hash: bh,
+        body: b,
+        requires_elevation,
+    } = d.action
+    else {
+        panic!("expected a PlaybookRun action");
+    };
+    assert_eq!(d.response["result"]["accepted"], serde_json::json!(true));
+
+    // The agent re-checks the body hash against the pinned manifest before running (§8.4).
+    let run = RunRequest {
+        run_id: rid.clone(),
+        playbook_id,
+        body_hash: bh,
+        body: b,
+        interpreter: PlaybookInterpreter::Powershell,
+        requires_elevation,
+        timeout_sec: 120,
+    };
+    check_run(&run, &manifest, ElevationLevel::User).expect("run passes the pinned-hash check");
+
+    // Desk -> Assist pb.output then pb.end on ia.playbook (exit 0).
+    let out = PbOutput {
+        t: "pb.output".into(),
+        run_id: rid.clone(),
+        stream: "stdout".into(),
+        seq: 0,
+        chunk: "ok\r\n".into(),
+        ts: 10,
+    };
+    let f = desk_pb
+        .seal_text(&serde_json::to_string(&out).unwrap())
+        .unwrap();
+    let got_out: PbOutput = serde_json::from_str(&desk_to_assist(&mut assist_pb, &f)).unwrap();
+    assert_eq!(got_out.chunk, "ok\r\n");
+
+    let end = PbEnd {
+        t: "pb.end".into(),
+        run_id: rid,
+        exit: Some(0),
+        duration_ms: 5,
+        truncated: false,
+        ran_as: "user".into(),
+        error: None,
+        ts: 11,
+    };
+    let f = desk_pb
+        .seal_text(&serde_json::to_string(&end).unwrap())
+        .unwrap();
+    let got_end: PbEnd = serde_json::from_str(&desk_to_assist(&mut assist_pb, &f)).unwrap();
+    assert_eq!(got_end.exit, Some(0));
+    assert_eq!(got_end.ran_as, "user");
+}
+
+#[test]
+fn stop_teardown_order_and_self_delete_decision_are_computed() {
+    use ia_core::teardown::{
+        deletes_on_exit, stop_order, teardown_order, ProcessRole, StopMessage, TeardownStep,
+    };
+
+    // Stop runs hard rule 2 in order; keys are zeroised after the peer closes.
+    let order = teardown_order();
+    assert_eq!(order[0], TeardownStep::StopInput);
+    let pos = |s| order.iter().position(|x| *x == s).unwrap();
+    assert!(pos(TeardownStep::ClosePeer) < pos(TeardownStep::ZeroiseKeys));
+
+    // Stop then sends stop.sharing, flushes the outbox, and ends the session.
+    assert_eq!(stop_order()[0], StopMessage::StopSharing);
+    assert_eq!(*stop_order().last().unwrap(), StopMessage::SessionEnd);
+
+    // The self-delete decision is computed (dry run): a standalone user instance deletes,
+    // unless Keep was chosen.
+    assert!(deletes_on_exit(ProcessRole::UserStandalone, false));
+    assert!(!deletes_on_exit(ProcessRole::UserStandalone, true));
+    assert!(!deletes_on_exit(ProcessRole::UserHandedOver, false));
+}
+
+// ---------------------------------------------------------------------------
 // Media variant: two real webrtc-rs peers (contract §15.2). Only built with the
 // `media` feature (default on the MSVC host).
 // ---------------------------------------------------------------------------

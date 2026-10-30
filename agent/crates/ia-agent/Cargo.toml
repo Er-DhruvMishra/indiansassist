@@ -66,6 +66,7 @@ cpal = { workspace = true, optional = true }
 [dev-dependencies]
 serde_json.workspace = true
 hex.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
 # For the media loopback test (two real webrtc-rs peers); only used behind cfg(media).
 webrtc.workspace = true

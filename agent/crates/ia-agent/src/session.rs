@@ -86,7 +86,9 @@ pub async fn run_signaling(
     tracing::info!(%signal_url, "connecting to signaling");
 
     let mut client = SignalClient::connect(&signal_url, &id).await?;
-    let caps = windows_capabilities(1, false);
+    // Voice is advertised only when an audio device is present (§6.3); the cpal duplex loop
+    // is not yet wired, so the bring-up path reports no voice device.
+    let caps = windows_capabilities(1, false, false);
     client
         .desk_hello(&token_string(token), None, &id, source_wire(source), &caps)
         .await?;

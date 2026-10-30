@@ -199,6 +199,17 @@ pub const WINDOWS_FEATURES: &[&str] = &[
     "playbooks",
 ];
 
+/// The Windows feature list the agent advertises, dropping `voice` when no audio device was
+/// found (contract §6.3: "if cpal device enumeration fails … make voice a capability flag
+/// that is off when no device").
+pub fn windows_features(has_voice: bool) -> Vec<String> {
+    WINDOWS_FEATURES
+        .iter()
+        .filter(|f| has_voice || **f != "voice")
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// `P3_DATA_CHANNEL_LABELS`, created by the Desk once per peer connection (contract §1.3).
 pub const P3_DATA_CHANNEL_LABELS: &[&str] = &[
     "ia.sec",
@@ -359,6 +370,16 @@ mod tests {
         for l in SEC_ENCRYPTED_LABELS {
             assert!(sec_label_id(l).is_some(), "{l} must have a label id");
         }
+    }
+
+    #[test]
+    fn voice_feature_drops_without_a_device() {
+        let with = windows_features(true);
+        assert!(with.iter().any(|f| f == "voice"));
+        let without = windows_features(false);
+        assert!(!without.iter().any(|f| f == "voice"));
+        // Everything else is unchanged.
+        assert_eq!(without.len(), WINDOWS_FEATURES.len() - 1);
     }
 
     #[test]

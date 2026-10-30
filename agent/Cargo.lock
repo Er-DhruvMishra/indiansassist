@@ -2070,6 +2070,7 @@ dependencies = [
  "ia-platform",
  "ia-ui",
  "serde_json",
+ "sha2",
  "shiguredo_libvpx",
  "tokio",
  "tokio-tungstenite",

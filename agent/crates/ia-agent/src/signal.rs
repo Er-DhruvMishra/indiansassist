@@ -13,7 +13,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use ia_core::types::{
-    AgentCapabilities, ElevationLevel, PlaybookInterpreter, VideoEncoder, WINDOWS_FEATURES,
+    windows_features, AgentCapabilities, ElevationLevel, PlaybookInterpreter, VideoEncoder,
 };
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -31,12 +31,13 @@ pub struct SignalClient {
     ws: Ws,
 }
 
-/// The `desk.hello.client.capabilities` a Windows agent advertises (§3.1 example).
-pub fn windows_capabilities(monitors: u8, hw_encoder: bool) -> AgentCapabilities {
+/// The `desk.hello.client.capabilities` a Windows agent advertises (§3.1 example). `has_voice`
+/// is false when cpal found no capture/render device, which drops the `voice` feature (§6.3).
+pub fn windows_capabilities(monitors: u8, hw_encoder: bool, has_voice: bool) -> AgentCapabilities {
     AgentCapabilities {
         monitors: monitors.clamp(1, 16),
         elevation: ElevationLevel::User,
-        features: WINDOWS_FEATURES.iter().map(|s| s.to_string()).collect(),
+        features: windows_features(has_voice),
         encoders: vec![VideoEncoder::Vp8, VideoEncoder::Vp9, VideoEncoder::H264],
         hw_encoder,
         interpreters: vec![PlaybookInterpreter::Powershell, PlaybookInterpreter::Cmd],
