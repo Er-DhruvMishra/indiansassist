@@ -6,6 +6,8 @@
 import { randomUUID } from 'node:crypto';
 import {
   createTokenRequestSchema,
+  iaconfigRequestSchema,
+  signIaconfig,
   publicLookupRequestSchema,
   signToken,
   tierWithin,
@@ -26,7 +28,7 @@ import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
 import { userActor, writeAudit } from '../lib/audit.js';
 import { refOf, userRefs } from '../lib/lookup.js';
-import { brandingPublic, joinUrlOf, toToken } from '../lib/mappers.js';
+import { brandingPublic, compactOf, effectiveStatus, joinUrlOf, toToken } from '../lib/mappers.js';
 import { TECH_ROLES } from '../lib/rbac.js';
 import { iso } from '../lib/time.js';
 import { parseOr400 } from '../lib/validate.js';
@@ -124,7 +126,8 @@ export async function tokenRoutes(app: FastifyInstance, ctx: AppContext): Promis
 
   app.post('/api/v1/tokens/public-lookup', { config: limits.publicLookup }, async (req): Promise<PublicToken> => {
     const body = parseOr400(publicLookupRequestSchema, req.body);
-    const v = await verifyTokenInput(ctx, body.code, { ip: req.ip });
+    // Phase C section 2.3: a desk code is resolved only for an Origin-less (native) request.
+    const v = await verifyTokenInput(ctx, body.code, { ip: req.ip, deskCode: req.headers['origin'] === undefined });
     if (!v.ok) {
       if (v.code === 'rate_limited') ctx.metrics.rateLimited.inc();
       fail(v.code, v.message, v.details);
@@ -142,9 +145,37 @@ export async function tokenRoutes(app: FastifyInstance, ctx: AppContext): Promis
       org: { ...branding, supportEmail: v.org.branding?.supportEmail ?? null },
       technician,
       signalUrl: `${wsOrigin(ctx.config.apiOrigin)}/signal`,
-      joinSupported: (tok.tier === 'p1_browser' || tok.tier === 'p2_extension') && tok.typ !== 'enrollment',
+      joinSupported: (tok.tier === 'p1_browser' || tok.tier === 'p2_extension' || tok.tier === 'p3_portable') && tok.typ !== 'enrollment',
       // Phase B 11.3: install info for the join page and the extension (non-null for p2_extension only).
       extension: tok.tier === 'p2_extension' ? { ...ctx.config.extension, ids: [...ctx.config.extension.ids] } : null,
+      // Phase C section 2.7 J6: which agent builds this node serves (non-null for p3_portable only).
+      agent: tok.tier === 'p3_portable' ? ctx.agentDist.publicInfo() : null,
     };
+  });
+
+  /** Phase C section 2.4: a signed `.iaconfig` sidecar for a p3 token (org_admin and the token's creator). */
+  app.post<{ Params: { id: string } }>('/api/v1/tokens/:id/iaconfig', async (req) => {
+    const p = await authenticate(ctx, req, TECH_ROLES);
+    const tok = await scopedToken(ctx, p, req.params.id, true);
+    if (p.user.role !== 'org_admin' && tok.createdBy !== p.user.id) fail('forbidden', 'only an org_admin or the token creator may do this');
+    const body = parseOr400(iaconfigRequestSchema, req.body ?? {});
+    if (tok.tier !== 'p3_portable') fail('invalid_token_type', 'a configuration file exists for p3_portable tokens only');
+    const status = effectiveStatus(tok);
+    if (status !== 'active') fail('token_gone', `token is ${status}`, { status });
+    const lim = await ctx.limiter.hit(`iaconfig:${p.user.id}`, 20, 60_000);
+    if (!lim.allowed) fail('rate_limited', 'too many configuration files', { retryAfterSec: lim.retryAfterSec });
+    const iaconfig = await signIaconfig(
+      {
+        v: 1,
+        apiOrigin: ctx.config.apiOrigin,
+        region: tok.region,
+        code: compactOf(tok),
+        ...(body.deskLabel ? { deskLabel: body.deskLabel } : {}),
+        kid: ctx.keys.kid,
+      },
+      ctx.keys.seedHex,
+    );
+    await writeAudit(ctx, ctx.db, p.org, { actor: userActor(p.user), action: 'token.iaconfig_issued', data: { tokenId: tok.id } });
+    return { iaconfig };
   });
 }

@@ -11,6 +11,7 @@ import { useAsync } from '../../hooks/useAsync';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { errorMessage } from '../../lib/api';
 import { tokensApi } from '../../lib/endpoints';
+import { iaconfigApi, saveText } from '../../lib/agentApi';
 import { fmtDateTime, fmtRelative, fmtTier, humanise, shortId } from '../../lib/format';
 import { useAssistSignal } from '../signal/AssistSignalProvider';
 import { CreateTokenDialog } from './CreateTokenDialog';
@@ -55,6 +56,17 @@ export function TokensPage() {
       const page = await tokensApi.list({ ...(status ? { status } : {}), cursor });
       setExtra((x) => [...x, ...page.items]);
       setCursor(page.nextCursor);
+    } catch (e) {
+      setActionError(errorMessage(e));
+    }
+  };
+
+  /** Phase C 2.4: the signed sidecar for an MSP / self-host rollout (org_admin and the token creator). */
+  const downloadIaconfig = async (t: Token) => {
+    setActionError(null);
+    try {
+      const r = await iaconfigApi.issue(t.id);
+      saveText(r.iaconfig, 'IndiansAssist.iaconfig');
     } catch (e) {
       setActionError(errorMessage(e));
     }
@@ -143,6 +155,11 @@ export function TokensPage() {
                           <Button size="sm" variant="ghost" onClick={() => setQrFor(t)} aria-label={`Show QR code for ${t.label ?? shortId(t.id)}`}>
                             QR
                           </Button>
+                          {t.tier === 'p3_portable' && t.status === 'active' && (can(me?.user.role, 'tokens.iaconfig') || t.createdBy.id === me?.user.id) && (
+                            <Button size="sm" variant="ghost" onClick={() => void downloadIaconfig(t)}>
+                              Download .iaconfig for this token
+                            </Button>
+                          )}
                           {t.status === 'active' && canCreate && (
                             <Button size="sm" variant="danger" onClick={() => setRevokeFor(t)}>
                               Revoke

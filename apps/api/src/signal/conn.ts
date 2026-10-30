@@ -5,9 +5,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  isAgentConsentLevel,
+  isConsentLevel,
   LIMITS,
+  type AgentConsentLevel,
   type ConsentLevel,
   type DeskClient,
+  type ElevationLevel,
   type ExtensionPolicy,
   type MirrorScope,
   type PackageTier,
@@ -15,6 +19,7 @@ import {
   type SessionPath,
   type SessionState,
   type SignalErrorCode,
+  type StoredConsentLevel,
 } from '@indiansassist/shared';
 import WebSocket from 'ws';
 import type { Principal } from '../plugins/auth.js';
@@ -23,7 +28,7 @@ import { TokenBucket } from '../limiter.js';
 export type DeskInfo = {
   tokenId: string;
   orgId: string;
-  via: 'compact' | 'short_code';
+  via: 'compact' | 'short_code' | 'desk_code';
   /** `desk.hello.deskLabel`, the fallback for `desk.knock.deskLabel`. */
   helloLabel: string | null;
   /** The session this socket is the Desk participant of (null while waiting). */
@@ -84,7 +89,12 @@ export class Conn {
    * bucket only stops a flood of them.
    */
   readonly exemptBucket = new TokenBucket(20, 100);
-  /** The upgrade carried `Origin: chrome-extension://<id>` (Y21): Desk messages only, never `assist.hello`. */
+  /**
+   * Phase C section 3.1 (generalises Y21 / A.2 P5): an upgrade with a listed extension Origin or with no Origin at all.
+   * The cookie is ignored (null principal); `desk.hello` / `recorder.hello` only, never `assist.hello`.
+   */
+  deskOnly = false;
+  /** The upgrade carried `Origin: chrome-extension://<id>` (Y21): a recorder may never hello on it. */
   extensionOrigin = false;
   /** Last time the cookie principal was re-validated against auth_session / user (section 7.2). */
   lastAuthCheckAt = Date.now();
@@ -159,6 +169,16 @@ export type RelayCounters = { mirrorFrames: number; mirrorBytes: number; control
 
 export type LiveConsent = { level: ConsentLevel; scope: MirrorScope; backstage: boolean };
 
+/** Phase C section 3.4: the native consent of a P3 session and the attested integrity level. */
+export type LiveAgent = { level: AgentConsentLevel; monitors: number; clipboard: boolean; elevation: ElevationLevel };
+
+/** Phase C section 8.3: the manifest delivered at `session.created` (pinned for the `playbook_changed` check). */
+export type LiveManifest = {
+  msg: { playbooks: Record<string, unknown>[]; truncated?: true };
+  /** playbook id -> pinned body hash. */
+  hashes: Map<string, string>;
+};
+
 /** Server recorder state of a live session (Phase A.2 section 6). */
 export type LiveRecorder = {
   /** Open assignment: the socket asked to join, its deadline, sockets already tried this activation. */
@@ -182,8 +202,12 @@ export type Live = {
   tier: PackageTier;
   state: SessionState;
   path: SessionPath;
-  /** The P2 consent decision in force (null for P1 or before consent). */
+  /** The P2 consent decision in force (null for P1 / P3 or before consent). */
   consent: LiveConsent | null;
+  /** The P3 consent in force (null for P1 / P2 or before consent). */
+  agent: LiveAgent | null;
+  /** P3: the playbook manifest of this session, loaded once at the first `session.created`. */
+  manifest: LiveManifest | null;
   /** The org extension policy of a P2 session, loaded at first use (live sessions are not re-policed). */
   policy: ExtensionPolicy | null;
   relay: RelayCounters;
@@ -218,16 +242,31 @@ type LiveSource = {
   tier: PackageTier;
   state: SessionState;
   path: SessionPath;
-  consentLevel?: ConsentLevel | null;
+  consentLevel?: StoredConsentLevel | null;
   consentScope?: MirrorScope | null;
   consentBackstage?: boolean | null;
+  consentMonitors?: number | null;
+  consentClipboard?: boolean | null;
+  elevation?: ElevationLevel | null;
   recordingMode?: RecordingMode | null;
   serverRecording?: boolean;
 };
 
-/** The consent triple of a session row, or null when it has none (P1, or not yet granted). */
+/** The P2 consent triple of a session row, or null when it has none (P1 / P3, or not yet granted). */
 export function consentOfRow(s: LiveSource): LiveConsent | null {
-  return s.consentLevel && s.consentScope ? { level: s.consentLevel, scope: s.consentScope, backstage: s.consentBackstage === true } : null;
+  if (s.tier !== 'p2_extension' || !isConsentLevel(s.consentLevel) || !s.consentScope) return null;
+  return { level: s.consentLevel, scope: s.consentScope, backstage: s.consentBackstage === true };
+}
+
+/** The P3 consent of a session row, or null (Phase C section 3.4 family rule: only P3 levels are read here). */
+export function agentOfRow(s: LiveSource): LiveAgent | null {
+  if (s.tier !== 'p3_portable' || !isAgentConsentLevel(s.consentLevel)) return null;
+  return {
+    level: s.consentLevel,
+    monitors: s.consentMonitors ?? 1,
+    clipboard: s.consentClipboard === true,
+    elevation: s.elevation ?? 'user',
+  };
 }
 
 export function newLive(s: LiveSource): Live {
@@ -239,6 +278,8 @@ export function newLive(s: LiveSource): Live {
     state: s.state,
     path: s.path,
     consent: consentOfRow(s),
+    agent: agentOfRow(s),
+    manifest: null,
     policy: null,
     relay: { mirrorFrames: 0, mirrorBytes: 0, controlFrames: 0, dropped: 0 },
     recordingMode: s.recordingMode ?? null,

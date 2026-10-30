@@ -3,14 +3,14 @@
  * session-scoped calls are routed to the session's owner node, user / token scoped ones are applied here and fanned
  * out to every other node through the bridge (contracts section 7.6 N1).
  */
-import { getSession } from '@indiansassist/db';
+import { getSession, type SessionRow } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
 import type { EndedSession } from '../services/session-end.js';
 import { refreshUserSockets } from './auth-watch.js';
 import type { Bridge } from './bridge.js';
 import type { Conn, Live, RelayCounters } from './conn.js';
 import type { SignalHub } from './hub.js';
-import { onSessionEnded, onTokenRevoked } from './lifecycle.js';
+import { onSessionEnded, onTokenRevoked, sessionEndedFrame } from './lifecycle.js';
 
 export abstract class HubApi {
   abstract readonly ctx: AppContext;
@@ -21,6 +21,11 @@ export abstract class HubApi {
 
   private get hub(): SignalHub {
     return this as unknown as SignalHub;
+  }
+
+  /** Phase C W21: the `session.ended` frame of an ended session (a repeated `session.end` is answered with it). */
+  async sessionEndedFrame(s: SessionRow): Promise<Record<string, unknown>> {
+    return sessionEndedFrame(this.hub, s);
   }
 
   /** Relayed chat messages of a session (for `chat.relayed`), asked of the owner node when it is elsewhere. */

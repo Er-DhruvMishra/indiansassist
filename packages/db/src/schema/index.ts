@@ -28,3 +28,7 @@ export type AuditCheckpointRow = typeof tables.auditCheckpoint.$inferSelect;
 export type RecordingRow = typeof tables.recording.$inferSelect;
 export type NewRecordingRow = typeof tables.recording.$inferInsert;
 export type IntegrationRow = typeof tables.integration.$inferSelect;
+export type PlaybookRow = typeof tables.playbook.$inferSelect;
+export type NewPlaybookRow = typeof tables.playbook.$inferInsert;
+export type PlaybookRunRow = typeof tables.playbookRun.$inferSelect;
+export type ElevationHandoverRow = typeof tables.elevationHandover.$inferSelect;

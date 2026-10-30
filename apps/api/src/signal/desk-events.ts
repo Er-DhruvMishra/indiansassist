@@ -9,6 +9,7 @@
  */
 import {
   deskEventDataSchema,
+  DESK_EVENT_P2_ACTIONS,
   DESK_EVENT_REASON_ACTIONS,
   fileEventDataSchema,
   hostToHash,
@@ -23,6 +24,7 @@ import type { Conn, Live } from './conn.js';
 import type { SignalHub } from './hub.js';
 import { orgOf } from './messages.js';
 import { authorizeSession } from './relay.js';
+import { p3Event } from './desk-events-p3.js';
 
 /** Highest `fileId` attested per session (the data channel numbers transfers from 1). */
 export const MAX_ATTESTED_FILE_ID = 10_000;
@@ -45,7 +47,10 @@ export async function handleDeskEvent(hub: SignalHub, conn: Conn, msg: SignalOf<
   if (s.endedAt && Date.now() > s.endedAt.getTime() + ctx.timing.eventGraceMs)
     return conn.error('bad_state', 'session ended too long ago', msg.id);
   if (msg.action === 'file.sent' || msg.action === 'file.received') return fileEvent(hub, conn, live, s, msg, msg.action);
-  return p2Event(hub, conn, s, msg, msg.action);
+  if (s.tier === 'p3_portable') return p3Event(hub, conn, s, msg);
+  if (!(DESK_EVENT_P2_ACTIONS as readonly string[]).includes(msg.action))
+    return conn.error('bad_payload', `${msg.action} is attested in P3 sessions only`, msg.id);
+  return p2Event(hub, conn, s, msg, msg.action as DeskEventP2Action);
 }
 
 async function fileEvent(

@@ -14,6 +14,18 @@ import {
 type MsgHandler = (msg: DataChannelMessage) => void;
 type BinHandler = (data: ArrayBuffer) => void;
 
+/**
+ * What the file transfer layer needs from a channel hub: the plaintext ChannelHub (P1/P2) and the encrypted
+ * SecureHub of a P3 session (Phase C section 1.3) both implement it.
+ */
+export interface HubLike {
+  get(label: DataChannelLabel): RTCDataChannel | undefined;
+  send(msg: DataChannelMessage): boolean;
+  sendBinary(frame: Uint8Array): boolean;
+  onMessage(h: MsgHandler): () => void;
+  onBinary(h: BinHandler): () => void;
+}
+
 /** Which channel each outbound `t` travels on. */
 export function channelFor(t: DataChannelMessage['t']): DataChannelLabel {
   if (t === 'chat' || t === 'chat.ack' || t === 'typing') return 'ia.chat';
@@ -21,10 +33,13 @@ export function channelFor(t: DataChannelMessage['t']): DataChannelLabel {
   if (t.startsWith('file.')) return 'ia.file';
   if (t.startsWith('mirror.')) return 'ia.mirror';
   if (t.startsWith('ctl.')) return 'ia.control';
+  // Phase C sections 1.3, 5.1
+  if (t.startsWith('sec.')) return 'ia.sec';
+  if (t.startsWith('pb.')) return 'ia.playbook';
   return 'ia.ctrl';
 }
 
-export class ChannelHub {
+export class ChannelHub implements HubLike {
   private channels = new Map<DataChannelLabel, RTCDataChannel>();
   private handlers = new Set<MsgHandler>();
   private binHandlers = new Set<BinHandler>();
@@ -48,7 +63,7 @@ export class ChannelHub {
           console.warn('[dc] dropped message on', label, parsed.reason);
           return;
         }
-        for (const h of [...this.handlers]) h(parsed.msg);
+        for (const h of [...this.handlers]) h(parsed.msg as DataChannelMessage);
       } else if (label === 'ia.file' && ev.data instanceof ArrayBuffer) {
         for (const h of [...this.binHandlers]) h(ev.data);
       } else if (label === 'ia.mirror' && ev.data instanceof ArrayBuffer) {

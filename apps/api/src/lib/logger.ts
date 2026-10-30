@@ -115,6 +115,12 @@ export const REDACT_PATHS = [
   '*.password',
   '*.sig',
   '*.credential',
+  // Phase C section 14: hand-over values, playbook output and bodies, security codes, desk codes.
+  '*.handover',
+  '*.chunk',
+  '*.sas',
+  '*.deskCode',
+  '*.iaconfig',
   // Phase B 12.4: relay payloads, control args, wire hosts.
   '*.data',
   '*.events',

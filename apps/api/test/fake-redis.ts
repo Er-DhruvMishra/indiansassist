@@ -4,7 +4,7 @@
  * to it. `eval` understands exactly the scripts the drivers ship (presence and limiter) and emulates them atomically.
  */
 import { LIMIT_SCRIPT } from '../src/adapters/limiter-redis.js';
-import { CLEAR_WAITING_SCRIPT, LEASE_SCRIPT, type RedisLike } from '../src/adapters/presence-redis.js';
+import { CLEAR_WAITING_SCRIPT, CONSUME_SCRIPT, INCR_SCRIPT, LEASE_SCRIPT, type RedisLike } from '../src/adapters/presence-redis.js';
 
 type Entry = { value: string; expiresAt: number | null; hash?: Map<string, string>; zset?: Map<string, number> };
 
@@ -139,6 +139,19 @@ export class FakeRedisClient implements RedisLike {
         e.expiresAt = this.server.now + Number(windowMs);
         this.server.data.set(key, e);
         return [1, 0];
+      }
+      if (script === CONSUME_SCRIPT) {
+        if (!cur) return null;
+        this.server.data.delete(key);
+        return cur.value;
+      }
+      if (script === INCR_SCRIPT) {
+        if (cur) {
+          cur.value = String(Number(cur.value) + 1);
+          return Number(cur.value);
+        }
+        this.server.data.set(key, { value: '1', expiresAt: this.server.now + Number(args[1]) * 1000 });
+        return 1;
       }
       if (script === LEASE_SCRIPT) {
         const holder = String(args[1]);

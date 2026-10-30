@@ -38,6 +38,9 @@ import { policyRoutes } from './routes/policies.js';
 import { tokenRoutes } from './routes/tokens.js';
 import { userRoutes } from './routes/users.js';
 import { SignalHub } from './signal/hub.js';
+import { AgentDist } from './services/agent-dist.js';
+import { downloadRoutes } from './routes/download.js';
+import { playbookRoutes } from './routes/playbooks.js';
 
 export type BuildAppOptions = {
   config: Config;
@@ -98,8 +101,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
     log: app.log,
     timing: { ...DEFAULT_TIMING, ...opts.timing },
     version: packageVersion(),
+    agentDist: new AgentDist(config),
     hub: null as unknown as SignalHub,
   };
+  ctx.agentDist.load();
+  if (ctx.agentDist.lastError) app.log.info({ reason: ctx.agentDist.lastError }, 'no agent builds served by this node');
   ctx.hub = new SignalHub(ctx);
 
   registerErrorHandlers(app);
@@ -121,6 +127,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await recordingRoutes(app, ctx);
   await iceRoutes(app, ctx);
   await internalRecordingRoutes(app, ctx);
+  await downloadRoutes(app, ctx);
+  await playbookRoutes(app, ctx);
 
   ctx.hub.attach(app);
   await ctx.hub.start();

@@ -4,7 +4,7 @@
  * `assist` or `desk` participant; anything else gets `error forbidden` (and `signal.forbidden` in the chain when the
  * sender is an authenticated Assist). Hard rule 1: `webrtc.*` is relayed only while the session is `active`.
  */
-import { WS_CLOSE, type SignalOf } from '@indiansassist/shared';
+import { WS_CLOSE, type SessionEndReason, type SignalOf } from '@indiansassist/shared';
 import { getOrg, getSession } from '@indiansassist/db';
 import { deskActor, userActor, writeAudit } from '../lib/audit.js';
 import { endSessionFlow } from '../services/session-end.js';
@@ -102,14 +102,25 @@ export async function handleChatMessage(hub: SignalHub, conn: Conn, msg: SignalO
   peerOf(hub, conn, live)?.send({ ...msg, from: conn.side });
 }
 
+/**
+ * Phase C section 1.3 step 9 / W21: a `session.end` whose note starts with `sec:` (secure channel failure) or is
+ * `indicator_lost` (Android consent indicator) ends the session with `error`, whichever side sent it.
+ */
+export function endReasonFor(side: 'assist' | 'desk', note: string | undefined): SessionEndReason {
+  if (note !== undefined && (note.startsWith('sec:') || note === 'indicator_lost')) return 'error';
+  return side === 'assist' ? 'assist_ended' : 'desk_stopped';
+}
+
 export async function handleSessionEnd(hub: SignalHub, conn: Conn, msg: SignalOf<'session.end'>): Promise<void> {
   const live = await authorizeSession(hub, conn, msg.sessionId, msg.t, msg.id);
   if (!live) return;
   const s = await getSession(hub.ctx.db, msg.sessionId);
-  if (!s || s.state === 'ended') return conn.error('bad_state', 'session already ended', msg.id);
+  if (!s) return conn.error('bad_state', 'session already ended', msg.id);
+  // W21: a second `session.end` (the race between the two senders of a sec: teardown) is answered idempotently.
+  if (s.state === 'ended') return conn.send({ ...(await hub.sessionEndedFrame(s)), ...(msg.id !== undefined ? { re: msg.id } : {}) });
   const byAssist = conn.side === 'assist';
   await endSessionFlow(hub.ctx, s.id, {
-    reason: byAssist ? 'assist_ended' : 'desk_stopped',
+    reason: endReasonFor(byAssist ? 'assist' : 'desk', msg.note),
     actor: byAssist ? userActor(conn.principal!.user) : deskActor(s.deskRef),
     note: msg.note ?? null,
   });

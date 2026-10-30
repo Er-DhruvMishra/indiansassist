@@ -82,7 +82,7 @@ describe('signaling P2 messages', () => {
     expect(DESK_CLIENT_TYPES).toEqual(expect.arrayContaining(['desk.consent_level', 'desk.consent_backstage', 'mirror.relay', 'control.relay']));
     expect(ASSIST_CLIENT_TYPES).toEqual(expect.arrayContaining(['mirror.relay', 'control.relay']));
     expect(BUCKET_EXEMPT_TYPES).toEqual(['ping', 'pong', 'session.end', 'desk.consent']);
-    expect(DATA_CHANNEL_LABELS).toEqual(['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl', 'ia.mirror', 'ia.control']);
+    expect(DATA_CHANNEL_LABELS).toEqual(['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl', 'ia.mirror', 'ia.control', 'ia.sec', 'ia.playbook']);
     expect(P1_DATA_CHANNEL_LABELS).toHaveLength(4);
   });
 });

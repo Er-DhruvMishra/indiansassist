@@ -8,6 +8,7 @@ import type { Config } from './config.js';
 import type { KeySet } from './lib/keys.js';
 import type { Metrics } from './lib/metrics.js';
 import type { Limiter, ShortCodeBudget } from './limiter.js';
+import type { AgentDist } from './services/agent-dist.js';
 import type { SignalHub } from './signal/hub.js';
 
 /** Signaling and session timers (contracts sections 7.2, 7.5); tests shorten them. */
@@ -55,6 +56,8 @@ export type AppContext = {
   log: FastifyBaseLogger;
   timing: Timing;
   version: string;
+  /** Phase C section 2.2: agent builds served by this node. */
+  agentDist: AgentDist;
   /** Set right after construction; REST routes push WS events through it. */
   hub: SignalHub;
 };

@@ -36,6 +36,8 @@ export async function makeApp(env: Record<string, string> = {}, timing: Partial<
       STUN_URLS: 'stun:turn.example.test:3478',
       TURN_URLS: 'turn:turn.example.test:3478?transport=udp,turns:turn.example.test:5349',
       ICE_OWN_HOST_SUFFIXES: 'example.test',
+      AGENT_DEV_STUB: '',
+      AGENT_DIST_DIR: join(storageDir, 'agent-dist'),
       ...env,
     },
     { persistSecrets: false },
@@ -159,8 +161,12 @@ export class SignalClient {
     });
   }
 
-  static async open(url: string, opts: { cookie?: string; origin?: string } = {}): Promise<SignalClient> {
-    const headers: Record<string, string> = { origin: opts.origin ?? WEB_ORIGIN };
+  /** `origin: null` opens an Origin-less socket (a native agent, Phase C section 3.1). */
+  static async open(
+    url: string,
+    opts: { cookie?: string; origin?: string | null; headers?: Record<string, string> } = {},
+  ): Promise<SignalClient> {
+    const headers: Record<string, string> = { ...(opts.origin === null ? {} : { origin: opts.origin ?? WEB_ORIGIN }), ...(opts.headers ?? {}) };
     if (opts.cookie) headers['cookie'] = opts.cookie;
     const ws = new WebSocket(url, { headers });
     const client = new SignalClient(ws);

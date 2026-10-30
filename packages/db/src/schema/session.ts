@@ -1,9 +1,10 @@
 /** Live support sessions and their participants (contracts section 4.2: session, session_participant). */
 import { sql } from 'drizzle-orm';
-import { boolean, char, index, jsonb, pgTable, text, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, char, index, integer, jsonb, pgTable, text, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import {
   consentLevelEnum,
   consentStateEnum,
+  elevationLevelEnum,
   mirrorScopeEnum,
   packageTierEnum,
   participantRoleEnum,
@@ -60,6 +61,14 @@ export const session = pgTable(
     recordingMode: recordingModeEnum('recording_mode'),
     /** Phase A.2: set when `recording.server_started` was written. */
     serverRecording: boolean('server_recording').notNull().default(false),
+    // Phase C section 13.2: the native consent (monitor count, clipboard switch), the attested integrity level and
+    // the one outstanding elevation hand-over (the sweeper reads handover_expires_at, not the TTL store).
+    consentMonitors: integer('consent_monitors'),
+    consentClipboard: boolean('consent_clipboard'),
+    elevation: elevationLevelEnum('elevation'),
+    handoverHash: char('handover_hash', { length: 64 }),
+    handoverOpid: text('handover_opid'),
+    handoverExpiresAt: tstz('handover_expires_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

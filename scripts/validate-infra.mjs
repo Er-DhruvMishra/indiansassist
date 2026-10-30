@@ -77,6 +77,10 @@ export function validateInfra(root = ROOT) {
     ]) {
       if (!env.has(k)) problems.push(`${k} is not documented (Phase B)`);
     }
+    for (const k of ['AGENT_DIST_DIR', 'AGENT_MIN_VERSION', 'AGENT_ANDROID_APP_URL']) {
+      if (!env.has(k)) problems.push(`${k} is not documented (Phase C)`);
+    }
+    if (env.get('AGENT_DEV_STUB')) problems.push('AGENT_DEV_STUB must be empty in the production example');
     return problems;
   });
   run('region origins / extension manifest', () => checkRegionAgreement(env, buildManifest));

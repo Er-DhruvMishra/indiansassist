@@ -24,6 +24,8 @@ import {
 import { fileEventDataSchema } from './rest-sessions.js';
 import { SIGNAL_ERROR_CODES } from '../errors.js';
 import {
+  AGENT_CONSENT_LEVELS,
+  CAPTURE_PATHS,
   CONSENT_LEVELS,
   DESK_BROWSERS,
   DESK_CLIENT_KINDS,
@@ -31,10 +33,17 @@ import {
   LIMITS,
   MIRROR_SCOPES,
   MIRROR_TRANSPORTS,
+  NATIVE_ARCHES,
   RECORDING_MODES,
   RECORDING_SOURCES,
+  STORED_CONSENT_LEVELS,
+  TOKEN_SOURCES,
+  VIDEO_ENCODERS,
   WEBRTC_PEERS,
 } from '../enums.js';
+import { agentCapabilitiesSchema } from '../agent/capabilities.js';
+import { sessionAgentSchema } from '../agent/playbook.js';
+import { DESK_EVENT_P3_ACTIONS, DESK_EVENT_P3_DATA, DESK_EVENT_P3_REASON_ACTIONS } from '../audit/actions-p3.js';
 import { extensionPolicySchema } from '../extension/policy.js';
 import { controlMessageSchema } from '../extension/control.js';
 import { DESK_EVENT_DATA, DESK_EVENT_P2_ACTIONS, DESK_EVENT_REASON_ACTIONS, opIdSchema } from '../audit/actions-p2.js';
@@ -67,7 +76,21 @@ const consentLevel = z.enum(CONSENT_LEVELS);
 const mirrorScope = z.enum(MIRROR_SCOPES);
 const clientString = z.string().min(1).max(LIMITS.deskClientStringMax);
 
-/** `desk.hello.client` (Phase B section 2.4); absent means `{ kind: 'web' }`. Extensions send version and browser. */
+/** Both consent-level families (Phase C section 3.4): the wire carries the one of the session's tier. */
+const anyConsentLevel = z.enum(STORED_CONSENT_LEVELS);
+const agentLevel = z.enum(AGENT_CONSENT_LEVELS);
+const monitorIdSchema = z.number().int().min(1).max(LIMITS.monitorsMax);
+const monitorIdsSchema = z
+  .array(monitorIdSchema)
+  .min(1)
+  .max(LIMITS.monitorsMax)
+  .refine((a) => new Set(a).size === a.length, 'monitor ids must be unique');
+
+/**
+ * `desk.hello.client` (Phase B section 2.4, Phase C section 3.1); absent means `{ kind: 'web' }`. Extensions send
+ * version and browser; a native Desk (agent / Android host) sends version, os, platform, tokenSource and
+ * capabilities and no browser. `os: 'android'` is native-only.
+ */
 export const deskClientSchema = z
   .strictObject({
     kind: z.enum(DESK_CLIENT_KINDS),
@@ -76,10 +99,33 @@ export const deskClientSchema = z
       .strictObject({ name: z.enum(DESK_BROWSERS), version: z.string().min(1).max(LIMITS.browserVersionMax) })
       .optional(),
     os: z.enum(DESK_OSES).optional(),
+    platform: z.strictObject({ osVersion: z.string().min(1).max(32), arch: z.enum(NATIVE_ARCHES) }).optional(),
+    tokenSource: z.enum(TOKEN_SOURCES).optional(),
+    capabilities: agentCapabilitiesSchema.optional(),
   })
   .refine((c) => c.kind !== 'extension' || (c.version !== undefined && c.browser !== undefined), {
     message: 'an extension client sends version and browser',
-  });
+  })
+  .refine(
+    (c) =>
+      c.kind !== 'native' ||
+      (c.version !== undefined &&
+        c.platform !== undefined &&
+        c.tokenSource !== undefined &&
+        c.capabilities !== undefined &&
+        c.browser === undefined &&
+        (c.os === 'windows' || c.os === 'android')),
+    { message: 'a native client sends version, os (windows | android), platform, tokenSource and capabilities, no browser' },
+  )
+  .refine(
+    (c) =>
+      c.kind === 'native' ||
+      (c.platform === undefined && c.tokenSource === undefined && c.capabilities === undefined && c.os !== 'android'),
+    { message: 'platform, tokenSource, capabilities and os android are native-only' },
+  );
+
+/** `desk.consent.native` (Phase C section 3.4): the native Desk's decision. */
+export const nativeConsentSchema = z.strictObject({ level: agentLevel, monitors: monitorIdsSchema, clipboard: z.boolean() });
 
 /** `{ level, scope, backstage }`: the P2 consent decision (Phase B section 3.1). */
 export const extensionConsentSchema = z.strictObject({ level: consentLevel, scope: mirrorScope, backstage: z.boolean() });
@@ -91,6 +137,8 @@ export const deskHelloSchema = msg('desk.hello', {
   token: z.string().min(1).max(4096),
   deskLabel: z.string().max(1000).optional(),
   resumeKey: z.string().min(1).max(256).optional(),
+  /** Phase C section 7.2: the one-time hand-over value of the elevated instance. */
+  handover: z.string().min(1).max(256).optional(),
   client: deskClientSchema.optional(),
 });
 export const deskPollSchema = msg('desk.poll', {});
@@ -105,6 +153,7 @@ export const deskConsentSchema = msg('desk.consent', {
   state: z.enum(['granted', 'revoked']),
   surface: consentSurfaceSchema.optional(),
   extension: extensionConsentSchema.optional(),
+  native: nativeConsentSchema.optional(),
 });
 /** Phase A.2 N2: the Desk-side far end of a relayed frame; absent = `assist`. The server sets / strips it. */
 const peer = { peer: z.enum(WEBRTC_PEERS).optional() };
@@ -113,6 +162,8 @@ export const webrtcOfferSchema = msg('webrtc.offer', {
   sessionId,
   sdp: z.string().max(60000),
   restart: z.boolean().optional(),
+  /** Phase C section 1.3 / 3.7: the key generation of the new peer connection (P3 rebuilds). */
+  gen: z.number().int().nonnegative().max(65535).optional(),
   ...peer,
 });
 export const webrtcAnswerSchema = msg('webrtc.answer', { sessionId, sdp: z.string().max(60000), ...peer });
@@ -140,9 +191,19 @@ export const sessionStatsSchema = msg('session.stats', {
   mirrorTabs: z.number().int().nonnegative().optional(),
   mirrorTransport: z.enum(MIRROR_TRANSPORTS).optional(),
   sessionKbps: z.number().nonnegative().optional(),
+  // Phase C section 4.4: the agent stats folded in by the console (P3 only).
+  encoder: z.enum(VIDEO_ENCODERS).optional(),
+  hwEncoder: z.boolean().optional(),
+  floorMode: z.boolean().optional(),
+  targetKbps: z.number().nonnegative().optional(),
+  captureFps: z.number().nonnegative().optional(),
+  capturePath: z.enum(CAPTURE_PATHS).optional(),
+  monitorsStreaming: z.number().int().nonnegative().max(LIMITS.monitorsMax).optional(),
+  encodeMs: z.number().nonnegative().nullable().optional(),
+  glassMs: z.number().nonnegative().nullable().optional(),
 });
 
-export const DESK_EVENT_ACTIONS = ['file.sent', 'file.received', ...DESK_EVENT_P2_ACTIONS] as const;
+export const DESK_EVENT_ACTIONS = ['file.sent', 'file.received', ...DESK_EVENT_P2_ACTIONS, ...DESK_EVENT_P3_ACTIONS] as const;
 export type DeskEventAction = (typeof DESK_EVENT_ACTIONS)[number];
 
 /**
@@ -157,16 +218,21 @@ export const deskEventSchema = msg('desk.event', {
   reason: z.string().max(LIMITS.reasonMax).optional(),
 }).superRefine((m, ctx) => {
   const schema: z.ZodType =
-    m.action === 'file.sent' || m.action === 'file.received' ? fileEventDataSchema : DESK_EVENT_DATA[m.action];
+    m.action === 'file.sent' || m.action === 'file.received'
+      ? fileEventDataSchema
+      : m.action === 'control.input'
+        ? z.union([DESK_EVENT_DATA['control.input'], DESK_EVENT_P3_DATA['control.input']])
+        : ((DESK_EVENT_DATA as Record<string, z.ZodType>)[m.action] ?? (DESK_EVENT_P3_DATA as Record<string, z.ZodType>)[m.action]!);
   const r = schema.safeParse(m.data);
   if (!r.success) for (const i of r.error.issues) ctx.addIssue({ code: 'custom', path: ['data', ...i.path], message: i.message });
-  if (m.reason !== undefined && !(DESK_EVENT_REASON_ACTIONS as readonly string[]).includes(m.action))
+  const reasonOk = [...DESK_EVENT_REASON_ACTIONS, ...DESK_EVENT_P3_REASON_ACTIONS] as readonly string[];
+  if (m.reason !== undefined && !reasonOk.includes(m.action))
     ctx.addIssue({ code: 'custom', path: ['reason'], message: `reason is not accepted for ${m.action}` });
 });
 
 export const deskConsentLevelSchema = msg('desk.consent_level', {
   sessionId,
-  level: consentLevel,
+  level: anyConsentLevel,
   requested: z.boolean().optional(),
   opId: opIdSchema.optional(),
 });
@@ -217,6 +283,8 @@ export const deskHelloOkSchema = msg('desk.hello.ok', {
   org: brandingPublicSchema,
   region: regionSchema,
   resume: z.object({ sessionId, state: sessionStateSchema, consentState: consentStateSchema }).optional(),
+  /** Phase C section 7.2: the fresh resume key of an elevated hand-over (present only on a hand-over). */
+  resumeKey: z.string().min(1).max(256).optional(),
 });
 export const pollStatusSchema = msg('poll.status', {
   state: z.enum(['waiting', 'held', 'matched']),
@@ -261,6 +329,8 @@ export const sessionCreatedSchema = msg('session.created', {
   polite: z.boolean(),
   /** Phase A.2 M2: the session's recording policy snapshot (always sent; optional for pre-A.2 fixtures). */
   recordingMode: z.enum(RECORDING_MODES).optional(),
+  /** Phase C section 8.3: P3 sessions only (both copies), the org's pinned playbook manifest. */
+  agent: sessionAgentSchema.optional(),
   ...optionalIce,
 });
 export const consentOkSchema = msg('consent.ok', {
@@ -273,11 +343,18 @@ export const consentChangedSchema = msg('consent.changed', {
   sessionId,
   state: consentStateSchema,
   surface: consentSurfaceSchema.optional(),
-  level: consentLevel.optional(),
+  level: anyConsentLevel.optional(),
   scope: mirrorScope.optional(),
   backstage: z.boolean().optional(),
+  monitors: z.number().int().min(1).max(LIMITS.monitorsMax).optional(),
+  clipboard: z.boolean().optional(),
 });
-export const consentLevelOkSchema = msg('consent.level_ok', { sessionId, level: consentLevel, backstage: z.boolean() });
+export const consentLevelOkSchema = msg('consent.level_ok', {
+  sessionId,
+  level: anyConsentLevel,
+  backstage: z.boolean(),
+  clipboard: z.boolean().optional(),
+});
 /** `source` (Phase A.2 section 5): absent = `assist`. */
 export const sessionRecordingSchema = msg('session.recording', {
   sessionId,

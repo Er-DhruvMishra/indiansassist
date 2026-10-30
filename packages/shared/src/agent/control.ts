@@ -176,3 +176,36 @@ export const agentControlEventSchema = z.discriminatedUnion('kind', [
   }),
   ev('input_blocked', { cause: z.enum(['uipi', 'secure_desktop', 'secure_window']), monitorId: monitorId.optional() }),
 ]);
+
+/** Section 3.8: the `control.input` kind an op is aggregated under (null: not a `control.input` op). */
+export function agentInputKind(op: string): 'pointer' | 'scroll' | 'key' | 'text' | null {
+  switch (op) {
+    case 'os.pointer':
+      return 'pointer';
+    case 'os.scroll':
+      return 'scroll';
+    case 'os.key':
+    case 'os.nav':
+      return 'key';
+    case 'os.text':
+      return 'text';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Section 3.8 `monitorId` rule for a `control.input` aggregate, both reporters: the op's own `monitorId`
+ * (`os.pointer` / `os.scroll`); else the monitor of the most recent pointer / scroll op in the same 10 s window;
+ * else the currently viewed monitor (console) or the foreground window's monitor (agent); else 1.
+ */
+export function controlInputMonitorId(p: {
+  op: string;
+  args?: unknown;
+  lastPointerMonitorId?: number | null;
+  viewedMonitorId?: number | null;
+}): number {
+  const own = (p.args as { monitorId?: unknown } | undefined)?.monitorId;
+  if ((p.op === 'os.pointer' || p.op === 'os.scroll') && typeof own === 'number') return own;
+  return p.lastPointerMonitorId ?? p.viewedMonitorId ?? 1;
+}

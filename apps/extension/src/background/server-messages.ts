@@ -2,7 +2,7 @@
  * `/signal` messages from the server to the Desk (Phase A section 7.3 plus Phase B sections 2.4, 3.1, 3.2, 3.5,
  * 4.6). Every frame was validated by the signal client; this maps each one onto the session machine.
  */
-import type { ServerSignalMessage } from '@indiansassist/shared';
+import { isConsentLevel, type ServerSignalMessage } from '@indiansassist/shared';
 import { ext } from '../shared/api';
 import { REGION_ORIGINS } from '../shared/constants';
 import { SESSION_KEYS, readSession, type PendingJoin } from '../shared/storage';
@@ -162,7 +162,8 @@ export async function handleServerMessage(m: SessionMachine, msg: ServerSignalMe
       if (mine(m, msg.sessionId)) await m.offscreen.send({ t: 'pc.signal', msg: msg as unknown as Record<string, unknown> });
       return;
     case 'consent.level_ok':
-      if (!mine(m, msg.sessionId)) return;
+      // Phase C widened `consent.level_ok.level` to both families; a P2 Desk only ever receives a P2 level.
+      if (!mine(m, msg.sessionId) || !isConsentLevel(msg.level)) return;
       m.live?.levelConfirmed(msg.level, msg.backstage);
       m.resolveLevel(msg.re, true);
       return;

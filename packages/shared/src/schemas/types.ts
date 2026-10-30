@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import type * as core from './rest-core.js';
 import type * as tok from './rest-tokens.js';
 import type * as ses from './rest-sessions.js';
+import type * as res from './rest-residency.js';
 import type * as sig from './signal-messages.js';
 import type * as dc from './datachannel.js';
 import type * as pol from '../extension/policy.js';
@@ -62,7 +63,7 @@ export type RecordingDownloadResponse = z.infer<typeof ses.recordingDownloadResp
 export type RecordingVerifyResponse = z.infer<typeof ses.recordingVerifyResponseSchema>;
 export type IceQuery = z.infer<typeof ses.iceQuerySchema>;
 export type IceResponse = z.infer<typeof ses.iceResponseSchema>;
-export type ResidencyReport = z.infer<typeof ses.residencyReportSchema>;
+export type ResidencyReport = z.infer<typeof res.residencyReportSchema>;
 export type ExtensionPolicyResponse = z.infer<typeof pol.extensionPolicyResponseSchema>;
 export type RetentionPolicy = z.infer<typeof core.retentionPolicySchema>;
 // Phase A.2 (docs/specs/phase-a2-recorder.md)

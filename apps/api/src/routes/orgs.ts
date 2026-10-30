@@ -2,6 +2,9 @@
 import { brandingPatchRequestSchema, mergePolicy, REGION_LABELS, type ResidencyReport } from '@indiansassist/shared';
 import {
   auditEntry,
+  countAgentSessionsSince,
+  countElevationGrantsSince,
+  countPlaybookRunsSince,
   getLatestCheckpoint,
   getOrgChainTail,
   recording,
@@ -102,6 +105,10 @@ export async function orgRoutes(app: FastifyInstance, ctx: AppContext): Promise<
       relaySessions: Number(relay?.n ?? 0),
       relayBytes: Number(relay?.bytes ?? 0),
       recordingRetentionDays: org.recordingRetentionDays ?? null,
+      // Phase C section 13.3: P3 activity over the last 30 days.
+      agentSessions: await countAgentSessionsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
+      elevationGrants: await countElevationGrantsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
+      playbookRuns: await countPlaybookRunsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
       chain: {
         length: tail?.seq ?? 0,
         tail: tail?.hash ?? null,

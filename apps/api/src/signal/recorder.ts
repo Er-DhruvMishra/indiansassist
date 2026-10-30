@@ -36,6 +36,7 @@ const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 export async function handleRecorderHello(hub: SignalHub, conn: Conn, msg: SignalOf<'recorder.hello'>): Promise<void> {
   const { ctx } = hub;
   const served = isRegionServed(msg.region, ctx.config.servedRegions);
+  // An extension Origin never hosts a recorder; an Origin-less socket (deskOnly) may (A.2 P5, Phase C section 3.1).
   if (!recorderTokenOk(ctx.config, msg.token) || !served || conn.extensionOrigin) {
     const lim = await ctx.limiter.hit(`recorder-hello:${conn.ip}`, 10, 60_000);
     ctx.log.warn({ connectionId: conn.id, recorderId: msg.recorderId, served }, 'recorder hello refused');
@@ -57,12 +58,17 @@ export async function handleRecorderHello(hub: SignalHub, conn: Conn, msg: Signa
   for (const live of hub.live.values()) if (needsRecorder(live)) await assignRecorder(hub, live);
 }
 
-/** An `active` P1 session whose policy asks for the server recorder and that has none (section 6 A1). */
+/** Tiers the server recorder captures (A.2 M5 amended by Phase C section 9 R2, W23). */
+export function recordedTier(tier: Live['tier']): boolean {
+  return tier === 'p1_browser' || tier === 'p3_portable';
+}
+
+/** An `active` P1 / P3 session whose policy asks for the server recorder and that has none (section 6 A1). */
 export function needsRecorder(live: Live): boolean {
   const r = live.recorder;
   return (
     live.state === 'active' &&
-    live.tier === 'p1_browser' &&
+    recordedTier(live.tier) &&
     serverRecords(live.recordingMode) &&
     !r.started &&
     r.connId === null &&
@@ -142,7 +148,7 @@ export async function assignRecorder(hub: SignalHub, live: Live, resume = false)
 /** `desk.consent granted`: first activation assigns a recorder, a re-consent resumes the paused one (A1 / A3). */
 export async function onSessionActive(hub: SignalHub, live: Live): Promise<void> {
   const r = live.recorder;
-  if (live.tier !== 'p1_browser' || !serverRecords(live.recordingMode)) return;
+  if (!recordedTier(live.tier) || !serverRecords(live.recordingMode)) return;
   if (r.connId !== null && !r.joined && !r.stopped) {
     await assignRecorder(hub, live, true);
     return;

@@ -6,14 +6,15 @@ import { pgEnum } from 'drizzle-orm/pg-core';
 import {
   ACTOR_TYPES,
   CHECKPOINT_KINDS,
-  CONSENT_LEVELS,
   CONSENT_STATES,
+  ELEVATION_LEVELS,
   MIRROR_SCOPES,
   DEVICE_STATUSES,
   FILE_DIRECTIONS,
   INTEGRATION_TYPES,
   PACKAGE_TIERS,
   PARTICIPANT_ROLES,
+  PLAYBOOK_INTERPRETERS,
   RECORDING_MODES,
   RECORDING_SOURCES,
   RECORDING_STATUSES,
@@ -21,6 +22,7 @@ import {
   SESSION_END_REASONS,
   SESSION_PATHS,
   SESSION_STATES,
+  STORED_CONSENT_LEVELS,
   TOKEN_STATUSES,
   TOKEN_TYPES,
   USER_ROLES,
@@ -45,8 +47,12 @@ export const checkpointKindEnum = pgEnum('checkpoint_kind', CHECKPOINT_KINDS);
 export const integrationTypeEnum = pgEnum('integration_type', INTEGRATION_TYPES);
 export const deviceStatusEnum = pgEnum('device_status', DEVICE_STATUSES);
 // Phase B (docs/specs/phase-b-contracts.md section 11.1)
-export const consentLevelEnum = pgEnum('consent_level', CONSENT_LEVELS);
+// Phase C section 13.2: one enum for both families (P2 levels plus `control`, `elevated`), read via consentLevelFamily.
+export const consentLevelEnum = pgEnum('consent_level', STORED_CONSENT_LEVELS);
 export const mirrorScopeEnum = pgEnum('mirror_scope', MIRROR_SCOPES);
 // Phase A.2 (docs/specs/phase-a2-recorder.md section 9)
 export const recordingModeEnum = pgEnum('recording_mode', RECORDING_MODES);
 export const recordingSourceEnum = pgEnum('recording_source', RECORDING_SOURCES);
+// Phase C (docs/specs/phase-c-contracts.md section 13.2)
+export const playbookInterpreterEnum = pgEnum('playbook_interpreter', PLAYBOOK_INTERPRETERS);
+export const elevationLevelEnum = pgEnum('elevation_level', ELEVATION_LEVELS);

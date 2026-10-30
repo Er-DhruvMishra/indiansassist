@@ -186,7 +186,8 @@ export class LiveSession implements ControlHost {
   }
   setInputMode(tabId: number, mode: InputMode): void {
     if (mode === 'dom') delete this.s.inputModes[String(tabId)];
-    else this.s.inputModes[String(tabId)] = mode;
+    // Phase C added `os` to INPUT_MODES for native Desks; the extension only ever stores `debugger`.
+    else if (mode === 'debugger') this.s.inputModes[String(tabId)] = mode;
   }
   get prompts() {
     return this.m.prompts;

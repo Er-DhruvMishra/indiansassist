@@ -5,13 +5,14 @@
  * `consent.changed` to the Assist). The server cannot see the data channel, so it enforces the cap on what the Desk
  * grants and records every change; the extension refuses ops above the level.
  */
-import { effectiveMaxLevel, levelAtLeast, type PackageTier, type SignalOf } from '@indiansassist/shared';
+import { effectiveMaxLevel, isConsentLevel, levelAtLeast, type PackageTier, type SignalOf } from '@indiansassist/shared';
 import { getSession, updateSession } from '@indiansassist/db';
 import { deskActor, writeAudit } from '../lib/audit.js';
 import type { Conn, Live, LiveConsent } from './conn.js';
 import type { SignalHub } from './hub.js';
 import { livePolicy, orgOf } from './messages.js';
 import { authorizeSession } from './relay.js';
+import { p3ConsentLevel } from './desk-p3.js';
 
 type Grant = SignalOf<'desk.consent'>['extension'];
 
@@ -47,7 +48,7 @@ async function activeP2(hub: SignalHub, conn: Conn, sessionId: string, t: string
     return null;
   }
   const consent: LiveConsent = live.consent ?? {
-    level: s.consentLevel ?? 'view',
+    level: isConsentLevel(s.consentLevel) ? s.consentLevel : 'view',
     scope: s.consentScope ?? 'current_tab',
     backstage: s.consentBackstage === true,
   };
@@ -62,27 +63,31 @@ const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
 export async function handleDeskConsentLevel(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.consent_level'>): Promise<void> {
   const { ctx } = hub;
+  // Phase C section 3.4 family rule: a P3 session's levels are handled by desk-p3.ts.
+  if (hub.live.get(msg.sessionId)?.tier === 'p3_portable') return p3ConsentLevel(hub, conn, msg);
   const a = await activeP2(hub, conn, msg.sessionId, msg.t, msg.id);
   if (!a) return;
   const { live, s, consent } = a;
-  if (!levelAtLeast(effectiveMaxLevel(await livePolicy(hub, live)), msg.level))
+  const level = msg.level;
+  if (!isConsentLevel(level)) return conn.error('bad_payload', 'not a P2 consent level', msg.id);
+  if (!levelAtLeast(effectiveMaxLevel(await livePolicy(hub, live)), level))
     return conn.error('bad_payload', 'level exceeds the organisation maximum', msg.id);
   const requested = msg.requested === true;
   const from = consent.level;
-  if (from !== msg.level || requested) {
+  if (from !== level || requested) {
     const org = await orgOf(hub, s.orgId);
     await ctx.db.transaction(async (tx) => {
-      await updateSession(tx, s.id, { consentLevel: msg.level });
+      await updateSession(tx, s.id, { consentLevel: level });
       await writeAudit(ctx, tx, org, {
         sessionId: s.id,
         actor: deskActor(s.deskRef),
         action: 'consent.level_changed',
-        data: { from, to: msg.level, requestedBy: requested ? 'assist' : 'desk', ...(msg.opId ? { opId: msg.opId } : {}) },
+        data: { from, to: level, requestedBy: requested ? 'assist' : 'desk', ...(msg.opId ? { opId: msg.opId } : {}) },
       });
     });
   }
-  live.consent = { ...consent, level: msg.level };
-  conn.send({ t: 'consent.level_ok', ...re(msg.id), sessionId: s.id, level: msg.level, backstage: consent.backstage });
+  live.consent = { ...consent, level };
+  conn.send({ t: 'consent.level_ok', ...re(msg.id), sessionId: s.id, level, backstage: consent.backstage });
   changed(hub, live, s.id, live.consent);
 }
 
@@ -110,7 +115,8 @@ export async function handleDeskConsentBackstage(
       });
     });
   }
-  live.consent = { ...consent, backstage: msg.backstage };
+  const next: LiveConsent = { ...consent, backstage: msg.backstage };
+  live.consent = next;
   conn.send({ t: 'consent.level_ok', ...re(msg.id), sessionId: s.id, level: consent.level, backstage: msg.backstage });
-  changed(hub, live, s.id, live.consent);
+  changed(hub, live, s.id, next);
 }

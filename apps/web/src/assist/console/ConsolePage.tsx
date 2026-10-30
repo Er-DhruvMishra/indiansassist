@@ -18,6 +18,7 @@ import { KnockPanel } from '../signal/KnockPanel';
 import { EndedView } from './EndedView';
 import { LiveConsole } from './LiveConsole';
 import { MirrorLiveConsole } from './mirror/MirrorConsole';
+import { AgentConsole } from './agent/AgentConsole';
 
 export function ConsolePage() {
   usePageTitle('Session console');
@@ -36,6 +37,8 @@ export function ConsolePage() {
 
   if (cached && signal?.client && can(me?.user.role, 'ws.assist')) {
     // Phase B 10: a P2 (extension) session mounts the mirror console instead of the video console.
+    // Phase C 13.4: a P3 (native agent) session mounts the agent console.
+    if (cached.tier === 'p3_portable') return <AgentConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} capabilities={d?.deskClient?.capabilities ?? null} />;
     if (cached.tier === 'p2_extension') return <MirrorLiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} />;
     return <LiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} session={d} />;
   }
@@ -67,6 +70,7 @@ export function ConsolePage() {
 
   const isAssist = d.assist.id === me?.user.id;
   if (isAssist && signal?.client) {
+    if (d.tier === 'p3_portable') return <AgentConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} capabilities={d.deskClient?.capabilities ?? null} />;
     if (d.tier === 'p2_extension') return <MirrorLiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} />;
     return <LiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} session={d} />;
   }

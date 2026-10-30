@@ -4,6 +4,10 @@
  * knock.ts and `desk.event` in desk-events.ts.
  */
 import { WS_CLOSE, type PackageTier, type SignalErrorCode, type SignalOf } from '@indiansassist/shared';
+import { retireDeskCodes } from '../lib/desk-codes.js';
+import { ensureAgentManifest } from './agent-manifest.js';
+import { checkNativeGrant, pushAgentConsent } from './desk-p3.js';
+import { handoverHello } from './handover-hello.js';
 import {
   findOpenSessionByToken,
   findTokenByTid,
@@ -42,17 +46,43 @@ export { performKnock } from './knock.js';
 
 const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
-const EXPECTED_CLIENT: Partial<Record<PackageTier, 'web' | 'extension'>> = { p1_browser: 'web', p2_extension: 'extension' };
+/** Tier gate (Phase B 2.4, Phase C section 3.1): which client kind may join each tier. */
+export const EXPECTED_CLIENT: Partial<Record<PackageTier, 'web' | 'extension' | 'native'>> = {
+  p1_browser: 'web',
+  p2_extension: 'extension',
+  p3_portable: 'native',
+};
+
+/** `a < b` for MAJOR.MINOR.PATCH (a pre-release suffix sorts below its release). */
+export function versionBelow(a: string, b: string): boolean {
+  const parse = (v: string) => {
+    const [core, pre] = v.split('-', 2);
+    return { n: (core ?? '').split('.').map((x) => Number(x) || 0), pre: pre !== undefined };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < 3; i++) if ((x.n[i] ?? 0) !== (y.n[i] ?? 0)) return (x.n[i] ?? 0) < (y.n[i] ?? 0);
+  return x.pre && !y.pre;
+}
 
 export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.hello'>): Promise<void> {
   const { ctx } = hub;
-  const lim = await ctx.limiter.hit(`desk-hello:${conn.ip}`, 30, 60_000);
+  // Phase C section 3.1: a resume or hand-over hello has its own, larger IP bucket (an office of agents behind one NAT).
+  const resuming = msg.resumeKey !== undefined || msg.handover !== undefined;
+  const lim = await ctx.limiter.hit(resuming ? `desk-hello-resume:${conn.ip}` : `desk-hello:${conn.ip}`, resuming ? 120 : 30, 60_000);
   if (!lim.allowed) {
     ctx.metrics.rateLimited.inc();
     conn.error('rate_limited', 'too many attempts', msg.id, { retryAfterSec: lim.retryAfterSec });
     return conn.close(WS_CLOSE.rateLimited, 'rate limited');
   }
-  const v = await verifyTokenInput(ctx, msg.token, msg.resumeKey ? { resumeKey: msg.resumeKey, ip: conn.ip } : { ip: conn.ip });
+  const native = msg.client?.kind === 'native';
+  const v = await verifyTokenInput(ctx, msg.token, {
+    ip: conn.ip,
+    ...(msg.resumeKey ? { resumeKey: msg.resumeKey } : {}),
+    ...(msg.handover ? { handover: msg.handover } : {}),
+    deskCode: native,
+  });
+  if (!v.ok && msg.handover) return handoverHello(hub, conn, msg, null);
   if (!v.ok) {
     conn.error(v.code as SignalErrorCode, v.message, msg.id, v.details);
     return conn.close(v.code === 'rate_limited' ? WS_CLOSE.rateLimited : WS_CLOSE.forbidden, v.code);
@@ -64,6 +94,14 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     conn.error('join_unsupported', 'this code needs a different IndiansAssist client', msg.id, {
       tier: tok.tier,
       expectedClient: expectedClient ?? null,
+    });
+    return conn.close(WS_CLOSE.forbidden, 'join_unsupported');
+  }
+  if (expectedClient === 'native' && versionBelow(msg.client?.version ?? '0.0.0', ctx.config.agent.minVersion)) {
+    conn.error('join_unsupported', 'this IndiansAssist client is too old', msg.id, {
+      tier: tok.tier,
+      expectedClient,
+      minVersion: ctx.config.agent.minVersion,
     });
     return conn.close(WS_CLOSE.forbidden, 'join_unsupported');
   }
@@ -79,6 +117,7 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     tokenExpiresAt: tok.expiresAt.getTime(),
     client: msg.client ?? null,
   };
+  if (msg.handover) return handoverHello(hub, conn, msg, v);
   if (v.resumeSession) {
     // A session owned by another live node is resumed there; this node pipes the socket (section 7.6 N1).
     if (await hub.bridge.forwardDeskResume(conn, v, msg.id)) return;
@@ -114,8 +153,10 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
 export async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, reId: string | undefined): Promise<void> {
   const { ctx } = hub;
   const s0 = v.resumeSession!;
-  // Phase B 3.5 (Y2): an extension Desk resumes into `active` (consent is a decision, nothing was lost).
-  const keepsActive = s0.state === 'active' && conn.desk?.client?.kind === 'extension';
+  // Phase B 3.5 (Y2): an extension Desk resumes into `active` (consent is a decision, nothing was lost); Phase C
+  // section 3.2: so does a native Desk.
+  const kind = conn.desk?.client?.kind;
+  const keepsActive = s0.state === 'active' && (kind === 'extension' || kind === 'native');
   const wasActive = s0.state === 'active' && !keepsActive;
   const hadLive = hub.live.has(s0.id);
   const live = ensureLive(hub, s0);
@@ -174,6 +215,7 @@ export async function deskResume(hub: SignalHub, conn: Conn, v: TokenVerifyOk, r
   });
   if (s.state === 'knocked') return;
   const assistRef = refOf(await userRefs(ctx.db, [s.assistUserId]), s.assistUserId);
+  await ensureAgentManifest(hub, live, s);
   conn.send(sessionCreatedMsg(hub, s, v.org, assistRef, 'desk'));
   if (keepsActive) {
     // Fresh TURN credentials; the Desk rebuilds its peer connection on this ice.refresh (Y23).
@@ -261,29 +303,41 @@ export async function handleDeskConsent(hub: SignalHub, conn: Conn, msg: SignalO
     // Phase B 3.1: `extension` is required for p2 (and validated against the policy), rejected for p1.
     const ext = await checkGrant(hub, live, s.tier, msg.extension);
     if (!ext.ok) return conn.error('bad_payload', ext.message, msg.id);
+    // Phase C section 3.4: `native` is required for p3 and rejected otherwise.
+    const nat = checkNativeGrant(s.tier, msg.surface, msg.native);
+    if (!nat.ok) return conn.error('bad_payload', nat.message, msg.id);
+    const ag = nat.agent;
     const surface = msg.surface ?? 'unknown';
     const tok = await findTokenByTid(ctx.db, s.tokenId);
     const c = ext.consent;
     await ctx.db.transaction(async (tx) => {
       const r = await transitionSession(tx, s.id, 'active', {
         from: 'consent_pending',
-        set: { consentSurface: surface, ...(c ? { consentLevel: c.level, consentScope: c.scope, consentBackstage: c.backstage } : {}) },
+        set: {
+          consentSurface: surface,
+          ...(c ? { consentLevel: c.level, consentScope: c.scope, consentBackstage: c.backstage } : {}),
+          ...(ag ? { consentLevel: ag.level, consentMonitors: ag.monitors, consentClipboard: ag.clipboard } : {}),
+        },
       });
       if (tok?.typ === 'one_time') await markTokenUsed(tx, tok.id);
       await writeAudit(ctx, tx, org, {
         sessionId: s.id,
         actor: deskActor(s.deskRef),
         action: 'session.consent_granted',
-        data: { surface, ...(c ?? {}) },
+        data: ag ? { surface: 'monitor', level: ag.level, monitors: ag.monitors, clipboard: ag.clipboard } : { surface, ...(c ?? {}) },
       });
       await writeAudit(ctx, tx, org, { sessionId: s.id, actor: systemActor, action: 'session.started', data: { path: r.path } });
     });
     live.state = 'active';
     live.consent = c;
+    if (ag) live.agent = ag;
     stopConsentTimer(live);
+    // Phase C section 2.2: the desk codes of the token stop opening new joins once a session reached active.
+    if (tok && s.tier === 'p3_portable') await retireDeskCodes(ctx, tok);
     ctx.metrics.sessionsActive.inc();
     conn.send({ t: 'consent.ok', ...re(msg.id), sessionId: s.id, state: 'active', consentState: 'granted', ...deskIce(hub, s.id) });
-    assistConn?.send({ t: 'consent.changed', sessionId: s.id, state: 'granted', surface, ...(c ?? {}) });
+    if (ag) pushAgentConsent(hub, live, ag);
+    else assistConn?.send({ t: 'consent.changed', sessionId: s.id, state: 'granted', surface, ...(c ?? {}) });
     scheduleIceRefresh(hub, live, 'desk');
     await onSessionActive(hub, live);
     return;

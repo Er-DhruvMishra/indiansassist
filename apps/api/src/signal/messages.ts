@@ -6,7 +6,7 @@ import { brandingPublic, type UserRef } from '../lib/mappers.js';
 import { endSessionQuietly } from '../services/session-end.js';
 import { systemActor } from '../lib/audit.js';
 import { iso } from '../lib/time.js';
-import { clearTimer, consentOfRow, newLive, setTimer, type Live } from './conn.js';
+import { agentOfRow, clearTimer, consentOfRow, newLive, setTimer, type Live } from './conn.js';
 import type { SignalHub } from './hub.js';
 
 export function ensureLive(hub: SignalHub, s: SessionRow): Live {
@@ -19,6 +19,7 @@ export function ensureLive(hub: SignalHub, s: SessionRow): Live {
   live.path = s.path;
   live.tier = s.tier;
   live.consent = consentOfRow(s);
+  live.agent = agentOfRow(s);
   live.recordingMode = s.recordingMode ?? null;
   return live;
 }
@@ -76,6 +77,8 @@ export function sessionCreatedMsg(
     polite: side === 'assist',
     recordingMode: s.recordingMode ?? 'assist_only',
     ...(s.tier === 'p2_extension' ? { extension: { policy: hub.live.get(s.id)?.policy ?? policyOf(org) } } : {}),
+    // Phase C section 8.3: both copies of a P3 session carry the pinned manifest (loaded by ensureAgentManifest).
+    ...(s.tier === 'p3_portable' ? { agent: hub.live.get(s.id)?.manifest?.msg ?? { playbooks: [] } } : {}),
   };
   if (side === 'desk') return base;
   return { ...base, ...buildIceServers(hub.ctx.config, `user:${assist.id}`) };

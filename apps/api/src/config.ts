@@ -10,6 +10,7 @@ import { hostname } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AGENT_VERSION_RE,
   DEFAULT_REGION,
   isRegion,
   LIMITS,
@@ -114,6 +115,12 @@ const envSchema = z.object({
   SIGNUP_PLAN_TIER: z.enum(PACKAGE_TIERS).optional().default('p2_extension'),
   // Phase A.2 (docs/specs/phase-a2-recorder.md section 13): empty = server recorder disabled.
   RECORDER_TOKEN: str(''),
+  // Phase C (docs/specs/phase-c-contracts.md sections 2.2, 2.6, 13.3)
+  AGENT_DIST_DIR: str('./data/agent-dist'),
+  AGENT_MIN_VERSION: str('0.3.0'),
+  AGENT_ANDROID_APP_URL: str(''),
+  /** Dev only: a placeholder file served as every Windows build when AGENT_DIST_DIR has no manifest ('' = off). */
+  AGENT_DEV_STUB: z.string().optional(),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -164,6 +171,8 @@ export type Config = {
   signupPlanTier: PackageTier;
   /** Phase A.2 service token of the server recorder; '' = recorder disabled. */
   recorderToken: string;
+  /** Phase C: agent builds (`manifest.json` + files), the minimum agent version and the Android store link. */
+  agent: { distDir: string; minVersion: string; androidAppUrl: string | null; devStub: string | null };
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
   dataDir: string;
@@ -279,9 +288,13 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
   }
   const extensionIds = splitUrlList(e.EXTENSION_IDS);
   for (const id of extensionIds) if (!/^[a-p]{32}$/.test(id)) problems.push(`EXTENSION_IDS entry ${id} is not a Chrome extension id`);
+  if (!AGENT_VERSION_RE.test(e.AGENT_MIN_VERSION)) problems.push('AGENT_MIN_VERSION must be MAJOR.MINOR.PATCH');
+  if (e.AGENT_ANDROID_APP_URL !== '' && !/^https:\/\//.test(e.AGENT_ANDROID_APP_URL) && production)
+    problems.push('AGENT_ANDROID_APP_URL must be https: in production');
   if (problems.length > 0) throw new ConfigError(`refusing to boot: ${problems.join('; ')}`);
 
   const suffixes = splitUrlList(e.ICE_OWN_HOST_SUFFIXES);
+  const devStubRaw = (e.AGENT_DEV_STUB ?? './data/agent-dev-stub.bin').trim();
   return {
     nodeEnv: e.NODE_ENV,
     production,
@@ -338,6 +351,12 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     mirrorRelayBudgetBytes: e.MIRROR_RELAY_BUDGET_BYTES > 0 ? e.MIRROR_RELAY_BUDGET_BYTES : LIMITS.mirrorRelayBudgetBytes,
     signupPlanTier: e.SIGNUP_PLAN_TIER,
     recorderToken: e.RECORDER_TOKEN,
+    agent: {
+      distDir: abs(e.AGENT_DIST_DIR),
+      minVersion: AGENT_VERSION_RE.test(e.AGENT_MIN_VERSION) ? e.AGENT_MIN_VERSION : '0.3.0',
+      androidAppUrl: e.AGENT_ANDROID_APP_URL !== '' ? e.AGENT_ANDROID_APP_URL : null,
+      devStub: production || devStubRaw === '' ? null : abs(devStubRaw),
+    },
     repoRoot,
     dataDir,
   };

@@ -22,6 +22,7 @@ const AuditPage = lazy(() => import('./assist/audit/AuditPage').then((m) => ({ d
 const ResidencyPage = lazy(() => import('./assist/ResidencyPage').then((m) => ({ default: m.ResidencyPage })));
 const UsersPage = lazy(() => import('./assist/UsersPage').then((m) => ({ default: m.UsersPage })));
 const BrandingPage = lazy(() => import('./assist/BrandingPage').then((m) => ({ default: m.BrandingPage })));
+const PlaybooksPage = lazy(() => import('./assist/playbooks/PlaybooksPage').then((m) => ({ default: m.PlaybooksPage })));
 const AccountPage = lazy(() => import('./assist/AccountPage').then((m) => ({ default: m.AccountPage })));
 
 function RootRedirect() {
@@ -77,6 +78,7 @@ export function App() {
           <Route path="residency" element={<Allow cap="residency"><ResidencyPage /></Allow>} />
           <Route path="users" element={<Allow cap="users.list"><UsersPage /></Allow>} />
           <Route path="branding" element={<Allow cap="branding"><BrandingPage /></Allow>} />
+          <Route path="playbooks" element={<Allow cap="playbooks.admin"><PlaybooksPage /></Allow>} />
           <Route path="account" element={<AccountPage />} />
         </Route>
         <Route path="*" element={<NotFound />} />

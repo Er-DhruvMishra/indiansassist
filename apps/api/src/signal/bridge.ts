@@ -12,7 +12,7 @@
  * `cluster`; each node applies them to its own sockets.
  */
 import { WS_CLOSE, type SessionState } from '@indiansassist/shared';
-import { findTokenByTid, getOrg, getSession, type TokenRow } from '@indiansassist/db';
+import { findTokenByTid, getOrg, getSession, type SessionRow, type TokenRow } from '@indiansassist/db';
 import { channels } from '../adapters/presence.js';
 import { canActOnToken } from '../lib/rbac.js';
 import { principalFromAuthSessionId } from '../plugins/auth.js';
@@ -20,24 +20,19 @@ import type { TokenVerifyOk } from '../services/token-verify.js';
 import { refreshUserSockets } from './auth-watch.js';
 import { Conn, type DeskInfo, type RelayCounters, type Transport } from './conn.js';
 import { deskResume } from './desk.js';
+import { completeHandover } from './handover-hello.js';
 import type { SignalHub } from './hub.js';
 import { performHeldKnocks, type KnockUser } from './knock.js';
 import { onConnClosed, onSessionEnded, onTokenRevoked } from './lifecycle.js';
 
-export type ConnSnapshot = {
-  id: string;
-  side: 'assist' | 'desk';
-  ip: string;
-  ua: string | null;
-  authSessionId: string | null;
-  desk: DeskInfo | null;
-};
+export type ConnSnapshot = { id: string; side: 'assist' | 'desk'; ip: string; ua: string | null; authSessionId: string | null; desk: DeskInfo | null };
 
 type TokRef = Pick<TokenRow, 'orgId' | 'createdBy'>;
 
 export type NodeMsg =
   | { k: 'in'; from: string; conn: ConnSnapshot; frame: string }
-  | { k: 'desk-resume'; from: string; conn: ConnSnapshot; tokenId: string; via: 'compact' | 'short_code'; sessionId: string; re?: string }
+  // `handover`: Phase C section 7.2 (6), a hand-over hello verified on the holder node, completed by the owner.
+  | { k: 'desk-resume'; from: string; conn: ConnSnapshot; tokenId: string; via: TokenVerifyOk['via']; sessionId: string; re?: string; handover?: { opId: string; hash: string } }
   | { k: 'out'; connId: string; frame: string }
   | { k: 'close'; connId: string; code: number; reason: string }
   | { k: 'closed'; connId: string }
@@ -152,21 +147,22 @@ export class Bridge {
 
   /** A Desk resuming a session owned by another live node is piped there; true when forwarded. */
   async forwardDeskResume(conn: Conn, v: TokenVerifyOk, re: string | undefined): Promise<boolean> {
-    const s = v.resumeSession;
-    if (!this.on || !s || !conn.desk || s.nodeId === this.self || !(await this.alive(s.nodeId))) return false;
+    return v.resumeSession ? this.pipeDesk(conn, v, v.resumeSession, re) : false;
+  }
+
+  /** Phase C section 7.2 (6): a hand-over hello for a session owned by another live node is completed there. */
+  async forwardDeskHandover(conn: Conn, v: TokenVerifyOk, s: SessionRow, opId: string, hash: string, re: string | undefined): Promise<boolean> {
+    return this.pipeDesk(conn, v, s, re, { opId, hash });
+  }
+
+  private async pipeDesk(conn: Conn, v: TokenVerifyOk, s: SessionRow, re: string | undefined, handover?: { opId: string; hash: string }): Promise<boolean> {
+    if (!this.on || !conn.desk || s.nodeId === this.self || !(await this.alive(s.nodeId))) return false;
     conn.pipeTo = s.nodeId;
     conn.pipes.add(s.nodeId);
     const snap = snapshot(conn);
     conn.desk.sessionId = s.id;
-    this.toNode(s.nodeId, {
-      k: 'desk-resume',
-      from: this.self,
-      conn: snap,
-      tokenId: v.token.id,
-      via: v.via,
-      sessionId: s.id,
-      ...(re !== undefined ? { re } : {}),
-    });
+    const extra = { ...(re !== undefined ? { re } : {}), ...(handover ? { handover } : {}) };
+    this.toNode(s.nodeId, { k: 'desk-resume', from: this.self, conn: snap, tokenId: v.token.id, via: v.via, sessionId: s.id, ...extra });
     return true;
   }
 
@@ -352,6 +348,7 @@ export class Bridge {
       const org = token ? await getOrg(db, token.orgId) : null;
       if (!token || !org || !s || s.tokenId !== token.id || s.state === 'ended')
         throw Object.assign(new Error('resume target gone'), { code: 'already_ended' });
+      if (m.handover) return await completeHandover(this.hub, rc, { token, org, session: s }, m.handover.opId, m.handover.hash, m.re);
       await deskResume(this.hub, rc, { ok: true, token, org, via: m.via, resumeSession: s }, m.re);
     } catch (err) {
       this.hub.helloFailed(rc, err, m.re);

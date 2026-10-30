@@ -14,7 +14,9 @@ export type Capability =
   | 'users.manage'
   | 'branding'
   | 'ws.assist'
-  | 'recordings';
+  | 'recordings'
+  | 'playbooks.admin'
+  | 'tokens.iaconfig';
 
 const MATRIX: Record<Capability, readonly UserRole[]> = {
   'tokens.create': ['technician', 'senior_technician', 'org_admin'],
@@ -30,6 +32,9 @@ const MATRIX: Record<Capability, readonly UserRole[]> = {
   branding: ['org_admin'],
   'ws.assist': ['technician', 'senior_technician', 'org_admin'],
   recordings: ['technician', 'senior_technician', 'org_admin', 'auditor'],
+  // Phase C 13.4: the playbook catalogue and agent policy page; the signed .iaconfig (also the token creator).
+  'playbooks.admin': ['org_admin'],
+  'tokens.iaconfig': ['org_admin'],
 };
 
 export function can(role: UserRole | null | undefined, cap: Capability): boolean {

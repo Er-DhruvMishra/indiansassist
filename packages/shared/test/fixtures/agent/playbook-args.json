@@ -1,0 +1,38 @@
+{
+  "v": 1,
+  "description": "Phase C section 8.4 validatePlaybookArgs vectors (server path: typed input; agent path: canonical strings). Asserted by packages/shared test/agent-playbook.test.ts; the Rust (ia_core::playbook) and Kotlin ports load the same file.",
+  "params": [
+    { "name": "host", "label": "Host", "type": "string", "required": true, "pattern": "[A-Za-z0-9.-]{1,253}" },
+    { "name": "count", "label": "Count", "type": "int", "required": false, "min": -5, "max": 100, "default": 4 },
+    { "name": "verbose", "label": "Verbose", "type": "bool", "required": false, "default": false },
+    { "name": "mode", "label": "Mode", "type": "enum", "required": false, "enum": ["fast", "full"] }
+  ],
+  "cases": [
+    { "name": "defaults applied", "interpreter": "powershell", "args": { "host": "example.com" }, "ok": true, "canonical": { "host": "example.com", "count": "4", "verbose": "false" } },
+    { "name": "all typed", "interpreter": "powershell", "args": { "host": "a.b", "count": 0, "verbose": true, "mode": "full" }, "ok": true, "canonical": { "host": "a.b", "count": "0", "verbose": "true", "mode": "full" } },
+    { "name": "negative int", "interpreter": "cmd", "args": { "host": "srv-1", "count": -5 }, "ok": true, "canonical": { "host": "srv-1", "count": "-5", "verbose": "false" } },
+    { "name": "missing required", "interpreter": "powershell", "args": {}, "ok": false, "param": "host" },
+    { "name": "unknown parameter", "interpreter": "powershell", "args": { "host": "a", "extra": "x" }, "ok": false, "param": "extra" },
+    { "name": "string to int is not coerced", "interpreter": "powershell", "args": { "host": "a", "count": "4" }, "ok": false, "param": "count" },
+    { "name": "string to bool is not coerced", "interpreter": "powershell", "args": { "host": "a", "verbose": "true" }, "ok": false, "param": "verbose" },
+    { "name": "int above max", "interpreter": "powershell", "args": { "host": "a", "count": 101 }, "ok": false, "param": "count" },
+    { "name": "non-integer", "interpreter": "powershell", "args": { "host": "a", "count": 1.5 }, "ok": false, "param": "count" },
+    { "name": "pattern is anchored", "interpreter": "powershell", "args": { "host": "a b" }, "ok": false, "param": "host" },
+    { "name": "enum outside list", "interpreter": "powershell", "args": { "host": "a", "mode": "slow" }, "ok": false, "param": "mode" },
+    { "name": "control characters", "interpreter": "powershell", "args": { "host": "a\nb" }, "ok": false, "param": "host" }
+  ],
+  "cmdCases": [
+    { "name": "cmd safe set", "value": "C:\\Temp\\logs-1.zip", "ok": true },
+    { "name": "cmd ampersand", "value": "x & calc", "ok": false },
+    { "name": "cmd pipe", "value": "a|b", "ok": false },
+    { "name": "cmd percent", "value": "%PATH%", "ok": false },
+    { "name": "cmd caret", "value": "a^b", "ok": false },
+    { "name": "cmd redirect", "value": "a>b", "ok": false }
+  ],
+  "canonicalCases": [
+    { "name": "agent accepts canonical strings", "args": { "host": "example.com", "count": "-5", "verbose": "true", "mode": "fast" }, "ok": true },
+    { "name": "agent refuses a non-canonical int", "args": { "host": "example.com", "count": "+5" }, "ok": false, "param": "count" },
+    { "name": "agent refuses a leading zero", "args": { "host": "example.com", "count": "05" }, "ok": false, "param": "count" },
+    { "name": "agent refuses TRUE", "args": { "host": "example.com", "verbose": "TRUE" }, "ok": false, "param": "verbose" }
+  ]
+}

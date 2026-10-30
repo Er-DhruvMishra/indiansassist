@@ -32,6 +32,14 @@ export interface Presence {
    * sweeper runs only on the lease holder (section 7.6 N4). The memory driver always grants it.
    */
   tryLease(name: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  /** Phase C section 2.2: a plain key with a TTL (grants, desk codes, hand-overs). */
+  setKey(key: string, value: string, ttlSeconds: number): Promise<void>;
+  getKey(key: string): Promise<string | null>;
+  delKey(key: string): Promise<void>;
+  /** Atomic get-and-delete: of two racing callers exactly one gets the value (Valkey GETDEL / EVAL). */
+  consume(key: string): Promise<string | null>;
+  /** Atomic counter (INCR + EXPIRE NX): the new value; the TTL is set by the first increment only. */
+  incr(key: string, ttlSeconds: number): Promise<number>;
   publish(channel: string, message: object): Promise<void>;
   /** Returns the unsubscribe function. */
   subscribe(channel: string, handler: (message: object) => void): Promise<() => Promise<void>>;
@@ -54,6 +62,7 @@ export class MemoryPresence implements Presence {
   private readonly tokenSession = new Map<string, string>();
   private readonly assists = new Map<string, Map<string, { info: AssistOnline; expiresAt: number }>>();
   private readonly subs = new Map<string, Set<(m: object) => void>>();
+  private readonly kv = new Map<string, { value: string; expiresAt: number }>();
 
   constructor(
     private readonly ownNodeId: string,
@@ -118,6 +127,47 @@ export class MemoryPresence implements Presence {
     return true;
   }
 
+  private live(key: string): { value: string; expiresAt: number } | null {
+    const e = this.kv.get(key);
+    if (!e) return null;
+    if (e.expiresAt <= this.now()) {
+      this.kv.delete(key);
+      return null;
+    }
+    return e;
+  }
+
+  async setKey(key: string, value: string, ttlSeconds: number): Promise<void> {
+    this.kv.set(key, { value, expiresAt: this.now() + Math.max(1, ttlSeconds) * 1000 });
+  }
+
+  async getKey(key: string): Promise<string | null> {
+    return this.live(key)?.value ?? null;
+  }
+
+  async delKey(key: string): Promise<void> {
+    this.kv.delete(key);
+  }
+
+  /** Map.get + Map.delete with no await in between: atomic on the event loop. */
+  async consume(key: string): Promise<string | null> {
+    const e = this.live(key);
+    if (!e) return null;
+    this.kv.delete(key);
+    return e.value;
+  }
+
+  async incr(key: string, ttlSeconds: number): Promise<number> {
+    const e = this.live(key);
+    if (e) {
+      const n = Number(e.value) + 1;
+      e.value = String(n);
+      return n;
+    }
+    this.kv.set(key, { value: '1', expiresAt: this.now() + Math.max(1, ttlSeconds) * 1000 });
+    return 1;
+  }
+
   async publish(channel: string, message: object): Promise<void> {
     const set = this.subs.get(channel);
     if (!set) return;
@@ -149,6 +199,7 @@ export class MemoryPresence implements Presence {
     this.tokenSession.clear();
     this.assists.clear();
     this.subs.clear();
+    this.kv.clear();
   }
 }
 

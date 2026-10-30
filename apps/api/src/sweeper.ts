@@ -5,7 +5,10 @@
  * presence lease (one node of the cluster at a time; the memory driver always holds it).
  */
 import {
+  clearSessionHandover,
   deleteLoginAttemptsBefore,
+  listExpiredHandoverSessions,
+  settleHandover,
   getOrg,
   getOrgChainTail,
   getAuditEntryBySeq,
@@ -20,7 +23,7 @@ import {
 } from '@indiansassist/db';
 import { and, inArray, ne } from 'drizzle-orm';
 import type { AppContext } from './context.js';
-import { systemActor } from './lib/audit.js';
+import { systemActor, writeAudit } from './lib/audit.js';
 import { writeCheckpoint } from './services/audit-service.js';
 import { deleteRecording } from './services/recording-delete.js';
 import { deleteParts, failRecording } from './services/recording-service.js';
@@ -65,12 +68,31 @@ export class Sweeper {
       await deleteLoginAttemptsBefore(this.ctx.db, new Date(Date.now() - 24 * HOUR_MS));
       await this.expiredUploads();
       await this.retention();
+      await this.expiredHandovers();
       if (opts.forcePeriodic || Date.now() - this.lastPeriodic >= HOUR_MS) {
         this.lastPeriodic = Date.now();
         await this.periodicCheckpoints();
       }
     } finally {
       this.running = false;
+    }
+  }
+
+  /** Phase C section 7.2: an unused hand-over past `handover_expires_at` is chained `elevation.failed` and cleared. */
+  async expiredHandovers(now: Date = new Date()): Promise<void> {
+    for (const s of await listExpiredHandoverSessions(this.ctx.db, now)) {
+      const hash = s.handoverHash;
+      const opId = s.handoverOpid;
+      if (!hash) continue;
+      const org = await getOrg(this.ctx.db, s.orgId);
+      await this.ctx.db.transaction(async (tx) => {
+        // Compare-and-clear: a newer mint between the read and here is left alone.
+        if (!(await clearSessionHandover(tx, s.id, hash))) return;
+        await settleHandover(tx, hash, 'expired');
+        if (org && opId && /^[0-9a-f]{16}$/.test(opId))
+          await writeAudit(this.ctx, tx, org, { sessionId: s.id, actor: systemActor, action: 'elevation.failed', data: { opId, error: 'handover_expired' } });
+      });
+      await this.ctx.presence.delKey(`ia:ho:${hash}`);
     }
   }
 

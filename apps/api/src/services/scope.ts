@@ -56,7 +56,8 @@ export function requireReachedActive(s: SessionRow): void {
  * A.2 = `assist_only`). The server recorder captures P1 video only, so other tiers are refused only under `off`.
  */
 export function assistMayRecordSession(s: Pick<SessionRow, 'tier' | 'recordingMode'>): boolean {
-  return s.tier === 'p1_browser' ? assistMayRecord(s.recordingMode) : s.recordingMode !== 'off';
+  // Phase C section 9 R1: the P3 console records the remote video exactly as P1.
+  return s.tier === 'p1_browser' || s.tier === 'p3_portable' ? assistMayRecord(s.recordingMode) : s.recordingMode !== 'off';
 }
 
 export function requireAssistMayRecord(s: Pick<SessionRow, 'tier' | 'recordingMode'>): void {

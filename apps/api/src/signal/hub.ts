@@ -38,6 +38,8 @@ import { Bridge } from './bridge.js';
 import { Conn, wsTransport, type Live } from './conn.js';
 import { handleDeskConsent, handleDeskEvent, handleDeskHello, handleDeskKnock, handleDeskPoll } from './desk.js';
 import { handleDeskConsentBackstage, handleDeskConsentLevel } from './desk-consent.js';
+import { handleDeskConsentClipboard, handleDeskConsentMonitors } from './desk-p3.js';
+import { handleDeskElevation } from './handover.js';
 import { handleControlRelay, handleMirrorRelay } from './relay-p2.js';
 import { ForbiddenGuard } from './forbidden.js';
 import { HubApi } from './hub-api.js';
@@ -64,6 +66,9 @@ const HANDLERS: Partial<Record<ClientSignalMessage['t'], Handler>> = {
   'session.end': handleSessionEnd as Handler,
   'desk.consent_level': handleDeskConsentLevel as Handler,
   'desk.consent_backstage': handleDeskConsentBackstage as Handler,
+  'desk.consent_clipboard': handleDeskConsentClipboard as Handler,
+  'desk.consent_monitors': handleDeskConsentMonitors as Handler,
+  'desk.elevation': handleDeskElevation as Handler,
   'mirror.relay': handleMirrorRelay as Handler,
   'control.relay': handleControlRelay as Handler,
   'recorder.join': handleRecorderJoin as Handler,
@@ -75,6 +80,8 @@ const DESK_TYPES = new Set<string>(DESK_CLIENT_TYPES);
 const RECORDER_TYPES = new Set<string>(RECORDER_CLIENT_TYPES);
 const EXEMPT_TYPES = new Set<string>(BUCKET_EXEMPT_TYPES);
 const T_RE = /^\s*\{\s*"t"\s*:\s*"([a-z._]{1,40})"/;
+/** Phase C section 3.1: native Desks (agent / Android host) get a larger un-helloed socket cap per IP. */
+const AGENT_UA_RE = /^IndiansAssist-(Agent|Android)\//;
 
 /** The `t` of a text frame for the Y25 bucket exemption (a cheap prefix match, then a parse as fallback). */
 function frameType(text: string): string | null {
@@ -133,18 +140,22 @@ export class SignalHub extends HubApi {
     const path = (req.url ?? '').split('?')[0];
     if (path !== '/signal') return reject(socket, 404, 'Not Found');
     const origin = req.headers['origin'];
-    // Y21: the web origin, or a listed extension origin (Desk messages only, never a cookie principal).
+    // Y21: the web origin, or a listed extension origin (Desk messages only, never a cookie principal). Phase C
+    // section 3.1: an upgrade WITHOUT Origin (native agent, recorder) is likewise `deskOnly` with a null principal.
     const extensionOrigin = origin !== undefined && origin !== this.ctx.config.webOrigin && isExtensionOrigin(this.ctx.config, origin);
     if (origin !== undefined && origin !== this.ctx.config.webOrigin && !extensionOrigin) return reject(socket, 403, 'Forbidden');
+    const deskOnly = extensionOrigin || origin === undefined;
+    const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null;
     const ip = this.clientIp(req);
     const lim = await this.ctx.limiter.hit(`ws-upgrade:${ip}`, 60, 60_000);
-    const pending = [...this.conns.values()].filter((c) => c.ip === ip && !c.helloed).length;
-    if (!lim.allowed || (!this.ctx.config.rateLimitDisabled && pending >= 20)) {
+    const isAgent = ua !== null && AGENT_UA_RE.test(ua);
+    const pending = [...this.conns.values()].filter((c) => c.ip === ip && !c.helloed && (c.userAgent !== null && AGENT_UA_RE.test(c.userAgent)) === isAgent).length;
+    if (!lim.allowed || (!this.ctx.config.rateLimitDisabled && pending >= (isAgent ? 60 : 20))) {
       this.ctx.metrics.rateLimited.inc();
       return reject(socket, 429, 'Too Many Requests');
     }
     let principal: Principal | null = null;
-    const cookieHeader = extensionOrigin ? undefined : req.headers['cookie'];
+    const cookieHeader = deskOnly ? undefined : req.headers['cookie'];
     if (cookieHeader && this.app) {
       const signed = this.app.parseCookie(cookieHeader)[SESSION_COOKIE_NAME];
       principal = await principalFromCookieValue(this.ctx, unsignSessionCookie(this.app, signed));
@@ -153,9 +164,9 @@ export class SignalHub extends HubApi {
         return reject(socket, 421, 'Misdirected Request');
       }
     }
-    const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null;
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       const conn = new Conn(wsTransport(ws), ip, ua, principal);
+      conn.deskOnly = deskOnly;
       conn.extensionOrigin = extensionOrigin;
       this.onConnection(conn, ws);
     });
@@ -216,8 +227,8 @@ export class SignalHub extends HubApi {
     if (msg.t === 'pong') return;
     const hello = msg.t === 'assist.hello' || msg.t === 'desk.hello' || msg.t === 'recorder.hello';
     if (hello && conn.helloed) return conn.error('bad_state', 'hello already completed', re);
-    if (msg.t === 'assist.hello' && conn.extensionOrigin) {
-      conn.error('forbidden', 'an extension origin may only connect as a Desk', re);
+    if (msg.t === 'assist.hello' && conn.deskOnly) {
+      conn.error('forbidden', 'this socket may only connect as a Desk', re);
       return conn.close(WS_CLOSE.forbidden, 'forbidden');
     }
     if (!hello && !conn.side) return conn.error('not_authenticated', 'send assist.hello or desk.hello first', re);

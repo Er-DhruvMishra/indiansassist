@@ -97,3 +97,17 @@ export function sha256Bytes(input: Uint8Array | string): Uint8Array {
 export function pepperedHash(pepperHex: string, value: string): string {
   return sha256Hex(`${pepperHex}:${value}`);
 }
+
+/**
+ * Incremental sha256 (Phase C section 6.1 F2): the P3 console hashes a file of up to 2 GiB chunk by chunk from
+ * `file.stream()` / `Blob.slice` without holding it in one `ArrayBuffer`.
+ */
+export function createSha256Hasher(): { update(chunk: Uint8Array): void; digestHex(): string } {
+  const h = sha256.create();
+  return {
+    update: (chunk) => {
+      h.update(chunk);
+    },
+    digestHex: () => bytesToHex(h.digest()),
+  };
+}

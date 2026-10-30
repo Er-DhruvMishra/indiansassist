@@ -5,8 +5,13 @@
  * the wire `host` mapped to `hostHash`; the P2 reports are rate limited per session (10 / s, burst 30).
  */
 import {
+  agentLevelAtLeast,
+  ASSIST_EVENT_P2_ACTIONS,
   ASSIST_EVENT_REASON_ACTIONS,
   hostToHash,
+  isAgentConsentLevel,
+  isConsentLevel,
+  type AgentConsentLevel,
   LIMITS,
   sanitiseFileName,
   sessionEventRequestSchema,
@@ -38,7 +43,7 @@ type Body = ReturnType<typeof sessionEventRequestSchema.parse>;
 const buckets = new Map<string, TokenBucket>();
 const MAX_BUCKETS = 10_000;
 
-function takeReport(sessionId: string): boolean {
+export function takeReport(sessionId: string): boolean {
   let b = buckets.get(sessionId);
   if (!b) {
     if (buckets.size >= MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
@@ -59,6 +64,7 @@ export async function sessionEventRoutes(app: FastifyInstance, ctx: AppContext):
     if (body.action === 'recording.started') return recordingStarted(ctx, p, session, reply);
     requireReachedActive(session);
     if (body.action === 'file.sent' || body.action === 'file.received') return fileEvent(ctx, p, session, body, reply);
+    if (session.tier === 'p3_portable') return p3Report(ctx, p, session, body, reply);
     return consoleReport(ctx, p, session, body, reply);
   });
 }
@@ -118,6 +124,12 @@ async function fileEvent(ctx: AppContext, p: Principal, session: SessionRow, bod
 /** The console's half of the dual attestation (Phase B 3.7): P2 sessions only, while active and for 60 s after. */
 async function consoleReport(ctx: AppContext, p: Principal, session: SessionRow, body: Body, reply: FastifyReply) {
   if (session.tier !== 'p2_extension') fail('validation_failed', `${body.action} is reported in P2 sessions only`);
+  const isOs = (body.data as { mode?: unknown }).mode === 'os';
+  if (!(ASSIST_EVENT_P2_ACTIONS as readonly string[]).includes(body.action) || isOs)
+    fail('validation_failed', `${body.action} is reported in P3 sessions only`);
+  // Phase C section 3.4 family rule: a P2 session's reports carry P2 levels only.
+  if (body.action === 'level.requested' && !isConsentLevel((body.data as { level?: unknown }).level))
+    fail('validation_failed', 'not a P2 consent level');
   if (session.state !== 'active' && session.state !== 'ended') fail('forbidden', `session is ${session.state}`);
   if (!ctx.config.rateLimitDisabled && !takeReport(session.id)) {
     ctx.metrics.rateLimited.inc();
@@ -137,6 +149,62 @@ async function consoleReport(ctx: AppContext, p: Principal, session: SessionRow,
     if (host !== null)
       await upsertSessionHost(tx, { sessionId: session.id, orgId: session.orgId, hostHash: data.hostHash!, host });
     return e;
+  });
+  return reply.status(201).send(toAuditEntry(entry));
+}
+
+/** Minimum P3 level of each console report (Phase C section 3.8, `os.*` gating); absent = any level. */
+const P3_MIN_LEVEL: Partial<Record<string, AgentConsentLevel>> = {
+  'control.input': 'control',
+  'input.text_burst': 'control',
+  'clipboard.sync': 'control',
+  'elevation.requested': 'control',
+};
+const P3_ACTIONS = new Set([
+  'control.input',
+  'input.text_burst',
+  'clipboard.sync',
+  'monitor.selected',
+  'elevation.requested',
+  'sec.failed',
+  'sec.verified',
+  'level.requested',
+]);
+const P3_REASON = new Set(['elevation.requested', 'level.requested']);
+
+/**
+ * The console's reports in a P3 session (Phase C section 3.8): the family rule (P3 levels only), and input reports
+ * above the level the Desk granted are refused `403` and chained as `control.refused { transport: 'attestation' }`.
+ */
+async function p3Report(ctx: AppContext, p: Principal, session: SessionRow, body: Body, reply: FastifyReply) {
+  if (!P3_ACTIONS.has(body.action)) fail('validation_failed', `${body.action} is reported in P2 sessions only`);
+  if (session.state !== 'active' && session.state !== 'ended') fail('forbidden', `session is ${session.state}`);
+  if (!ctx.config.rateLimitDisabled && !takeReport(session.id)) {
+    ctx.metrics.rateLimited.inc();
+    fail('rate_limited', 'too many reports for this session', { retryAfterSec: 1 });
+  }
+  const data = body.data as Record<string, unknown>;
+  if (body.action === 'control.input' && data['mode'] !== 'os') fail('validation_failed', 'a P3 session reports control.input with mode os');
+  if (body.action === 'level.requested' && data['level'] !== 'control') fail('validation_failed', 'a P3 console requests control');
+  const granted = isAgentConsentLevel(session.consentLevel) ? session.consentLevel : null;
+  const required = P3_MIN_LEVEL[body.action];
+  const clipboardOff = body.action === 'clipboard.sync' && session.consentClipboard !== true;
+  if (required && (granted === null || !agentLevelAtLeast(granted, required) || clipboardOff)) {
+    await writeAudit(ctx, ctx.db, p.org, {
+      sessionId: session.id,
+      actor: userActor(p.user),
+      action: 'control.refused',
+      data: { action: body.action as 'control.input', required, granted, transport: 'attestation' },
+    });
+    fail('forbidden', clipboardOff ? 'the Desk has clipboard sharing off' : `${body.action} needs the ${required} level`, { required, granted });
+  }
+  const reason = P3_REASON.has(body.action) ? ((body as { reason?: string }).reason ?? null) : null;
+  const entry = await writeAudit(ctx, ctx.db, p.org, {
+    sessionId: session.id,
+    actor: userActor(p.user),
+    action: body.action as 'sec.verified',
+    reason,
+    data: data as never,
   });
   return reply.status(201).send(toAuditEntry(entry));
 }

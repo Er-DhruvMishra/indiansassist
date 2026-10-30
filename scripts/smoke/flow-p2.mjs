@@ -34,7 +34,7 @@ export async function p2SetupSteps(run, ctx) {
     const s = randomBytes(4).toString('hex');
     const body = { orgName: `Smoke P2 ${s}`, region: state.region, name: `Smoke P2 ${s}`, email: `smoke-p2-${s}@example.com`, password: `Smoke-${randomBytes(12).toString('base64url')}` };
     const r = await api.expect('POST', '/api/v1/auth/signup', body, [201]);
-    eq(r.org.planTier, 'p2_extension', 'org.planTier (SIGNUP_PLAN_TIER)');
+    check(['p2_extension', 'p3_portable', 'p4_installed'].includes(r.org.planTier), `org.planTier ${r.org.planTier} must include P2 (SIGNUP_PLAN_TIER)`);
     state.user = r.user;
     state.org = r.org;
     const role = await api.expect('PATCH', `/api/v1/users/${r.user.id}/role`, { role: 'org_admin', tier: 'p2_extension' });

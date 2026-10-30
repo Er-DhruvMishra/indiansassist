@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import {
   ACTOR_TYPES,
   CHECKPOINT_KINDS,
-  CONSENT_LEVELS,
   CONSENT_STATES,
+  ELEVATION_LEVELS,
+  PLAYBOOK_INTERPRETERS,
+  STORED_CONSENT_LEVELS,
   MIRROR_SCOPES,
   RECORDING_MODES,
   RECORDING_SOURCES,
@@ -46,9 +48,12 @@ const TABLES = [
   'audit_entry',
   'auth_session',
   'device',
+  'elevation_handover',
   'integration',
   'login_attempt',
   'org',
+  'playbook',
+  'playbook_run',
   'recording',
   'session',
   'session_file',
@@ -77,7 +82,9 @@ const ENUMS: Record<string, readonly string[]> = {
   checkpoint_kind: CHECKPOINT_KINDS,
   integration_type: INTEGRATION_TYPES,
   device_status: DEVICE_STATUSES,
-  consent_level: CONSENT_LEVELS,
+  consent_level: STORED_CONSENT_LEVELS,
+  elevation_level: ELEVATION_LEVELS,
+  playbook_interpreter: PLAYBOOK_INTERPRETERS,
   mirror_scope: MIRROR_SCOPES,
   recording_mode: RECORDING_MODES,
   recording_source: RECORDING_SOURCES,
@@ -130,10 +137,10 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(5);
+    expect(rows[0]!.n).toBe(6);
   });
 
-  it('commit a journal with the init, append_only, open-session index, Phase B and A.2 recorder migrations', () => {
+  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder and Phase C migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
@@ -143,6 +150,7 @@ describe('migrations', () => {
       '0002_session_token_open_unique',
       '0003_phase_b',
       '0004_recorder',
+      '0005_phase_c',
     ]);
   });
 

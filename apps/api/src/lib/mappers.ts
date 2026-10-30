@@ -162,6 +162,9 @@ export function toSession(s: SessionRow, refs: SessionRefs): Session {
     recordingMode: s.recordingMode ?? null,
     serverRecording: s.serverRecording,
     serverRecordingId: refs.serverRecordingId ?? null,
+    consentMonitors: s.consentMonitors ?? null,
+    consentClipboard: s.consentClipboard ?? null,
+    elevation: s.elevation ?? null,
   };
 }
 

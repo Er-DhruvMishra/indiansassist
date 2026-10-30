@@ -14,6 +14,8 @@ export const API_ERROR_STATUS = {
   invite_invalid: 401,
   reauth_required: 401,
   forbidden: 403,
+  /** Phase C section 8.2: a `requiresElevation` playbook on a session below `elevated`. */
+  elevation_required: 403,
   csrf_failed: 403,
   not_found: 404,
   token_not_found: 404,
@@ -22,14 +24,23 @@ export const API_ERROR_STATUS = {
   token_busy: 409,
   already_ended: 409,
   recording_exists: 409,
+  // Phase C sections 8.2, 2.2
+  bad_state: 409,
+  playbook_name_taken: 409,
+  playbook_disabled: 409,
+  playbook_changed: 409,
   token_gone: 410,
   link_expired: 410,
   /** Phase B Y26: the recording's object was deleted (manual or retention). */
   recording_deleted: 410,
+  /** Phase C section 2.2: a one_time token whose session already reached `active`. */
+  token_used: 410,
   payload_too_large: 413,
   region_mismatch: 421,
   rate_limited: 429,
   internal: 500,
+  /** Phase C section 2.2: no agent build for the platform / arch on this node. */
+  download_unavailable: 503,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_STATUS;

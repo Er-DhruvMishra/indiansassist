@@ -6,6 +6,7 @@
  * policy (docs/specs/phase-a2-recorder.md section 3 M3), snapshotted into each session at accept.
  */
 import {
+  agentPolicySchema,
   applyPolicyPatch,
   BUILTIN_DENY_LIST,
   extensionPolicyPatchSchema,
@@ -72,6 +73,25 @@ export async function policyRoutes(app: FastifyInstance, ctx: AppContext): Promi
       return o;
     });
     return { recordingRetentionDays: org.recordingRetentionDays ?? null };
+  });
+
+  // Phase C sections 1.3 step 7, 13.1: the console's security-code gate (default on).
+  app.get('/api/v1/orgs/current/policy/agent', async (req) => {
+    const p = await authenticate(ctx, req);
+    return { requireSasConfirm: p.org.requireSasConfirm };
+  });
+
+  app.patch('/api/v1/orgs/current/policy/agent', async (req) => {
+    const p = await authenticate(ctx, req, ['org_admin']);
+    await patchLimit(ctx, p);
+    const body = parseOr400(agentPolicySchema, req.body);
+    if (body.requireSasConfirm === p.org.requireSasConfirm) return { requireSasConfirm: p.org.requireSasConfirm };
+    const org = await ctx.db.transaction(async (tx) => {
+      const o = await updateOrg(tx, p.org.id, { requireSasConfirm: body.requireSasConfirm });
+      await writeAudit(ctx, tx, o, { actor: userActor(p.user), action: 'org.policy_updated', data: { fields: ['requireSasConfirm'] } });
+      return o;
+    });
+    return { requireSasConfirm: org.requireSasConfirm };
   });
 
   app.get('/api/v1/orgs/current/policy/recording', async (req) => {

@@ -131,4 +131,16 @@ export const publicTokenSchema = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * Agent download info (Phase C section 2.7 J6): non-null only for `p3_portable`. Always sent by the api; optional so
+   * earlier fixtures still parse.
+   */
+  agent: z
+    .object({
+      windows: z.object({ x64: z.boolean(), arm64: z.boolean() }),
+      android: z.object({ apk: z.boolean(), appUrl: z.string().nullable() }),
+      minVersion: z.string(),
+    })
+    .nullable()
+    .optional(),
 });

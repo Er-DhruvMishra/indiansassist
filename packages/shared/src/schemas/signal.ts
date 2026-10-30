@@ -4,6 +4,7 @@ import { LIMITS } from '../enums.js';
 import { utf8Encode } from '../encoding.js';
 import * as m from './signal-messages.js';
 import * as r from './signal-recorder.js';
+import * as p3 from './signal-messages-p3.js';
 
 /** Every signaling message, each `t` exactly once. */
 export const signalMessageSchema = z.discriminatedUnion('t', [
@@ -27,9 +28,14 @@ export const signalMessageSchema = z.discriminatedUnion('t', [
   m.pongSchema,
   m.deskConsentLevelSchema,
   m.deskConsentBackstageSchema,
+  p3.deskConsentClipboardSchema,
+  p3.deskConsentMonitorsSchema,
+  p3.deskElevationSchema,
   m.mirrorRelaySchema,
   m.controlRelaySchema,
   m.consentLevelOkSchema,
+  p3.elevationHandoverSchema,
+  p3.sessionHandedOverSchema,
   m.assistHelloOkSchema,
   m.deskHelloOkSchema,
   m.pollStatusSchema,
@@ -82,6 +88,9 @@ export const clientSignalMessageSchema = z.discriminatedUnion('t', [
   m.pongSchema,
   m.deskConsentLevelSchema,
   m.deskConsentBackstageSchema,
+  p3.deskConsentClipboardSchema,
+  p3.deskConsentMonitorsSchema,
+  p3.deskElevationSchema,
   m.mirrorRelaySchema,
   m.controlRelaySchema,
   r.recorderHelloSchema,
@@ -117,6 +126,8 @@ export const serverSignalMessageSchema = z.discriminatedUnion('t', [
   m.pingSchema,
   m.pongSchema,
   m.consentLevelOkSchema,
+  p3.elevationHandoverSchema,
+  p3.sessionHandedOverSchema,
   m.mirrorRelaySchema,
   m.controlRelaySchema,
   r.recorderHelloOkSchema,
@@ -162,6 +173,10 @@ export const DESK_CLIENT_TYPES = [
   'desk.consent_backstage',
   'mirror.relay',
   'control.relay',
+  // Phase C sections 3.4, 3.6 M5, 7.2 (native Desks, P3 sessions only)
+  'desk.consent_clipboard',
+  'desk.consent_monitors',
+  'desk.elevation',
 ] as const satisfies readonly ClientSignalMessage['t'][];
 
 /** Frames that never consume the per-connection frame bucket (Phase B Y25). */

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import {
+  AGENT_CONSENT_LEVELS,
   CONSENT_LEVELS,
   CONSENT_SURFACES,
   MIRROR_SCOPES,
@@ -24,9 +25,11 @@ import {
 import { sanitiseText, SANITISE_LIMITS } from './sanitise.js';
 import { P2_AUDIT_ACTIONS, P2_CHAIN_SCHEMAS } from './actions-p2.js';
 import { A2_AUDIT_ACTIONS, A2_CHAIN_SCHEMAS, recordingFailedDataSchema, recordingStoredDataSchema } from './actions-a2.js';
+import { P3_AUDIT_ACTIONS, P3_CHAIN_SCHEMAS } from './actions-p3.js';
 
 export * from './actions-p2.js';
 export * from './actions-a2.js';
+export * from './actions-p3.js';
 
 export const AUDIT_ACTIONS = [
   'auth.signup',
@@ -65,11 +68,13 @@ export const AUDIT_ACTIONS = [
   ...P2_AUDIT_ACTIONS,
   // Phase A.2 (docs/specs/phase-a2-recorder.md section 6)
   ...A2_AUDIT_ACTIONS,
+  // Phase C (docs/specs/phase-c-contracts.md sections 3.8, 7.5, 8.5)
+  ...P3_AUDIT_ACTIONS,
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
-/** Reserved names: valid action strings that Phase A never writes. */
-export const RESERVED_AUDIT_ACTIONS = ['elevation.requested', 'session.supervisor_joined'] as const;
+/** Reserved names: valid action strings that are never written (`elevation.requested` is written since Phase C). */
+export const RESERVED_AUDIT_ACTIONS = ['session.supervisor_joined'] as const;
 
 export function isAuditAction(x: unknown): x is AuditAction {
   return typeof x === 'string' && (AUDIT_ACTIONS as readonly string[]).includes(x);
@@ -124,13 +129,22 @@ const SCHEMAS = {
   'session.knock': z.strictObject({ tokenId: id, deskLabelHash: hash, userAgentHash: hash }),
   'session.accepted': z.strictObject({ tokenId: id, onBehalfOf: id.nullable() }),
   'session.denied': z.strictObject({ tokenId: id, revokeToken: z.boolean() }),
-  // `level`, `scope`, `backstage`: present for P2 sessions only (Phase B Y5).
-  'session.consent_granted': z.strictObject({
-    surface: z.enum(CONSENT_SURFACES),
-    level: z.enum(CONSENT_LEVELS).optional(),
-    scope: z.enum(MIRROR_SCOPES).optional(),
-    backstage: z.boolean().optional(),
-  }),
+  // `level`, `scope`, `backstage`: present for P2 sessions only (Phase B Y5); `level` (P3 family), `monitors`,
+  // `clipboard`: present for P3 sessions only (Phase C section 3.8).
+  'session.consent_granted': z.union([
+    z.strictObject({
+      surface: z.enum(CONSENT_SURFACES),
+      level: z.enum(CONSENT_LEVELS).optional(),
+      scope: z.enum(MIRROR_SCOPES).optional(),
+      backstage: z.boolean().optional(),
+    }),
+    z.strictObject({
+      surface: z.literal('monitor'),
+      level: z.enum(AGENT_CONSENT_LEVELS),
+      monitors: z.number().int().min(1).max(16),
+      clipboard: z.boolean(),
+    }),
+  ]),
   'session.consent_revoked': empty,
   'session.started': z.strictObject({ path: z.enum(SESSION_PATHS) }),
   'session.resumed': z.strictObject({
@@ -170,13 +184,15 @@ const SCHEMAS = {
     checked: int,
     failure: z.strictObject({ kind: z.enum(VERIFY_FAILURE_KINDS), seq: z.number().int() }).nullable(),
   }),
-  'elevation.requested': empty.refine(() => false, 'elevation.requested is reserved and not written in Phase A'),
+  // Phase C section 7.5: written by the console (`POST events`), the technician's reason in the `reason` column.
+  'elevation.requested': z.strictObject({ opId: z.string().regex(/^[0-9a-f]{16}$/, 'expected a 16-hex-char opId') }),
   'session.supervisor_joined': empty.refine(
     () => false,
     'session.supervisor_joined is reserved and not written in Phase A',
   ),
   ...P2_CHAIN_SCHEMAS,
   ...A2_CHAIN_SCHEMAS,
+  ...P3_CHAIN_SCHEMAS,
 } satisfies Record<AuditAction, z.ZodType>;
 
 export type AuditDataSchemas = typeof SCHEMAS;

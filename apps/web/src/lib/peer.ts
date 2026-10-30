@@ -20,7 +20,8 @@ export type PeerOptions = {
   iceServers: RTCIceServer[];
   iceTransportPolicy?: RTCIceTransportPolicy;
   send: (msg: SignalOut) => void;
-  onTrack?: (track: MediaStreamTrack, streams: readonly MediaStream[]) => void;
+  /** `mid` = the transceiver's SDP mid (Phase C section 3.6 M1 maps it to a monitor). */
+  onTrack?: (track: MediaStreamTrack, streams: readonly MediaStream[], mid: string | null) => void;
   onChannel?: (label: DataChannelLabel, channel: RTCDataChannel) => void;
   onConnectionState?: (state: RTCPeerConnectionState) => void;
   /** Injected in tests. */
@@ -53,7 +54,7 @@ export class PeerSession {
       const c = ev.candidate;
       this.opts.send({ t: 'webrtc.ice', candidate: c ? (c.toJSON() as IceCandidateInit) : null });
     };
-    this.pc.ontrack = (ev) => this.opts.onTrack?.(ev.track, ev.streams);
+    this.pc.ontrack = (ev) => this.opts.onTrack?.(ev.track, ev.streams, ev.transceiver?.mid ?? null);
     this.pc.ondatachannel = (ev) => this.registerChannel(ev.channel);
     this.pc.onconnectionstatechange = () => this.opts.onConnectionState?.(this.pc.connectionState);
   }

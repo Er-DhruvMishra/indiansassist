@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "description": "Phase C section 8.5: one frame of each ia.playbook type and a 202 run reply, so Rust, Kotlin and TS agree on the wire shapes. Asserted by packages/shared test/agent-playbook.test.ts.",
+  "output": { "t": "pb.output", "runId": "0123456789abcdef0123456789abcdef", "stream": "stdout", "seq": 0, "chunk": "Windows IP Configuration\r\n", "ts": 1792900000000 },
+  "end": { "t": "pb.end", "runId": "0123456789abcdef0123456789abcdef", "exit": 0, "durationMs": 412, "truncated": false, "ranAs": "user", "ts": 1792900000412 },
+  "endError": { "t": "pb.end", "runId": "0123456789abcdef0123456789abcdef", "exit": null, "durationMs": 30000, "truncated": false, "ranAs": "admin", "error": "timeout", "ts": 1792900030000 },
+  "runReply": {
+    "runId": "0123456789abcdef0123456789abcdef",
+    "opId": "0011223344556677",
+    "playbookId": "6f1c3a2e-8b7d-4c5e-9f10-a1b2c3d4e5f6",
+    "body": "ipconfig /flushdns",
+    "bodyHash": "998e9c67094be03bcf1b090bc5a57af2929d659f93037377ca4006e5713f1cb3",
+    "interpreter": "cmd",
+    "requiresElevation": false,
+    "timeoutSec": 30,
+    "args": {}
+  },
+  "fileOffer": { "line": "IA_FILE_OFFER C:\\Users\\x\\AppData\\Local\\IndiansAssist\\logs-1792900000.zip", "path": "C:\\Users\\x\\AppData\\Local\\IndiansAssist\\logs-1792900000.zip" }
+}

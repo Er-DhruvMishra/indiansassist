@@ -8,10 +8,7 @@ import { z } from 'zod';
 import {
   BACKSTAGE_ACTIONS,
   BACKSTAGE_OUTCOMES,
-  CONSENT_LEVELS,
   FIELD_KINDS,
-  INPUT_KINDS,
-  INPUT_MODES,
   LIMITS,
   MASK_REFUSE_CAUSES,
   MASK_RESTORE_CAUSES,
@@ -19,8 +16,10 @@ import {
   MIRROR_SCOPES,
   MIRROR_START_REASONS,
   MIRROR_STOP_REASONS,
+  STORED_CONSENT_LEVELS,
 } from '../enums.js';
-import { CONTROL_ERROR_CODES, CONTROL_OPS, TAB_ACTION_KINDS } from '../extension/control.js';
+import { BROWSER_INPUT_MODES, CONTROL_ERROR_CODES, CONTROL_OPS, TAB_ACTION_KINDS } from '../extension/control.js';
+import { controlInputOsDesk, controlInputOsUser, controlRefusedP3 } from './actions-p3.js';
 import { isWireHost } from '../extension/deny-list.js';
 import { sanitiseText } from './sanitise.js';
 
@@ -31,14 +30,19 @@ const tabIds = z.array(tabId).min(1).max(LIMITS.tabsCloseMax);
 const hash = z.string().regex(/^[0-9a-f]{64}$/, 'expected sha256 hex');
 export const opIdSchema = z.string().regex(/^[0-9a-f]{16}$/, 'expected a 16-hex-char opId');
 const opId = opIdSchema;
-const level = z.enum(CONSENT_LEVELS);
+/**
+ * Both consent-level families (Phase C section 3.4): a P3 session writes `level.requested`, `consent.level_refused` and
+ * `consent.level_changed` with its own levels; the api checks the family against the session tier.
+ */
+const level = z.enum(STORED_CONSENT_LEVELS);
+const B_INPUT_KINDS = ['pointer', 'key', 'scroll', 'fill'] as const;
 const scope = z.enum(MASK_SCOPES);
 /** A wire `host`: hostname only (lower-case, IDNA-ASCII, no port / path / wildcard, <= 253). */
 export const wireHostSchema = z.string().max(LIMITS.policyHostPatternMax).refine(isWireHost, 'host must be a bare lower-case hostname');
 const kinds = z
-  .array(z.enum(INPUT_KINDS))
+  .array(z.enum(B_INPUT_KINDS))
   .min(1)
-  .max(INPUT_KINDS.length)
+  .max(B_INPUT_KINDS.length)
   .refine((k) => new Set(k).size === k.length, 'kinds must be unique');
 const errorCode = z.enum(CONTROL_ERROR_CODES);
 const tabKind = z.enum(TAB_ACTION_KINDS);
@@ -78,14 +82,14 @@ const same = {
 } as const;
 
 const controlInputDesk = z.strictObject({
-  mode: z.enum(INPUT_MODES),
+  mode: z.enum(BROWSER_INPUT_MODES),
   tabId,
   count: int,
   kinds,
   windowMs: int,
   refused: int,
 });
-const controlInputUser = z.strictObject({ mode: z.enum(INPUT_MODES), tabId, count: int, kinds, windowMs: int });
+const controlInputUser = z.strictObject({ mode: z.enum(BROWSER_INPUT_MODES), tabId, count: int, kinds, windowMs: int });
 const backstageExitDesk = z.strictObject({ tabId, outcome: z.enum(BACKSTAGE_OUTCOMES), durationMs: int, opId: opId.optional() });
 const backstageExitUser = z.strictObject({ tabId, action: z.enum(BACKSTAGE_ACTIONS), opId });
 
@@ -152,7 +156,7 @@ export const P2_CHAIN_SCHEMAS = {
     z.strictObject({ kind: tabKind, opId, tabId: tabId.optional(), tabIds: tabIds.optional(), hostHash: hash.optional(), ok: z.boolean(), error: errorCode.optional() }),
     z.strictObject({ kind: tabKind, opId, tabId: tabId.optional(), tabIds: tabIds.optional(), hostHash: hash.optional() }),
   ]),
-  'control.input': z.union([controlInputDesk, controlInputUser]),
+  'control.input': z.union([controlInputDesk, controlInputUser, controlInputOsDesk, controlInputOsUser]),
   'backstage.enter': z.union([
     z.strictObject({ tabId: tabId.optional(), hostHash: hash, opId, ok: z.boolean(), error: errorCode.optional() }),
     z.strictObject({ hostHash: hash, opId }),
@@ -171,14 +175,17 @@ export const P2_CHAIN_SCHEMAS = {
    * The server refused a `control.relay` request above the Desk's granted level (amendment by the shared/api
    * engineer, see the Phase B report): `op`, the request's `opId`, the level it needs and the level in force.
    */
-  'control.refused': z.strictObject({
-    op: z.enum(CONTROL_OPS as [string, ...string[]]),
-    opId,
-    required: level,
-    granted: level.nullable(),
-    transport: z.literal('relay'),
-    suppressed: int.optional(),
-  }),
+  'control.refused': z.union([
+    z.strictObject({
+      op: z.enum(CONTROL_OPS as [string, ...string[]]),
+      opId,
+      required: level,
+      granted: level.nullable(),
+      transport: z.literal('relay'),
+      suppressed: int.optional(),
+    }),
+    controlRefusedP3,
+  ]),
 } as const;
 
 export const P2_AUDIT_ACTIONS = [

@@ -38,6 +38,8 @@ export const org = pgTable(
     recordingRetentionDays: integer('recording_retention_days'),
     /** Phase A.2 section 3: org recording policy. */
     recordingMode: recordingModeEnum('recording_mode').notNull().default('assist_only'),
+    /** Phase C section 1.3 step 7: the console's security-code gate before control (agent policy). */
+    requireSasConfirm: boolean('require_sas_confirm').notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

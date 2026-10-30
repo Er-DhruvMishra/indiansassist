@@ -78,6 +78,8 @@ export type TransitionSet = Partial<
     | 'consentScope'
     | 'consentBackstage'
     | 'recordingMode'
+    | 'consentMonitors'
+    | 'consentClipboard'
   >
 >;
 
@@ -174,10 +176,23 @@ export type SessionPatch = Partial<
     | 'consentBackstage'
     | 'deskClient'
     | 'recordingMode'
+    | 'consentMonitors'
+    | 'consentClipboard'
+    | 'elevation'
+    | 'handoverHash'
+    | 'handoverOpid'
+    | 'handoverExpiresAt'
   >
 >;
 
 const PATCHABLE = new Set([
+  // Phase C section 13.2
+  'consentMonitors',
+  'consentClipboard',
+  'elevation',
+  'handoverHash',
+  'handoverOpid',
+  'handoverExpiresAt',
   'recordingMode',
   'consentLevel',
   'consentBackstage',

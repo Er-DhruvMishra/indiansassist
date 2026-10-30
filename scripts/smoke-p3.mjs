@@ -6,12 +6,14 @@
 //   pnpm smoke:p3                                                           # API_URL defaults to http://localhost:4000
 //
 // Env: API_URL, WEB_ORIGIN, SIGNAL_URL, SMOKE_TIMEOUT_MS (as smoke.mjs). The download step needs AGENT_DIST_DIR
-// with a manifest on the api. Prints PASS / FAIL / SKIP per step; exits 1 on any failure.
+// with a manifest on the api, or (dev) the AGENT_DEV_STUB placeholder the api serves when it has none. Prints
+// PASS / FAIL / SKIP per step; exits 1 on any failure.
 
 import { pathToFileURL } from 'node:url';
 import { ApiClient } from './smoke/http.mjs';
 import { Runner } from './smoke/runner.mjs';
 import { p3Steps } from './smoke/flow-p3.mjs';
+import { p3AgentSteps } from './smoke/flow-p3-agent.mjs';
 
 export async function runSmokeP3(opts = {}) {
   const run = new Runner({ log: opts.log });
@@ -31,6 +33,7 @@ export async function runSmokeP3(opts = {}) {
   };
   try {
     await p3Steps(run, ctx);
+    await p3AgentSteps(run, ctx);
   } finally {
     for (const s of ctx.sockets) s.close();
   }

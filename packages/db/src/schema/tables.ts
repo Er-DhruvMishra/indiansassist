@@ -6,3 +6,4 @@ export { session, sessionParticipant, sessionHost } from './session.js';
 export { auditEntry, auditCheckpoint } from './audit.js';
 export { sessionFile } from './files.js';
 export { recording, integration } from './recording.js';
+export { playbook, playbookRun, elevationHandover } from './playbook.js';

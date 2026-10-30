@@ -82,7 +82,18 @@ pnpm agent:fixtures    # the generated name fixtures are current (rebuild packag
 pnpm android:test      # Gradle testDebugUnitTest
 pnpm android:build     # Gradle assembleDebug
 pnpm smoke:p3          # Package 3 server-side flow; start the api with SIGNUP_PLAN_TIER=p3_portable
+node scripts/seed-playbooks.mjs   # starter playbooks for an org created before Phase C (SEED_EMAIL / SEED_PASSWORD)
 ```
+
+The api serves the P3 side of the contract: the download grant (`GET /api/v1/download/manifest`, `POST
+/api/v1/download/prepare`, `GET|HEAD /api/v1/download/:grant`, builds from `AGENT_DIST_DIR`; outside production a
+placeholder file, `AGENT_DEV_STUB`, stands in for the Windows builds so the join page and `smoke:p3` work locally),
+the signed `.iaconfig` sidecar, the native `desk.hello` (Origin-less socket, desk codes, resume, elevation
+hand-over), `desk.consent.native`, the P3 level family, playbooks (`/api/v1/orgs/current/playbooks` and the run
+endpoint) with the starter catalogue of `scripts/playbooks`, the agent policy (`requireSasConfirm`) and the server
+recorder on P3 sessions. The console mounts `AgentConsole` for `p3_portable` sessions and the join page has the
+download branch. Start the api with `SIGNUP_PLAN_TIER=p3_portable` (and `RECORDER_TOKEN` for the recorder cases)
+and `pnpm smoke:p3` walks the whole native path with a Node client playing the agent (12 steps).
 
 Every Phase C wire name is defined once in `@indiansassist/shared` (`src/agent/*`, `enums.ts`, `files.ts`). The
 cross-language fixtures under `packages/shared/test/fixtures/agent/` (`sec-vectors.json` for the `ia.sec` handshake
@@ -90,9 +101,11 @@ and frames, `agent-names.json`, `file-lists.json`) are loaded by the TypeScript,
 implementations are checked byte for byte against one file. Regenerate them with
 `node apps/android/tools/gen-phase-c-vectors.mjs` and `node scripts/gen-agent-fixtures.mjs`.
 
-What does not work yet: the api has no P3 path (native `desk.hello`, consent, hand-over, playbooks, downloads), so
-`pnpm smoke:p3` stops at its second step; the agent's runnable session (`media` feature: webrtc-rs, encoders, UI)
-is not built on the gnu dev machine, and there is no `e2e:p3` yet. See docs/PLAN.md section 7.
+What does not work yet: the agent's runnable session (`media` feature: webrtc-rs, encoders, UI) is not built on the
+gnu dev machine, so no real agent has joined the api yet (`smoke:p3` simulates it, without media); there is no
+`e2e:p3` / `agent.spec.ts` yet; the P3 console has no voice, no Assist-side recording and no File System Access
+receive path above 256 MiB; nginx does not yet set `proxy_buffering off` for `/api/v1/download/`. See docs/PLAN.md
+section 7.
 
 ### Server-side recorder (Phase A.2, Go)
 

@@ -14,7 +14,7 @@ import {
   type FileEventData,
   type Side,
 } from '@indiansassist/shared';
-import type { ChannelHub } from './channels';
+import type { HubLike } from './channels';
 import { FileAssembler, blobBytes, checkOffer, chunkBlob, makeOffer, sha256HexOf, sniffType } from './fileChunker';
 
 export type TransferStatus =
@@ -50,6 +50,17 @@ export type Transfer = {
 export type AttestFn = (action: 'file.sent' | 'file.received', data: FileEventData) => Promise<boolean>;
 
 const TERMINAL: TransferStatus[] = ['done', 'rejected', 'cancelled', 'failed'];
+
+/**
+ * Phase C section 6.1 F2 (A F3 amended for P3): a native Desk receives up to 2 GiB, so the P3 console hashes
+ * incrementally (`hashBlob`) and never reads the whole file into one ArrayBuffer; `refuse` greys names the Desk
+ * would refuse anyway (passive-risk formats).
+ */
+export type FileTransferOptions = {
+  maxBytes?: number;
+  hashBlob?: (blob: Blob) => Promise<string>;
+  refuse?: (name: string) => string | null;
+};
 const HIGH_WATER = 1048576;
 const LOW_WATER = 262144;
 
@@ -62,10 +73,11 @@ export class FileTransfer {
   private unsubs: (() => void)[] = [];
 
   constructor(
-    private readonly hub: ChannelHub,
+    private readonly hub: HubLike,
     private readonly side: Side,
     private readonly onChange: (list: Transfer[]) => void,
     private readonly attest: AttestFn,
+    private readonly options: FileTransferOptions = {},
   ) {
     this.unsubs.push(hub.onMessage((m) => this.onMessage(m)));
     this.unsubs.push(hub.onBinary((d) => this.onChunk(d)));
@@ -104,7 +116,10 @@ export class FileTransfer {
   /** Sends one file. Rejects locally when another outgoing transfer is running or the file is too large. */
   async send(file: File): Promise<void> {
     if (this.outgoingFile) throw new Error('Another file is still being sent.');
-    if (file.size > LIMITS.fileMaxBytes) throw new Error('Files larger than 256 MiB cannot be sent in this version.');
+    const max = this.options.maxBytes ?? LIMITS.fileMaxBytes;
+    if (file.size > max) throw new Error(max === LIMITS.fileMaxBytes ? 'Files larger than 256 MiB cannot be sent in this version.' : 'This file is larger than the Desk accepts.');
+    const refused = this.options.refuse?.(file.name) ?? null;
+    if (refused) throw new Error(refused);
     const fileId = this.nextFileId++;
     const key = `${this.outDir}:${fileId}`;
     const offer = makeOffer(fileId, file.name, file.size, file.type, '0'.repeat(64));
@@ -125,7 +140,7 @@ export class FileTransfer {
       reported: false,
     });
     try {
-      const sha256 = await sha256HexOf(await blobBytes(file));
+      const sha256 = this.options.hashBlob ? await this.options.hashBlob(file) : await sha256HexOf(await blobBytes(file));
       this.update(key, { sha256, status: 'offered' });
       const accepted = new Promise<void>((resolve, reject) => {
         this.outgoingFile!.accepted = resolve;

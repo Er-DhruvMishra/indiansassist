@@ -46,6 +46,16 @@ if v == ARGV[1] then redis.call('EXPIRE', KEYS[1], ARGV[2]) return 1 end
 if not v then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]) return 1 end
 return 0`;
 
+/** GET + DEL in one step (`GETDEL` equivalent that also runs below Valkey / Redis 6.2). */
+export const CONSUME_SCRIPT = `local v = redis.call('GET', KEYS[1])
+if v then redis.call('DEL', KEYS[1]) end
+return v`;
+
+/** INCR, and EXPIRE only when this increment created the key (`EXPIRE NX` semantics). */
+export const INCR_SCRIPT = `local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return n`;
+
 export const redisKeys = {
   waiting: (tokenId: string) => `ia:tok:${tokenId}`,
   session: (tokenId: string) => `ia:tok:${tokenId}:session`,
@@ -164,6 +174,27 @@ export class RedisPresence implements Presence {
   async tryLease(name: string, holder: string, ttlSeconds: number): Promise<boolean> {
     const r = await this.client.eval(LEASE_SCRIPT, 1, redisKeys.lease(name), holder, Math.max(1, Math.ceil(ttlSeconds)));
     return Number(r) === 1;
+  }
+
+  async setKey(key: string, value: string, ttlSeconds: number): Promise<void> {
+    await this.client.set(key, value, 'EX', Math.max(1, Math.ceil(ttlSeconds)));
+  }
+
+  async getKey(key: string): Promise<string | null> {
+    return this.client.get(key);
+  }
+
+  async delKey(key: string): Promise<void> {
+    await this.client.del(key);
+  }
+
+  async consume(key: string): Promise<string | null> {
+    const v = await this.client.eval(CONSUME_SCRIPT, 1, key);
+    return typeof v === 'string' ? v : null;
+  }
+
+  async incr(key: string, ttlSeconds: number): Promise<number> {
+    return Number(await this.client.eval(INCR_SCRIPT, 1, key, Math.max(1, Math.ceil(ttlSeconds))));
   }
 
   async publish(channel: string, message: object): Promise<void> {

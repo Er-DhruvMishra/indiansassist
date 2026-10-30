@@ -25,9 +25,11 @@ type Props = {
   toolbar?: ReactNode;
   fullscreenRef?: RefObject<HTMLDivElement>;
   emptyText: string;
+  /** Phase C section 5.2: the transparent input overlay of a P3 console, stacked over the video. */
+  overlay?: ReactNode;
 };
 
-export function RemoteView({ stream, annot, tool, color, fit, watermark, description, onAnnot, onCanvas, onFirstFrame, onFrameSize, toolbar, fullscreenRef, emptyText }: Props) {
+export function RemoteView({ stream, annot, tool, color, fit, watermark, description, onAnnot, onCanvas, onFirstFrame, onFrameSize, toolbar, fullscreenRef, emptyText, overlay }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
@@ -100,6 +102,7 @@ export function RemoteView({ stream, annot, tool, color, fit, watermark, descrip
             style={fit ? { width: 'auto', height: 'auto' } : undefined}
           />
           <AnnotationCanvas state={annot} frameW={frame.w} frameH={frame.h} fit="fill" tool={tool} color={color} onAnnot={onAnnot} />
+          {overlay}
         </div>
       </div>
     </div>

@@ -8,7 +8,6 @@ import { sha256Hex } from '../canonical.js';
 import {
   BACKSTAGE_ACTIONS,
   CONSENT_LEVELS,
-  INPUT_MODES,
   LIMITS,
   MASK_SCOPES,
   MIRROR_SCOPES,
@@ -26,6 +25,8 @@ const nodeId = z.number().int().nonnegative().max(0x7fffffff);
 const tabIds = z.array(tabId).min(1).max(LIMITS.tabsCloseMax);
 const reason = z.string().min(1).max(LIMITS.reasonMax);
 const delta = z.number().finite().min(-100000).max(100000);
+/** The B browser input modes (`INPUT_MODES` also carries the Phase C `os`, which no B op accepts). */
+export const BROWSER_INPUT_MODES = ['dom', 'debugger'] as const;
 /** `http(s)` only; anything else answers `bad_args` (section 5.2). */
 export const navigableUrlSchema = z.string().max(8192).url().refine(isMirrorableUrl, 'only http: and https: URLs');
 
@@ -147,7 +148,7 @@ export const CONTROL_ARGS = {
   }),
   'input.scroll': z.strictObject({ tabId, nodeId: nodeId.nullable(), dx: delta, dy: delta }),
   'input.fill': z.strictObject({ tabId, nodeId, value: z.string().max(LIMITS.fillValueMax), commit: z.boolean() }),
-  'input.mode': z.strictObject({ tabId, mode: z.enum(INPUT_MODES) }),
+  'input.mode': z.strictObject({ tabId, mode: z.enum(BROWSER_INPUT_MODES) }),
   'level.request': z
     .strictObject({ level: z.enum(CONSENT_LEVELS), reason: reason.optional() })
     .refine((a) => (a.level !== 'in_page' && a.level !== 'deep_control') || a.reason !== undefined, {
@@ -281,6 +282,9 @@ export const controlResponseSchema = z.discriminatedUnion('ok', [
 ]);
 export type ControlResponse = z.infer<typeof controlResponseSchema>;
 
+/** B section 5.2 prompt cards; Phase C section 5.1 adds `elevation` (section 7.3 Allow) and `file` (section 6.1 F4). */
+export const PROMPT_KINDS = ['level', 'mask', 'attach', 'elevation', 'file'] as const;
+
 const ev = <K extends string, S extends z.ZodRawShape>(kind: K, shape: S) =>
   z.strictObject({ t: z.literal('ctl.event'), kind: z.literal(kind), ts, ...shape });
 
@@ -293,7 +297,7 @@ export const controlEventSchema = z.discriminatedUnion('kind', [
   }),
   ev('paused', { tabId, paused: z.boolean() }),
   ev('backstage', { tabId, state: z.enum(['opened', 'closed', 'front']) }),
-  ev('prompt', { id: reqId, promptKind: z.enum(['level', 'mask', 'attach']), state: z.enum(['shown', 'answered']), opId: z.string().regex(/^[0-9a-f]{16}$/) }),
+  ev('prompt', { id: reqId, promptKind: z.enum(PROMPT_KINDS), state: z.enum(['shown', 'answered']), opId: z.string().regex(/^[0-9a-f]{16}$/) }),
 ]);
 export type ControlEvent = z.infer<typeof controlEventSchema>;
 

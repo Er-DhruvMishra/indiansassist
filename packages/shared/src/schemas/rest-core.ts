@@ -191,6 +191,15 @@ export const statusChangeRequestSchema = z.object({ status: z.enum(['active', 'd
 // ---------- org policies (Phase B 11.3) ----------
 
 /** GET / PATCH `/orgs/current/policy/retention` (Y26): null keeps recordings until deleted manually. */
+/**
+ * GET / PATCH `/orgs/current/policy/agent` (Phase C sections 1.3 step 7, 13.1): the console's security-code gate before
+ * `control` / `elevated`. Default `true`; with `false` the step is shown but skippable.
+ */
+export const agentPolicySchema = z.strictObject({ requireSasConfirm: z.boolean() });
+/** Alias named in the Phase C contracts (section 13.1 `orgPolicySchema += requireSasConfirm`). */
+export const orgPolicySchema = agentPolicySchema;
+export const DEFAULT_AGENT_POLICY = Object.freeze({ requireSasConfirm: true });
+
 export const retentionPolicySchema = z.strictObject({
   recordingRetentionDays: z.number().int().min(1).max(LIMITS.recordingRetentionDaysMax).nullable(),
 });

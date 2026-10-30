@@ -67,6 +67,12 @@ async function main(): Promise<void> {
     await closeDb(db);
     process.exit(0);
   };
+  // Phase C section 2.2: re-read AGENT_DIST_DIR/manifest.json (Windows has no SIGHUP; restart instead).
+  if (process.platform !== 'win32')
+    process.on('SIGHUP', () => {
+      ctx.agentDist.load();
+      app.log.info({ builds: ctx.agentDist.manifest().builds.length }, 'agent manifest reloaded');
+    });
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }

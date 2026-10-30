@@ -8,6 +8,7 @@
 import {
   DEFAULT_EXTENSION_POLICY,
   base64urlEncode,
+  isConsentLevel,
   mergePolicy,
   utf8Encode,
   type ConsentLevel,
@@ -155,7 +156,7 @@ export class MirrorConsoleController extends SessionControllerBase<MirrorSnapsho
       s.on('session.created', mine((m: SessionCreated) => this.onCreated(m))),
       s.on('consent.changed', mine((m) => {
         if (m.state === 'granted') {
-          this.set({ level: m.level ?? this.snap.level, scope: m.scope ?? this.snap.scope, backstage: m.backstage ?? this.snap.backstage, notice: null });
+          this.set({ level: isConsentLevel(m.level) ? m.level : this.snap.level, scope: m.scope ?? this.snap.scope, backstage: m.backstage ?? this.snap.backstage, notice: null });
           if (this.snap.phase !== 'live') this.set({ phase: 'connecting' });
           this.ensureLink();
         } else if (m.state === 'revoked') {

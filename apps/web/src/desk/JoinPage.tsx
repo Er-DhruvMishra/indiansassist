@@ -22,6 +22,8 @@ import { JOIN_LABEL_KEY, readStore, writeStore } from '../lib/storage';
 import { saveJoinBrand } from './brand';
 import { DeskLayout } from './DeskLayout';
 import { JoinP2 } from './JoinP2';
+import { JoinP3 } from './JoinP3';
+import { AGENT_SEEN_KEY } from './agentDownload';
 
 type LookupError = { message: string; retry?: boolean };
 
@@ -68,6 +70,7 @@ export function JoinPage() {
   const [manualError, setManualError] = useState<string | null>(null);
   const [label, setLabel] = useState(() => readStore('session', JOIN_LABEL_KEY) ?? '');
   const took = useRef(false);
+  const [kept, setKept] = useState(false);
 
   const lookup = async (c: JoinCode) => {
     setBusy(true);
@@ -88,6 +91,11 @@ export function JoinPage() {
   useEffect(() => {
     if (took.current) return;
     took.current = true;
+    // Phase C 2.5 L3 / J5: the agent opens /join?kept=1 once after the Desk chose Keep; only this sets the flag.
+    if (new URLSearchParams(location.search).get('kept') === '1') {
+      writeStore('local', AGENT_SEEN_KEY, '1');
+      setKept(true);
+    }
     const t = readTokenParam(location.hash, location.search);
     if (!t) return;
     // Step 1: the bearer leaves the URL bar, the history entry and any Referer immediately.
@@ -124,6 +132,7 @@ export function JoinPage() {
   return (
     <DeskLayout brand={info?.org ?? null}>
       <h1 className="mb-4 text-2xl font-semibold">Join a support session</h1>
+      {kept && <Alert tone="green">IndiansAssist is kept on this computer. Next time, support links open it directly.</Alert>}
       {busy && <Spinner label="Checking your link" />}
       {error && (
         <div className="mb-4 flex flex-col gap-2">
@@ -153,7 +162,9 @@ export function JoinPage() {
               {secondsLeft > 0 ? `Expires in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}` : 'Expired'}
             </Badge>
           </div>
-          {info.tier === 'p2_extension' ? (
+          {info.tier === 'p3_portable' ? (
+            <JoinP3 info={info} code={code.value} accent={accent} expired={secondsLeft === 0} />
+          ) : info.tier === 'p2_extension' ? (
             <JoinP2 info={info} code={code.value} accent={accent} expired={secondsLeft === 0} />
           ) : (
             <>

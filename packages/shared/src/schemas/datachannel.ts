@@ -6,6 +6,10 @@ import { z } from 'zod';
 import { DEFAULT_ANNOT_COLOR, LIMITS, MIRROR_TRANSPORTS } from '../enums.js';
 import { epochMsSchema, hex64Schema, hexColorSchema, sideSchema, uint32Schema, uuidSchema } from './common.js';
 import { controlEventSchema, controlRequestSchema, controlResponseSchema, tabInfoSchema } from '../extension/control.js';
+import { agentControlEventSchema, agentControlRequestSchema } from '../agent/control.js';
+import { pbEndSchema, pbOutputSchema } from '../agent/playbook.js';
+import { secCommitSchema, secConfirmSchema, secFailSchema, secHelloSchema } from '../agent/sec.js';
+import { agentStatsSchema } from './signal-messages-p3.js';
 
 const ts = epochMsSchema;
 const unit = z.number().min(0).max(1);
@@ -29,7 +33,19 @@ const color = hexColorSchema.default(DEFAULT_ANNOT_COLOR);
 const ttlMs = z.number().int().min(1).max(LIMITS.annotTtlMaxMs).default(LIMITS.annotTtlDefaultMs);
 /** Required in P2 (coordinates relative to that tab's viewport, Y8); the extension drops messages without it. */
 const annotTabId = z.number().int().nonnegative().max(0x7fffffff).optional();
-const box = { t: z.literal('annot'), id: uuidSchema, a: pointSchema, b: pointSchema, color, ttlMs, ts, tabId: annotTabId };
+/** Required in P3 (Phase C section 3.6 M4, W15): coordinates are relative to that monitor's video frame. */
+const annotMonitorId = z.number().int().min(1).max(LIMITS.monitorsMax).optional();
+const box = {
+  t: z.literal('annot'),
+  id: uuidSchema,
+  a: pointSchema,
+  b: pointSchema,
+  color,
+  ttlMs,
+  ts,
+  tabId: annotTabId,
+  monitorId: annotMonitorId,
+};
 
 export const annotArrowSchema = z.object({ ...box, shape: z.literal('arrow') });
 export const annotRectSchema = z.object({ ...box, shape: z.literal('rect') });
@@ -42,8 +58,15 @@ export const annotPointerSchema = z.object({
   color,
   ts,
   tabId: annotTabId,
+  monitorId: annotMonitorId,
 });
-export const annotClearSchema = z.object({ t: z.literal('annot'), shape: z.literal('clear'), ts, tabId: annotTabId });
+export const annotClearSchema = z.object({
+  t: z.literal('annot'),
+  shape: z.literal('clear'),
+  ts,
+  tabId: annotTabId,
+  monitorId: annotMonitorId,
+});
 
 export const dcAnnotSchema = z.discriminatedUnion('shape', [
   annotArrowSchema,
@@ -165,8 +188,20 @@ export const dataChannelMessageSchema = z.discriminatedUnion('t', [
   controlRequestSchema,
   controlResponseSchema,
   controlEventSchema,
+  // Phase C: ia.sec handshake, ia.playbook output and agent.stats on ia.ctrl
+  secCommitSchema,
+  secHelloSchema,
+  secConfirmSchema,
+  secFailSchema,
+  pbOutputSchema,
+  pbEndSchema,
+  agentStatsSchema,
 ]);
 export type DataChannelMessage = z.infer<typeof dataChannelMessageSchema>;
+
+/** A P3 `ia.control` message (section 5.1): a native op, the shared `ctl.res`, a native event or the B `prompt` event. */
+export const agentControlMessageSchema = z.union([agentControlRequestSchema, controlResponseSchema, agentControlEventSchema, controlEventSchema]);
+export type AgentControlMessage = z.infer<typeof agentControlMessageSchema>;
 export type DataChannelType = DataChannelMessage['t'];
 
 /** Which `t` values belong on which channel label. */
@@ -174,13 +209,16 @@ export const DATA_CHANNEL_TYPES = {
   'ia.chat': ['chat', 'chat.ack', 'typing'],
   'ia.annot': ['annot'],
   'ia.file': ['file.offer', 'file.accept', 'file.reject', 'file.done', 'file.ack', 'file.cancel'],
-  'ia.ctrl': ['stop.sharing', 'consent.revoked', 'recording.state', 'voice.state', 'ping', 'pong'],
+  'ia.ctrl': ['stop.sharing', 'consent.revoked', 'recording.state', 'voice.state', 'ping', 'pong', 'agent.stats'],
   'ia.mirror': ['mirror.tabs', 'mirror.tab', 'mirror.ack', 'mirror.nack'],
   'ia.control': ['ctl.req', 'ctl.res', 'ctl.event'],
+  // Phase C sections 1.3, 5.1
+  'ia.sec': ['sec.commit', 'sec.hello', 'sec.confirm', 'sec.fail'],
+  'ia.playbook': ['pb.output', 'pb.end'],
 } as const satisfies Record<string, readonly DataChannelType[]>;
 
 export type DataChannelParseResult =
-  | { ok: true; msg: DataChannelMessage }
+  | { ok: true; msg: DataChannelMessage | AgentControlMessage }
   | { ok: false; reason: 'bad_json' | 'bad_payload' | 'wrong_channel'; issues?: z.core.$ZodIssue[] };
 
 /**
@@ -199,7 +237,14 @@ export function parseDataChannelMessage(
   } catch {
     return { ok: false, reason: 'bad_json' };
   }
-  const parsed = dataChannelMessageSchema.safeParse(value);
+  let parsed = dataChannelMessageSchema.safeParse(value) as
+    | { success: true; data: DataChannelMessage | AgentControlMessage }
+    | { success: false; error: z.ZodError };
+  // A P3 session's ia.control carries the native ops and events (section 5.1), disjoint from the B ops.
+  if (!parsed.success && label === 'ia.control') {
+    const agent = agentControlMessageSchema.safeParse(value);
+    if (agent.success) parsed = agent;
+  }
   if (!parsed.success) return { ok: false, reason: 'bad_payload', issues: parsed.error.issues };
   const allowed = DATA_CHANNEL_TYPES[label] as readonly string[];
   if (!allowed.includes(parsed.data.t)) return { ok: false, reason: 'wrong_channel' };

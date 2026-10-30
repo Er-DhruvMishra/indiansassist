@@ -46,6 +46,7 @@ import {
   setSessionCookie,
 } from '../plugins/auth.js';
 import { limits } from '../plugins/security.js';
+import { planHasPlaybooks, seedStarterPlaybooks } from '../services/playbook-seed.js';
 
 const LOCKOUT_WINDOW_MS = 15 * 60_000;
 const LOCKOUT_FAILURES = 10;
@@ -108,6 +109,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
           action: 'auth.signup',
           data: { emailHash: piiHash(org, body.email.trim().toLowerCase()) },
         });
+        // Phase C section 8.6: an org whose plan includes P3 starts with the starter playbooks.
+        if (planHasPlaybooks(org.planTier)) await seedStarterPlaybooks(ctx, tx, org, user.id);
         const minted = await mintSession(tx, req, user, org);
         return { org, user, seat, raw: minted.raw };
       });

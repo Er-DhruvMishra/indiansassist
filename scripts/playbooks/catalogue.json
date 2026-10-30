@@ -1,0 +1,38 @@
+{
+  "v": 1,
+  "description": "Phase C section 8.6 starter catalogue; bodies are the files named here. Seeded by apps/api at signup (P3 plans) and by scripts/seed-playbooks.mjs; apps/api test/playbooks.test.ts asserts both agree.",
+  "playbooks": [
+    {
+      "file": "clear-temp.ps1",
+      "name": "Clear temp files",
+      "description": "Removes files in the user and Windows temp folders (best effort) and reports the space freed.",
+      "interpreter": "powershell",
+      "requiresElevation": false,
+      "timeoutSec": 120
+    },
+    {
+      "file": "flush-dns.cmd",
+      "name": "Flush DNS cache",
+      "description": "Runs ipconfig /flushdns.",
+      "interpreter": "cmd",
+      "requiresElevation": false,
+      "timeoutSec": 30
+    },
+    {
+      "file": "restart-spooler.ps1",
+      "name": "Restart Print Spooler",
+      "description": "Restarts the Print Spooler service and prints its status. Needs elevation.",
+      "interpreter": "powershell",
+      "requiresElevation": true,
+      "timeoutSec": 60
+    },
+    {
+      "file": "collect-logs.ps1",
+      "name": "Collect logs (zip)",
+      "description": "Exports 24 h of System and Application event logs plus ipconfig /all and systeminfo into a zip, then asks the Desk to send it.",
+      "interpreter": "powershell",
+      "requiresElevation": false,
+      "timeoutSec": 180
+    }
+  ]
+}

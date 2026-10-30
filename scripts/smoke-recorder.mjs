@@ -16,13 +16,16 @@
 // session.recording { source: 'server' } on both sides -> recorder offer relayed to the Desk tagged peer:'recorder',
 // the Desk's answer and ICE relayed back -> Desk ends -> session.ended to the recorder -> internal upload with the
 // service token -> the session audit holds recording.server_started, recording.server_stopped, recording.stored
-// { source: 'server' } in order, and the stored recording verifies. Exits 1 on any failure.
+// { source: 'server' } in order, and the stored recording verifies. With a P3 plan (SIGNUP_PLAN_TIER=p3_portable) the
+// Phase C cases follow (smoke/flow-recorder-p3.mjs): a native Desk on a p3 session and the hand-over pause /
+// re-assign. Exits 1 on any failure.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { ApiClient, signalUrlFor } from './smoke/http.mjs';
 import { check, Runner } from './smoke/runner.mjs';
 import { SignalClient } from './smoke/ws-client.mjs';
+import { recorderP3Steps } from './smoke/flow-recorder-p3.mjs';
 
 const eq = (a, b, what) => check(a === b, `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
 
@@ -54,7 +57,7 @@ export async function runSmokeRecorder(opts = {}) {
     });
     await run.step('signup throwaway org and set recording policy to server', async () => {
       const id = `rec${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
-      await api.expect(
+      const signed = await api.expect(
         'POST',
         '/api/v1/auth/signup',
         {
@@ -65,6 +68,8 @@ export async function runSmokeRecorder(opts = {}) {
         },
         [201],
       );
+      st.planTier = signed.org.planTier;
+      st.userId = signed.user.id;
       const p = await api.expect('PATCH', '/api/v1/orgs/current/policy/recording', { recordingMode: 'server' });
       eq(p.recordingMode, 'server', 'recordingMode');
       const g = await api.expect('GET', '/api/v1/orgs/current/policy/recording');
@@ -215,6 +220,9 @@ export async function runSmokeRecorder(opts = {}) {
       eq(s.serverRecording, true, 'Session.serverRecording');
       eq(s.serverRecordingId, st.recordingId, 'Session.serverRecordingId');
     });
+    // Phase C (section 15.4): the recorder on a p3_portable session with a native fake Desk and the hand-over.
+    if (!run.aborted)
+      await recorderP3Steps(run, { api, apiUrl, st, open, tmo, token, planTier: st.planTier, userId: st.userId });
   } finally {
     for (const s of sockets) s.close();
   }

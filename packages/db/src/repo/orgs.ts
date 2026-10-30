@@ -22,6 +22,8 @@ export type OrgPatch = {
   branding?: OrgBranding;
   planTier?: PackageTier;
   ssoConfig?: Record<string, unknown> | null;
+  /** Phase C section 1.3 step 7 (agent policy). */
+  requireSasConfirm?: boolean;
   /** Phase B 11.1 (stored as given; read through mergePolicy). */
   extensionPolicy?: Record<string, unknown>;
   recordingRetentionDays?: number | null;
@@ -71,7 +73,7 @@ export async function isSlugTaken(exec: Executor, slug: string): Promise<boolean
   return (await getOrgBySlug(exec, slug)) !== null;
 }
 
-const PATCHABLE = new Set<string>(['name', 'branding', 'planTier', 'ssoConfig', 'extensionPolicy', 'recordingRetentionDays', 'recordingMode']);
+const PATCHABLE = new Set<string>(['name', 'branding', 'planTier', 'ssoConfig', 'extensionPolicy', 'recordingRetentionDays', 'recordingMode', 'requireSasConfirm']);
 
 /**
  * Updates mutable org columns. Throws RegionImmutableError when the patch carries `dataRegion` (or its column

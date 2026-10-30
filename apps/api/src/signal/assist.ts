@@ -39,8 +39,15 @@ import {
   startConsentTimer,
 } from './messages.js';
 import { authorizeSession, refuse } from './relay.js';
+import { ensureAgentManifest } from './agent-manifest.js';
 
 const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
+
+function pickDefined<T extends object>(o: T, keys: readonly (keyof T)[]): Partial<T> {
+  const out: Partial<T> = {};
+  for (const k of keys) if (o[k] !== undefined) out[k] = o[k];
+  return out;
+}
 
 /** Minimum spacing of `session.path_changed` entries for one session. */
 export const PATH_CHANGE_MIN_MS = 30_000;
@@ -136,6 +143,7 @@ export async function handleAssistAccept(hub: SignalHub, conn: Conn, msg: Signal
   live.assistConnId = conn.id;
   clearTimer(live, 'knock');
   startConsentTimer(hub, live);
+  await ensureAgentManifest(hub, live, row);
   const assistRef = { id: p.user.id, name: p.user.name };
   conn.send({ ...sessionCreatedMsg(hub, row, org, assistRef, 'assist'), ...re(msg.id) });
   hub.conn(live.deskConnId)?.send(sessionCreatedMsg(hub, row, org, assistRef, 'desk'));
@@ -212,6 +220,7 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
   }
   const s = (await getSession(ctx.db, s0.id))!;
   ensureLive(hub, s);
+  await ensureAgentManifest(hub, live, s);
   conn.send({ ...sessionCreatedMsg(hub, s, org, { id: p.user.id, name: p.user.name }, 'assist'), ...re(msg.id) });
   if (live.recorder.joined) conn.send({ t: 'session.recording', sessionId: s.id, recording: true, source: 'server' });
   scheduleIceRefresh(hub, live, 'assist');
@@ -236,6 +245,8 @@ export async function handleSessionStats(hub: SignalHub, conn: Conn, msg: Signal
     ...(msg.mirrorTabs !== undefined ? { mirrorTabs: msg.mirrorTabs } : {}),
     ...(msg.mirrorTransport !== undefined ? { mirrorTransport: msg.mirrorTransport } : {}),
     ...(msg.sessionKbps !== undefined ? { sessionKbps: msg.sessionKbps } : {}),
+    // Phase C section 4.4: the agent stats the console folds in (P3).
+    ...pickDefined(msg, ['encoder', 'hwEncoder', 'floorMode', 'targetKbps', 'captureFps', 'capturePath', 'monitorsStreaming', 'encodeMs', 'glassMs']),
     path: msg.path,
     rttMs: msg.rttMs,
     codec: msg.codec,

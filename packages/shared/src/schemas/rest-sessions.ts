@@ -1,8 +1,8 @@
 /** REST schemas: sessions, audit, recordings, ICE, residency (contracts 6.3, 6.8-6.11). */
 import { z } from 'zod';
 import {
-  CONSENT_LEVELS,
   DESK_BROWSERS,
+  ELEVATION_LEVELS,
   DESK_CLIENT_KINDS,
   DESK_OSES,
   LIMITS,
@@ -11,8 +11,16 @@ import {
   RECORDING_SOURCES,
   RRWEB_RECORDING_MIME,
   SESSION_END_REASONS,
+  STORED_CONSENT_LEVELS,
+  TOKEN_SOURCES,
 } from '../enums.js';
 import { ASSIST_EVENT_DATA, ASSIST_EVENT_REASON_ACTIONS, type AssistEventP2Action } from '../audit/actions-p2.js';
+import {
+  ASSIST_EVENT_P3_DATA,
+  ASSIST_EVENT_P3_REASON_ACTIONS,
+  type AssistEventP3Action,
+} from '../audit/actions-p3.js';
+import { agentCapabilitiesSchema } from '../agent/capabilities.js';
 import {
   actorTypeSchema,
   consentStateSchema,
@@ -23,7 +31,6 @@ import {
   isoDateTimeInputSchema,
   isoTimestampSchema,
   jsonObjectSchema,
-  kidSchema,
   packageTierSchema,
   participantRoleSchema,
   recordingStatusSchema,
@@ -64,7 +71,8 @@ export const sessionSchema = z.object({
   recordingId: uuidSchema.nullable(),
   hashChainTail: hex64Schema.nullable(),
   // Phase B 11.1 (nullable; always sent by the api, optional so Phase A fixtures still parse).
-  consentLevel: z.enum(CONSENT_LEVELS).nullable().optional(),
+  /** Both families (Phase C section 3.4): read it through `consentLevelFamily(tier)`. */
+  consentLevel: z.enum(STORED_CONSENT_LEVELS).nullable().optional(),
   consentScope: z.enum(MIRROR_SCOPES).nullable().optional(),
   consentBackstage: z.boolean().nullable().optional(),
   deskClient: z
@@ -73,6 +81,10 @@ export const sessionSchema = z.object({
       version: z.string().optional(),
       browser: z.object({ name: z.enum(DESK_BROWSERS), version: z.string() }).optional(),
       os: z.enum(DESK_OSES).optional(),
+      // Phase C section 3.1 (native Desks)
+      platform: z.object({ osVersion: z.string(), arch: z.string() }).optional(),
+      tokenSource: z.enum(TOKEN_SOURCES).optional(),
+      capabilities: agentCapabilitiesSchema.optional(),
     })
     .nullable()
     .optional(),
@@ -80,6 +92,10 @@ export const sessionSchema = z.object({
   recordingMode: z.enum(RECORDING_MODES).nullable().optional(),
   serverRecording: z.boolean().optional(),
   serverRecordingId: uuidSchema.nullable().optional(),
+  // Phase C section 13.1 (P3 sessions; null otherwise)
+  consentMonitors: z.number().int().min(1).max(16).nullable().optional(),
+  consentClipboard: z.boolean().nullable().optional(),
+  elevation: z.enum(ELEVATION_LEVELS).nullable().optional(),
 });
 
 export const sessionFileSchema = z.object({
@@ -150,6 +166,15 @@ export const fileEventDataSchema = z.object({
   sha256: hex64Schema,
 });
 
+function assistEventP3<A extends AssistEventP3Action>(action: A) {
+  const withReason = (ASSIST_EVENT_P3_REASON_ACTIONS as readonly string[]).includes(action);
+  return z.strictObject({
+    action: z.literal(action),
+    data: ASSIST_EVENT_P3_DATA[action],
+    ...(withReason ? { reason: z.string().max(LIMITS.reasonMax).optional() } : {}),
+  });
+}
+
 function assistEvent<A extends AssistEventP2Action>(action: A) {
   const withReason = (ASSIST_EVENT_REASON_ACTIONS as readonly string[]).includes(action);
   return z.strictObject({
@@ -168,11 +193,21 @@ export const sessionEventRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('file.received'), data: fileEventDataSchema }),
   z.object({ action: z.literal('recording.started'), data: z.strictObject({}) }),
   assistEvent('tab.action'),
-  assistEvent('control.input'),
+  // `control.input`: the P2 tab shape or (Phase C section 3.8) the `mode: 'os'` shape; the api checks the tier.
+  z.strictObject({
+    action: z.literal('control.input'),
+    data: z.union([ASSIST_EVENT_DATA['control.input'], ASSIST_EVENT_P3_DATA['control.input']]),
+  }),
   assistEvent('mask.requested'),
   assistEvent('level.requested'),
   assistEvent('backstage.enter'),
   assistEvent('backstage.exit'),
+  assistEventP3('input.text_burst'),
+  assistEventP3('clipboard.sync'),
+  assistEventP3('monitor.selected'),
+  assistEventP3('elevation.requested'),
+  assistEventP3('sec.failed'),
+  assistEventP3('sec.verified'),
 ]);
 /** Alias named in the Phase B contracts (section 11.2). */
 export const sessionEventBodySchema = sessionEventRequestSchema;
@@ -331,45 +366,3 @@ export const recordingFileQuerySchema = z.object({
 
 export const iceQuerySchema = z.object({ sessionId: uuidSchema.optional() });
 export const iceResponseSchema = iceConfigSchema;
-
-// ---------- residency (6.3) ----------
-
-export const residencyReportSchema = z.object({
-  org: z.object({ id: uuidSchema, name: z.string(), slug: z.string(), dataRegion: regionSchema }),
-  generatedAt: isoTimestampSchema,
-  servedBy: z.object({ region: regionSchema, apiOrigin: z.string(), nodeId: z.string() }),
-  storage: z.object({ driver: z.string(), bucket: z.string(), prefix: z.string() }),
-  ice: z.object({
-    stunUrls: z.array(z.string()),
-    turnUrls: z.array(z.string()),
-    thirdPartyHosts: z.array(z.string()),
-  }),
-  counts: z.object({
-    users: z.number().int().nonnegative(),
-    tokens: z.number().int().nonnegative(),
-    sessions: z.number().int().nonnegative(),
-    recordings: z.number().int().nonnegative(),
-    recordingBytes: z.number().int().nonnegative(),
-    auditEntries: z.number().int().nonnegative(),
-  }),
-  chain: z.object({
-    length: z.number().int().nonnegative(),
-    tail: hex64Schema.nullable(),
-    lastVerifiedAt: isoTimestampSchema.nullable(),
-    lastVerifiedOk: z.boolean().nullable(),
-    lastAnchor: z
-      .object({ seq: z.number().int().nonnegative(), tail: hex64Schema, ts: isoTimestampSchema, kid: kidSchema })
-      .nullable(),
-  }),
-  /** Phase B 11.3 additions (always sent by the api; optional so Phase A fixtures still parse). */
-  extensionPolicy: z.object({ allowRelayFallback: z.boolean(), recordRevealed: z.boolean() }).optional(),
-  relaySessions: z.number().int().nonnegative().optional(),
-  relayBytes: z.number().int().nonnegative().optional(),
-  recordingRetentionDays: z.number().int().positive().nullable().optional(),
-  retention: z.object({
-    auditEntries: z.literal('append-only, never deleted'),
-    piiInChain: z.literal('hashed with a per-org pepper; pepper destruction is the erasure mechanism (Phase E)'),
-    recordings: z.literal('until deleted by an org_admin (Phase B endpoint)'),
-  }),
-  statement: z.string(),
-});

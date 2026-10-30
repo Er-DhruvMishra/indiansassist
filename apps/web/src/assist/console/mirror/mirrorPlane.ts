@@ -282,7 +282,9 @@ export class MirrorPlane {
       }
       this.deps.set(patch);
     } else if (e.kind === 'prompt') {
-      this.deps.set({ promptOpen: e.state === 'shown' ? e.promptKind : null });
+      // Phase C adds the agent-only prompt kinds (elevation, file); a P2 console never shows them.
+      const kind = e.promptKind === 'level' || e.promptKind === 'mask' || e.promptKind === 'attach' ? e.promptKind : null;
+      this.deps.set({ promptOpen: e.state === 'shown' ? kind : null });
     }
   }
 

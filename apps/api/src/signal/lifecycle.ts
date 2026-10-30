@@ -100,6 +100,25 @@ function graceEnd(hub: SignalHub, live: Live, side: 'assist' | 'desk'): void {
   }).catch((err: unknown) => ctx.log.error({ err, sessionId: live.id }, `${side} grace end failed`));
 }
 
+/** The `session.ended` frame of an ended session (also re-sent on a repeated `session.end`, W21). */
+export async function sessionEndedFrame(hub: SignalHub, s: EndedSession['session']): Promise<Record<string, unknown>> {
+  const names = await userRefs(hub.ctx.db, [s.assistUserId]);
+  return {
+    t: 'session.ended',
+    sessionId: s.id,
+    endReason: s.endReason ?? 'error',
+    endedAt: iso(s.endedAt ?? new Date()),
+    startedAt: isoOrNull(s.startedAt),
+    durationMs: s.startedAt && s.endedAt ? Math.max(0, s.endedAt.getTime() - s.startedAt.getTime()) : null,
+    hashChainTail: s.hashChainTail ?? null,
+    assist: refOf(names, s.assistUserId),
+    surface: surfaceOf(s),
+    recordingStarted: s.recordingStarted,
+    reachedActive: s.startedAt !== null,
+    serverRecording: s.serverRecording,
+  };
+}
+
 export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promise<void> {
   const { ctx } = hub;
   const s = ended.session;

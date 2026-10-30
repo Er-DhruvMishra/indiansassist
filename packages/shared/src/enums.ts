@@ -271,7 +271,17 @@ export const DEFAULT_ANNOT_COLOR = '#f59e0b';
  * Data channel labels (Phase A section 8, Phase B section 4.2). A P1 session creates only the first four
  * (`P1_DATA_CHANNEL_LABELS`); a P2 session adds `ia.mirror` and `ia.control`.
  */
-export const DATA_CHANNEL_LABELS = ['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl', 'ia.mirror', 'ia.control'] as const;
+export const DATA_CHANNEL_LABELS = [
+  'ia.chat',
+  'ia.annot',
+  'ia.file',
+  'ia.ctrl',
+  'ia.mirror',
+  'ia.control',
+  // Phase C section 1.3 / 5.1: the handshake channel and the playbook output channel of a P3 session.
+  'ia.sec',
+  'ia.playbook',
+] as const;
 export type DataChannelLabel = (typeof DATA_CHANNEL_LABELS)[number];
 export const P1_DATA_CHANNEL_LABELS = ['ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl'] as const satisfies readonly DataChannelLabel[];
 
@@ -326,16 +336,19 @@ export function isConsentLevel(x: unknown): x is ConsentLevel {
 export const MIRROR_SCOPES = ['current_tab', 'all_tabs'] as const;
 export type MirrorScope = (typeof MIRROR_SCOPES)[number];
 
-export const DESK_CLIENT_KINDS = ['web', 'extension'] as const;
+/** Phase C section 3.1: `native` = the Rust agent or the Android host. */
+export const DESK_CLIENT_KINDS = ['web', 'extension', 'native'] as const;
 export type DeskClientKind = (typeof DESK_CLIENT_KINDS)[number];
 
 export const DESK_BROWSERS = ['chrome', 'edge', 'other'] as const;
 export type DeskBrowser = (typeof DESK_BROWSERS)[number];
 
-export const DESK_OSES = ['windows', 'mac', 'linux', 'cros', 'other'] as const;
+/** `android` (Phase C section 3.1) only with `kind: 'native'` (the `deskClientSchema` refinement). */
+export const DESK_OSES = ['windows', 'mac', 'linux', 'cros', 'other', 'android'] as const;
 export type DeskOs = (typeof DESK_OSES)[number];
 
-export const INPUT_MODES = ['dom', 'debugger'] as const;
+/** `os` (Phase C section 3.8): OS-level input of a native Desk; the B `input.mode` op keeps `dom` / `debugger`. */
+export const INPUT_MODES = ['dom', 'debugger', 'os'] as const;
 export type InputMode = (typeof INPUT_MODES)[number];
 
 export const MIRROR_TRANSPORTS = ['dc', 'relay'] as const;
@@ -365,7 +378,8 @@ export type BackstageOutcome = (typeof BACKSTAGE_OUTCOMES)[number];
 export const BACKSTAGE_ACTIONS = ['close', 'keep', 'bring_to_front'] as const;
 export type BackstageAction = (typeof BACKSTAGE_ACTIONS)[number];
 
-export const INPUT_KINDS = ['pointer', 'key', 'scroll', 'fill'] as const;
+/** `text` (Phase C section 3.8): characters typed through `os.text`. */
+export const INPUT_KINDS = ['pointer', 'key', 'scroll', 'fill', 'text'] as const;
 export type InputKind = (typeof INPUT_KINDS)[number];
 
 /** Fixed-length mask for secrets and masked text (section 4.1): discloses nothing about the length. */
@@ -377,103 +391,5 @@ export const EXTENSION_ID_PLACEHOLDER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 /** Media type of an Assist-side rrweb mirror recording (section 4.7). */
 export const RRWEB_RECORDING_MIME = 'application/x-ia-rrweb+jsonl';
 
-/**
- * Phase C section 1.3: the secure-channel (`ia.sec`) names. Every P3 data channel except `ia.sec` is encrypted;
- * `SEC_LABEL_IDS` is the label byte of the frame nonce. Mirrored by `ia_core::sec` (Rust) and `SecChannel` (Kotlin).
- */
-export const SEC_SUITE = 'x25519-xchacha20poly1305-hkdfsha256' as const;
-export const SEC_ENCRYPTED_LABELS = ['ia.control', 'ia.file', 'ia.playbook', 'ia.chat', 'ia.annot', 'ia.ctrl'] as const;
-export type SecEncryptedLabel = (typeof SEC_ENCRYPTED_LABELS)[number];
-export const SEC_LABEL_IDS: Record<SecEncryptedLabel, number> = {
-  'ia.control': 1,
-  'ia.file': 2,
-  'ia.playbook': 3,
-  'ia.chat': 4,
-  'ia.annot': 5,
-  'ia.ctrl': 6,
-};
-export const P3_DATA_CHANNEL_LABELS = ['ia.sec', 'ia.chat', 'ia.annot', 'ia.file', 'ia.ctrl', 'ia.control', 'ia.playbook'] as const;
-export const SEC_FAIL_REASONS = [
-  'suite',
-  'commit',
-  'fingerprint',
-  'key',
-  'mac',
-  'timeout',
-  'replay',
-  'decrypt',
-  'oversize',
-  'channel',
-] as const;
-export type SecFailReason = (typeof SEC_FAIL_REASONS)[number];
-export const SEC_SIDES = ['desk', 'assist'] as const;
-export type SecSide = (typeof SEC_SIDES)[number];
-
-/** Phase C section 3.4: the P3 consent-level family, ordered. Distinct from the P2 `CONSENT_LEVELS`. */
-export const AGENT_CONSENT_LEVELS = ['view', 'control', 'elevated'] as const;
-export type AgentConsentLevel = (typeof AGENT_CONSENT_LEVELS)[number];
-export const AGENT_CONSENT_LEVEL_ORDER: Record<AgentConsentLevel, number> = { view: 0, control: 1, elevated: 2 };
-export function isAgentConsentLevel(v: unknown): v is AgentConsentLevel {
-  return typeof v === 'string' && (AGENT_CONSENT_LEVELS as readonly string[]).includes(v);
-}
-/** `a >= b` within the P3 family; throws on a value of the other family (section 3.4 family rule). */
-export function agentLevelAtLeast(a: AgentConsentLevel, b: AgentConsentLevel): boolean {
-  if (!isAgentConsentLevel(a) || !isAgentConsentLevel(b)) throw new Error(`not a P3 consent level: ${String(a)} / ${String(b)}`);
-  return AGENT_CONSENT_LEVEL_ORDER[a] >= AGENT_CONSENT_LEVEL_ORDER[b];
-}
-/** Which consent-level family a tier uses (section 3.4): compare levels only after branching on this. */
-export function consentLevelFamily(tier: PackageTier): 'p2' | 'p3' {
-  return tier === 'p3_portable' ? 'p3' : 'p2';
-}
-
-/** Phase C sections 3.1-8 enumerations, mirrored by `ia_core::types` and the Kotlin host. */
-export const ELEVATION_LEVELS = ['user', 'admin'] as const;
-export type ElevationLevel = (typeof ELEVATION_LEVELS)[number];
-export const AGENT_FEATURES = [
-  'screen',
-  'multi_monitor',
-  'input',
-  'input_text',
-  'clipboard',
-  'files',
-  'chat',
-  'voice',
-  'elevation',
-  'playbooks',
-  'nav',
-  'input_lock',
-  'privacy_screen',
-] as const;
-export type AgentFeature = (typeof AGENT_FEATURES)[number];
-export const VIDEO_ENCODERS = ['vp8', 'vp9', 'h264', 'av1'] as const;
-export type VideoEncoder = (typeof VIDEO_ENCODERS)[number];
-export const QUALITY_PRESETS = ['auto', 'sharp', 'smooth', 'floor'] as const;
-export type QualityPreset = (typeof QUALITY_PRESETS)[number];
-export const TOKEN_SOURCES = ['arg', 'deeplink', 'sidecar', 'filename', 'clipboard', 'manual'] as const;
-export type TokenSource = (typeof TOKEN_SOURCES)[number];
-export const PLAYBOOK_INTERPRETERS = ['powershell', 'cmd', 'sh'] as const;
-export type PlaybookInterpreter = (typeof PLAYBOOK_INTERPRETERS)[number];
-export const PLAYBOOK_ERRORS = [
-  'timeout',
-  'cancelled',
-  'spawn_failed',
-  'hash_mismatch',
-  'not_allowed',
-  'elevation_required',
-  'busy',
-  'output_error',
-] as const;
-export type PlaybookError = (typeof PLAYBOOK_ERRORS)[number];
-export const ELEVATION_DENY_CAUSES = ['refused', 'timeout', 'uac_cancelled', 'policy'] as const;
-export const ELEVATION_FAIL_ERRORS = [
-  'launch_failed',
-  'handover_expired',
-  'handover_rejected',
-  'connect_failed',
-  'uac_unavailable',
-  'image_mismatch',
-] as const;
-export const NAV_ACTIONS = ['back', 'home', 'recents', 'notifications'] as const;
-export type NavAction = (typeof NAV_ACTIONS)[number];
-export const CAPTURE_PATHS = ['dda', 'gdi', 'projection'] as const;
-export type CapturePath = (typeof CAPTURE_PATHS)[number];
+// Phase C (docs/specs/phase-c-contracts.md section 13.1): the P3 enumerations live in enums-p3.ts.
+export * from './enums-p3.js';

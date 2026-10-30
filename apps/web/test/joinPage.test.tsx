@@ -162,8 +162,8 @@ describe('join page', () => {
     expect(screen.getByLabelText('Paste your support code or link')).toBeTruthy();
   });
 
-  it('shows the stub for tiers other than p1_browser', async () => {
-    respond = () => jsonResponse(200, publicToken({ tier: 'p3_portable', joinSupported: false }));
+  it('shows the stub for tiers without a join client (p4_installed; p3 has its own branch)', async () => {
+    respond = () => jsonResponse(200, publicToken({ tier: 'p4_installed', joinSupported: false }));
     renderAt(`/join#t=${COMPACT}`);
     expect(await screen.findByText(/not available yet/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Join support session' })).toBeNull();
