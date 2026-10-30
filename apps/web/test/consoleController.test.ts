@@ -25,6 +25,32 @@ let ws: FakeWebSocket;
 let signal: SignalClient;
 let ctrl: AssistConsoleController;
 
+/** A Desk-created data channel delivered to the console's fake connection (`ondatachannel`). */
+class DeskChannel extends EventTarget {
+  readyState: RTCDataChannelState = 'open';
+  binaryType = 'arraybuffer';
+  bufferedAmount = 0;
+  bufferedAmountLowThreshold = 0;
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  constructor(readonly label: string) {
+    super();
+  }
+  send(): void {}
+  close(): void {
+    this.readyState = 'closed';
+    this.dispatchEvent(new Event('close'));
+  }
+  deliver(msg: object): void {
+    this.onmessage?.({ data: JSON.stringify(msg) } as MessageEvent);
+  }
+}
+
+function deskChannel(pc: FakePeerConnection, label: string): DeskChannel {
+  const ch = new DeskChannel(label);
+  (pc as unknown as { ondatachannel: ((e: { channel: DeskChannel }) => void) | null }).ondatachannel?.({ channel: ch });
+  return ch;
+}
+
 beforeEach(() => {
   FakeWebSocket.reset();
   FakePeerConnection.reset();
@@ -173,6 +199,28 @@ describe('AssistConsoleController', () => {
     expect(pc.closed).toBe(true);
     expect(ctrl.snapshot.phase).toBe('ended');
     expect(ctrl.snapshot.remoteVideo).toBeNull();
+  });
+
+  it('stop.sharing tears down at once; the state changes of the Desk teardown are not a media failure', () => {
+    vi.useFakeTimers();
+    ctrl.start(created('active') as never, true);
+    const pc = FakePeerConnection.instances[0]!;
+    pc.setConnectionState('connected');
+    const ch = deskChannel(pc, 'ia.ctrl');
+    ch.deliver({ t: 'stop.sharing', ts: 1 });
+    expect(pc.closed).toBe(true);
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(ctrl.snapshot.notice).toMatch(/stopped sharing/);
+    ch.close();
+    pc.setConnectionState('failed');
+    vi.advanceTimersByTime(30000);
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(ctrl.snapshot.relayOnly).toBe(false);
+    expect(pc.restarts).toBe(0);
+    expect(ws.ofType('session.end')).toHaveLength(0);
+    ws.receive({ t: 'session.ended', sessionId: IDS.session, endReason: 'desk_stopped', endedAt: LATER, startedAt: LATER, durationMs: 0, hashChainTail: null, assist: { id: IDS.user, name: 'Anil K' }, surface: 'monitor', recordingStarted: false, reachedActive: true });
+    expect(ctrl.snapshot.phase).toBe('ended');
+    expect(ctrl.snapshot.ended?.endReason).toBe('desk_stopped');
   });
 
   it('End session tears down locally first, then sends session.end', async () => {

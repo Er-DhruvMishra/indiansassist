@@ -32,6 +32,8 @@ export type AgentLinkOptions = {
   /** Injected in tests (the fake connection has no descriptions). */
   fingerprints?: () => { own: string; remote: string } | null;
   handshake?: SecureHubOptions['handshake'];
+  /** The controller's orderly-end flag: channel closes after it are teardown, not `sec.fail { reason: 'channel' }`. */
+  isOrderlyEnd?: () => boolean;
 };
 
 export class AgentLink {
@@ -48,6 +50,11 @@ export class AgentLink {
       fingerprints: o.fingerprints ?? (() => this.descriptionFingerprints()),
       onEstablished: (r) => o.events.onEstablished(r),
       onFailed: (r) => o.events.onFailed(r),
+      isOrderlyEnd: () => this.closed || o.isOrderlyEnd?.() === true,
+      connectionAlive: () => {
+        const st = this.peer.pc.connectionState;
+        return st !== 'closed' && st !== 'failed';
+      },
       handshake: o.handshake,
     });
     this.files = new FileTransfer(this.hub, 'assist', (l) => o.events.onTransfers(l), o.attest, NATIVE_SEND_OPTIONS);

@@ -278,14 +278,24 @@ export class MirrorConsoleController extends SessionControllerBase<MirrorSnapsho
         onTransfers: (list) => this.set({ transfers: [...this.oldTransfers, ...list] }),
         onCtrl: (m) => {
           if (m.t === 'voice.state') this.set({ peerMuted: m.muted });
-          else if (m.t === 'stop.sharing') this.set({ notice: 'The Desk stopped sharing.' });
-          else if (m.t === 'consent.revoked') this.set({ notice: 'The Desk revoked consent.' });
+          else if (m.t === 'stop.sharing') this.onPeerEnd('The Desk stopped sharing.');
+          else if (m.t === 'consent.revoked') this.onPeerEnd('The Desk revoked consent.');
         },
       },
     });
     this.link = link;
     const track = this.mic?.getAudioTracks()[0];
     if (track && this.mic) link.addTrack(track, this.mic);
+  }
+
+  /**
+   * The Desk announced its hard rule 2 teardown (A section 8.1): tear down here as well so the connection state
+   * changes that follow are not read as a dropped link, and wait for `session.ended`.
+   */
+  private onPeerEnd(notice: string): void {
+    if (this.snap.phase === 'ending' || this.snap.phase === 'ended') return this.set({ notice });
+    this.teardown();
+    this.set({ phase: 'ending', notice });
   }
 
   /** Hard rule 2 minus consent state and the mirror recorder (Phase B 3.5): only the link is replaced. */

@@ -1,7 +1,8 @@
 /**
  * P3 console controller end to end against an in-process fake agent: the `ia.sec` handshake with the shared
  * SecHandshake on both ends, encrypted ia.control / ia.playbook frames, the SAS gate per key generation, input ops
- * only in Control, elevation and playbook reporting, a rebuild (`restart`, `gen`) and the `sec:` failure path.
+ * only in Control, elevation and playbook reporting, a rebuild (`restart`, `gen`) and the `sec:` failure path, and
+ * the orderly end (A section 7.4 hard rule 2: the Desk closes its channels before its own end frame, which must win).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { P3_DATA_CHANNEL_LABELS, SecHandshake, type SecEncryptedLabel } from '@indiansassist/shared';
@@ -111,6 +112,7 @@ beforeEach(() => {
       reports.push(b);
     },
     loadPolicy: async () => ({ requireSasConfirm: true }),
+    peerEndFallbackMs: 200,
     runPlaybook: async (_s, playbookId, args) => ({
       runId: 'c'.repeat(32),
       opId: '0123456789abcdef',
@@ -137,6 +139,28 @@ async function live(gen = 0): Promise<Desk> {
   const d = await connectDesk(gen);
   await vi.waitFor(() => expect(ctrl.snapshot.sec.state).toBe('established'));
   return d;
+}
+
+const sessionEnded = (endReason: string) => ({
+  t: 'session.ended',
+  sessionId: IDS.session,
+  endReason,
+  endedAt: LATER,
+  startedAt: LATER,
+  durationMs: 1000,
+  hashChainTail: null,
+  assist: { id: IDS.user, name: 'Anil K' },
+  surface: 'monitor',
+  recordingStarted: false,
+  reachedActive: true,
+});
+
+/** Lets the deferred close decision (one macrotask) and any async failure path run. */
+const settle = () => new Promise((r) => setTimeout(r, 20));
+
+/** The Desk's hard rule 2 teardown as the console sees it: every channel closes. */
+function deskTeardown(d: Desk) {
+  for (const ch of d.chans.values()) ch.close();
 }
 
 describe('AgentConsoleController', () => {
@@ -218,6 +242,90 @@ describe('AgentConsoleController', () => {
     await vi.waitFor(() => expect(ws.ofType('session.end')).toHaveLength(1));
     expect(ws.ofType('session.end')[0]!['note']).toMatch(/^sec:/);
     expect(reports.some((r) => r.action === 'sec.failed')).toBe(true);
+  });
+
+  it('stop.sharing then the channel closes is an orderly end: ended desk_stopped, no sec.failed, no sec: end', async () => {
+    const d = await live();
+    deskSend(d, 'ia.ctrl', { t: 'stop.sharing', ts: 1 });
+    deskTeardown(d);
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(ctrl.snapshot.notice).toMatch(/stopped sharing/);
+    expect(FakePeerConnection.instances[0]!.closed).toBe(true);
+    await settle();
+    expect(ctrl.snapshot.sec.state).toBe('established');
+    expect(ctrl.snapshot.error).toBeNull();
+    ws.receive(sessionEnded('desk_stopped'));
+    expect(ctrl.snapshot.phase).toBe('ended');
+    expect(ctrl.snapshot.ended?.endReason).toBe('desk_stopped');
+    await new Promise((r) => setTimeout(r, 250));
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+    expect(ws.ofType('session.end')).toHaveLength(0);
+  });
+
+  it('a close on another channel in the same tick as stop.sharing is decided after the message (no sec.fail)', async () => {
+    const d = await live();
+    d.chans.get('ia.control')!.close();
+    d.chans.get('ia.file')!.close();
+    deskSend(d, 'ia.ctrl', { t: 'stop.sharing', ts: 1 });
+    await settle();
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+    expect(ws.ofType('session.end')).toHaveLength(0);
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(d.hs.state).toBe('established');
+  });
+
+  it('a mid-session channel close without a stop message is sec.fail channel (step 9)', async () => {
+    const d = await live();
+    d.chans.get('ia.control')!.close();
+    await vi.waitFor(() => expect(ws.ofType('session.end')).toHaveLength(1));
+    expect(ws.ofType('session.end')[0]!['note']).toBe('sec:channel');
+    expect(reports.find((r) => r.action === 'sec.failed')?.data).toEqual({ reason: 'channel' });
+    expect(ctrl.snapshot.sec).toMatchObject({ state: 'failed', failReason: 'channel' });
+    expect(d.hs.state).toBe('failed');
+    expect(FakePeerConnection.instances[0]!.closed).toBe(true);
+  });
+
+  it('consent.revoked then the channel closes ends as consent_revoked, with no sec.failed', async () => {
+    const d = await live();
+    deskSend(d, 'ia.ctrl', { t: 'consent.revoked', ts: 1 });
+    deskTeardown(d);
+    await settle();
+    ws.receive({ t: 'consent.changed', sessionId: IDS.session, state: 'revoked' });
+    ws.receive(sessionEnded('consent_revoked'));
+    expect(ctrl.snapshot.phase).toBe('ended');
+    expect(ctrl.snapshot.ended?.endReason).toBe('consent_revoked');
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+    expect(ws.ofType('session.end')).toHaveLength(0);
+  });
+
+  it('closes after session.ended or our own End are teardown, not a channel violation', async () => {
+    const d = await live();
+    await ctrl.endSession();
+    deskTeardown(d);
+    await settle();
+    expect(ws.ofType('session.end')).toEqual([expect.objectContaining({ sessionId: IDS.session })]);
+    expect(ws.ofType('session.end')[0]!['note']).toBeUndefined();
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+  });
+
+  it('a close after the connection failed is not a channel violation (the rule applies while it lives)', async () => {
+    const d = await live();
+    FakePeerConnection.instances[0]!.setConnectionState('failed');
+    d.chans.get('ia.control')!.close();
+    await settle();
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+    expect(ws.ofType('session.end')).toHaveLength(0);
+  });
+
+  it('after a stop message without session.ended the console falls back to a plain session.end', async () => {
+    const d = await live();
+    deskSend(d, 'ia.ctrl', { t: 'stop.sharing', ts: 1 });
+    deskTeardown(d);
+    await settle();
+    expect(ws.ofType('session.end')).toHaveLength(0);
+    await vi.waitFor(() => expect(ws.ofType('session.end')).toHaveLength(1));
+    expect(ws.ofType('session.end')[0]!['note']).toBe('peer:desk_stopped');
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
   });
 
   it('skip is refused while the org requires the confirmation', async () => {

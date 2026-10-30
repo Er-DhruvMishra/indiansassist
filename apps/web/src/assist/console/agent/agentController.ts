@@ -4,6 +4,13 @@
  * offers; every offer with `restart: true` (resume, third media-recovery failure, hand-over) rebuilds the link with
  * the next key generation and re-arms the security-code gate. The user-facing actions live in
  * `agentConsoleController.ts`. Hard rule 2 is `teardown()`.
+ *
+ * Orderly end (A section 7.4 hard rule 2): the Desk tears its channels and connection down before its WS end frame
+ * reaches the server, so once the end is known (`stop.sharing` / `consent.revoked` on a channel, `session.ended` or
+ * `consent.changed { revoked }` over signaling, or our own End) channel closes and connection state changes are
+ * teardown, never `sec.fail { reason: 'channel' }`. After a Desk stop message the Desk's own `session.end` wins: the
+ * console waits for `session.ended` and only sends a plain `session.end` (idempotent on the server) if none arrives
+ * within `AGENT_PEER_END_FALLBACK_MS`.
  */
 import { type AgentCapabilities, type SessionCreated, type SessionEnded, type SecFailReason } from '@indiansassist/shared';
 import { errorMessage } from '../../../lib/api';
@@ -33,9 +40,16 @@ export type AgentControllerDeps = {
   /** `POST /sessions/:id/events`; defaults to the REST client. */
   report?: (body: { action: string; data: Record<string, unknown>; reason?: string }) => Promise<unknown>;
   loadPolicy?: () => Promise<{ requireSasConfirm: boolean }>;
+  /** Overrides `AGENT_PEER_END_FALLBACK_MS` (tests). */
+  peerEndFallbackMs?: number;
 };
 
+/** How the session is ending, once known; `null` while it is live. */
+type EndingBy = 'desk_stopped' | 'consent_revoked' | 'server' | 'local';
+
 export const AGENT_STATS_SAMPLE_MS = 2500;
+/** After a Desk stop message, how long the console waits for `session.ended` before sending its own (plain) end. */
+export const AGENT_PEER_END_FALLBACK_MS = 10_000;
 const SHOWN_ERRORS = ['forbidden', 'session_not_found', 'bad_state', 'consent_required', 'relay_closed'];
 
 export class AgentControllerCore {
@@ -50,6 +64,8 @@ export class AgentControllerCore {
   private timers: ReturnType<typeof setInterval>[] = [];
   private statTick = 0;
   private oldTransfers: AgentSnapshot['transfers'] = [];
+  private endingBy: EndingBy | null = null;
+  private peerEndTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(protected readonly deps: AgentControllerDeps) {
     this.ops = new OpTracker(deps.sessionId, (m) => this.link?.hub.send(m as never) ?? false);
@@ -101,6 +117,7 @@ export class AgentControllerCore {
       s.on('session.created', mine((m: SessionCreated) => this.onCreated(m))),
       s.on('consent.changed', mine((m) => {
         if (m.state === 'revoked') {
+          this.endingBy ??= 'consent_revoked';
           this.teardown();
           return this.set({ notice: 'The Desk revoked consent.' });
         }
@@ -126,6 +143,8 @@ export class AgentControllerCore {
       })),
       s.on('chat.message', mine((m) => this.receiveChat(m))),
       s.on('session.ended', mine((m: SessionEnded) => {
+        this.endingBy = 'server';
+        this.clearPeerEndTimer();
         this.teardown();
         this.set({ phase: 'ended', ended: m });
       })),
@@ -181,6 +200,7 @@ export class AgentControllerCore {
       RTCPeerConnectionImpl: this.deps.RTCPeerConnectionImpl,
       fingerprints: this.deps.fingerprints,
       handshake: this.deps.handshake,
+      isOrderlyEnd: () => this.endingBy !== null,
       attest: async (action, data) => {
         await sessionsApi.fileEvent(this.id, action, data);
         return true;
@@ -192,6 +212,7 @@ export class AgentControllerCore {
           this.set({ streams: { ...this.snap.streams, [key]: streams[0] ?? new MediaStream([track]) } });
         },
         onConnectionState: (st) => {
+          if (this.endingBy) return;
           if (st === 'failed') this.set({ notice: 'The media connection failed; waiting for the Desk to rebuild it.' });
         },
         onEstablished: (r) => {
@@ -211,11 +232,20 @@ export class AgentControllerCore {
     });
   }
 
-  /** Section 1.3 step 9: `sec.failed`, teardown, `session.end { note: 'sec:<reason>' }`. */
+  /**
+   * Section 1.3 step 9: `sec.failed`, teardown, `session.end { note: 'sec:<reason>' }`. Not during an orderly end:
+   * the closes of a Desk teardown are not a security failure, and the Desk's own end frame must win.
+   */
   private async onSecFailed(reason: SecFailReason): Promise<void> {
+    if (this.endingBy) {
+      this.teardown();
+      return;
+    }
     this.set({ sec: { ...this.snap.sec, state: 'failed', failReason: reason }, error: `The secure channel failed (${reason}). The session is ending.` });
     await this.report({ action: 'sec.failed', data: { reason } });
     this.teardown();
+    if (this.snap.phase === 'ended') return;
+    this.endingBy ??= 'local';
     this.set({ phase: 'ending' });
     this.deps.signal.send({ t: 'session.end', sessionId: this.id, note: `sec:${reason}` });
   }
@@ -247,12 +277,36 @@ export class AgentControllerCore {
       case 'voice.state':
         return this.set({ peerMuted: m.muted });
       case 'stop.sharing':
-        return this.set({ notice: 'The Desk stopped sharing.' });
+        return this.onPeerEnd('desk_stopped');
       case 'consent.revoked':
-        return this.set({ notice: 'The Desk revoked consent.' });
+        return this.onPeerEnd('consent_revoked');
       default:
         return;
     }
+  }
+
+  /**
+   * The Desk announced its hard rule 2 teardown: tear down here too (input first), mark the end orderly so the closes
+   * that follow are not channel violations, and wait for the Desk's own end to come back as `session.ended`.
+   */
+  private onPeerEnd(kind: 'desk_stopped' | 'consent_revoked'): void {
+    const notice = kind === 'desk_stopped' ? 'The Desk stopped sharing.' : 'The Desk revoked consent.';
+    if (this.endingBy) return this.set({ notice });
+    this.endingBy = kind;
+    this.input.flush(true);
+    this.teardown();
+    this.set({ phase: 'ending', notice });
+    this.peerEndTimer = setTimeout(() => {
+      this.peerEndTimer = null;
+      if (this.disposed || this.snap.phase === 'ended') return;
+      // The Desk's end frame never came back as session.ended; a repeated session.end is idempotent server side.
+      void this.endSession(`peer:${kind}`);
+    }, this.deps.peerEndFallbackMs ?? AGENT_PEER_END_FALLBACK_MS);
+  }
+
+  private clearPeerEndTimer(): void {
+    if (this.peerEndTimer) clearTimeout(this.peerEndTimer);
+    this.peerEndTimer = null;
   }
 
   protected onControlEvent(_e: { kind: string } & Record<string, unknown>): void {
@@ -308,6 +362,8 @@ export class AgentControllerCore {
   }
 
   async endSession(note?: string): Promise<void> {
+    this.endingBy ??= 'local';
+    this.clearPeerEndTimer();
     this.input.flush(true);
     this.teardown();
     this.set({ phase: 'ending' });
@@ -324,6 +380,7 @@ export class AgentControllerCore {
   }
 
   dispose(): void {
+    this.clearPeerEndTimer();
     this.input.stop();
     this.teardown();
     for (const off of this.offs) off();

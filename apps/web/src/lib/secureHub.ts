@@ -6,6 +6,13 @@
  * Channel lifetime rule: a second channel with the same label, an unknown label, or a close of an encrypted channel
  * while the connection lives is `sec.fail { reason: 'channel' }`. Implements `HubLike` so the file transfer layer
  * runs unchanged on top of it.
+ *
+ * Orderly end versus violation: per A section 7.4 hard rule 2 the Desk closes its channels and its connection
+ * before (or right after) sending `stop.sharing` / `consent.revoked` and its WS end frame, so those closes are not
+ * channel violations. Once either message has been opened on a channel, or the owner reports an orderly end
+ * (`isOrderlyEnd`), or the connection itself is no longer alive, a close is ignored. The decision on a close is
+ * deferred by one macrotask and re-checked, so a stop message that arrives on another channel in the same tick as
+ * the close (SCTP orders per stream only) is processed first.
  */
 import {
   P3_DATA_CHANNEL_LABELS,
@@ -35,11 +42,20 @@ export type SecureHubOptions = {
   onEstablished: (r: SecEstablished) => void;
   /** A failure (sent or received): the caller writes `sec.failed` and ends the session (step 9). */
   onFailed: (reason: SecFailReason) => void;
+  /**
+   * True once the session is ending in order (a `session.ended` / `desk.consent revoked` arrived over signaling, or
+   * the console itself ended): later channel closes are teardown, not `sec.fail { reason: 'channel' }`.
+   */
+  isOrderlyEnd?: () => boolean;
+  /** False once the peer connection is `closed` / `failed`; the channel lifetime rule only applies while it lives. */
+  connectionAlive?: () => boolean;
   /** Injected in tests (fixed keys, no timer). */
   handshake?: (send: (m: SecMessage) => void, fpr: { own: string; remote: string }) => SecHandshake;
 };
 
 const HOLD_MAX = 512;
+/** Inbound messages that announce the Desk's hard rule 2 teardown (A section 8.1, `ia.ctrl`). */
+const PEER_END_MESSAGES: ReadonlySet<string> = new Set(['stop.sharing', 'consent.revoked']);
 
 export class SecureHub implements HubLike {
   private readonly channels = new Map<string, RTCDataChannel>();
@@ -50,6 +66,8 @@ export class SecureHub implements HubLike {
   private hs: SecHandshake | null = null;
   private failed = false;
   private closing = false;
+  private peerEnd: 'stop.sharing' | 'consent.revoked' | null = null;
+  private closeTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(private readonly o: SecureHubOptions) {}
 
@@ -59,6 +77,26 @@ export class SecureHub implements HubLike {
 
   get handshake(): SecHandshake | null {
     return this.hs;
+  }
+
+  /** The Desk's end announcement seen on a channel (`stop.sharing` / `consent.revoked`), else null. */
+  get peerEnded(): 'stop.sharing' | 'consent.revoked' | null {
+    return this.peerEnd;
+  }
+
+  /** Whether a close now would be part of an orderly end rather than a channel violation. */
+  private closeIsOrderly(): boolean {
+    return this.closing || this.failed || this.peerEnd !== null || this.o.isOrderlyEnd?.() === true || this.o.connectionAlive?.() === false;
+  }
+
+  /** Channel lifetime rule, decided one macrotask after the close so a same-tick stop message is seen first. */
+  private onChannelClose(): void {
+    if (this.closeIsOrderly()) return;
+    const timer = setTimeout(() => {
+      this.closeTimers.delete(timer);
+      if (!this.closeIsOrderly()) this.fail('channel');
+    }, 0);
+    this.closeTimers.add(timer);
   }
 
   attach(label: string, ch: RTCDataChannel): void {
@@ -74,7 +112,7 @@ export class SecureHub implements HubLike {
     ch.binaryType = 'arraybuffer';
     ch.onmessage = (ev: MessageEvent) => this.receiveFrame(label, ev.data);
     ch.addEventListener('close', () => {
-      if (!this.closing && isSecEncryptedLabel(label)) this.fail('channel');
+      if (isSecEncryptedLabel(label)) this.onChannelClose();
     });
     if (label === 'ia.sec') {
       if (ch.readyState === 'open') queueMicrotask(() => this.startHandshake());
@@ -148,6 +186,7 @@ export class SecureHub implements HubLike {
       console.warn('[sec] dropped message on', label, parsed.reason);
       return;
     }
+    if (PEER_END_MESSAGES.has(parsed.msg.t)) this.peerEnd = parsed.msg.t as 'stop.sharing' | 'consent.revoked';
     for (const h of [...this.handlers]) h(parsed.msg);
   }
 
@@ -219,6 +258,8 @@ export class SecureHub implements HubLike {
   /** Hard rule 2 / rebuild: the closes that follow are not channel violations; old keys are zeroised. */
   close(): void {
     this.closing = true;
+    for (const t of this.closeTimers) clearTimeout(t);
+    this.closeTimers.clear();
     for (const ch of this.channels.values()) {
       ch.onmessage = null;
       try {

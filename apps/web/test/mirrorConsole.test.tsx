@@ -47,6 +47,32 @@ let signal: SignalClient;
 let ctrl: MirrorConsoleController;
 let reports: unknown[];
 
+/** A Desk-created data channel delivered to the console's fake connection (`ondatachannel`). */
+class DeskChannel extends EventTarget {
+  readyState: RTCDataChannelState = 'open';
+  binaryType = 'arraybuffer';
+  bufferedAmount = 0;
+  bufferedAmountLowThreshold = 0;
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  constructor(readonly label: string) {
+    super();
+  }
+  send(): void {}
+  close(): void {
+    this.readyState = 'closed';
+    this.dispatchEvent(new Event('close'));
+  }
+  deliver(msg: object): void {
+    this.onmessage?.({ data: JSON.stringify(msg) } as MessageEvent);
+  }
+}
+
+function deskChannel(pc: FakePeerConnection, label: string): DeskChannel {
+  const ch = new DeskChannel(label);
+  (pc as unknown as { ondatachannel: ((e: { channel: DeskChannel }) => void) | null }).ondatachannel?.({ channel: ch });
+  return ch;
+}
+
 function grant(level: string, backstage = false) {
   act(() => ws.receive({ t: 'consent.changed', sessionId: IDS.session, state: 'granted', surface: 'browser', level, scope: 'current_tab', backstage }));
 }
@@ -183,6 +209,25 @@ describe('MirrorConsole', () => {
     expect(relayed().some((m) => m.op === 'backstage.exit')).toBe(false);
     await user.click(within(dialog).getByRole('button', { name: 'Bring to front' }));
     expect(relayed().at(-1)).toEqual({ op: 'backstage.exit', args: { tabId: 7, action: 'bring_to_front' } });
+  });
+});
+
+describe('P2 orderly end (A section 7.4 hard rule 2)', () => {
+  it('consent.revoked on ia.ctrl tears down at once and waits for session.ended', () => {
+    grant('tab_control');
+    const pc = FakePeerConnection.instances[0]!;
+    act(() => pc.setConnectionState('connected'));
+    const ch = deskChannel(pc, 'ia.ctrl');
+    act(() => ch.deliver({ t: 'consent.revoked', ts: 1 }));
+    expect(pc.closed).toBe(true);
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(ctrl.snapshot.notice).toMatch(/revoked consent/);
+    act(() => pc.setConnectionState('failed'));
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(ws.ofType('session.end')).toHaveLength(0);
+    act(() => ws.receive({ t: 'session.ended', sessionId: IDS.session, endReason: 'consent_revoked', endedAt: LATER, startedAt: LATER, durationMs: 0, hashChainTail: null, assist: { id: IDS.user, name: 'Anil K' }, surface: 'browser', recordingStarted: false, reachedActive: true }));
+    expect(ctrl.snapshot.phase).toBe('ended');
+    expect(ctrl.snapshot.ended?.endReason).toBe('consent_revoked');
   });
 });
 
