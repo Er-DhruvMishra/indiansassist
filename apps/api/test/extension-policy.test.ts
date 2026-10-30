@@ -3,6 +3,7 @@ import { BUILTIN_DENY_LIST, DEFAULT_EXTENSION_POLICY, pepperedHash } from '@indi
 import { getOrg } from '@indiansassist/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { csrfOk } from '../src/plugins/security.js';
+import { reportClock } from '../src/routes/session-events.js';
 import { addMember, call, createToken, listen, makeApp, signup, type Account, type TestApp } from './helpers.js';
 import { EXT_ORIGIN, licenceP2, OP, P2Kit, p2Token, patchPolicy, sessionAudit } from './p2-kit.js';
 
@@ -126,21 +127,27 @@ describe('POST /sessions/:id/events console reports (3.7, Y24)', () => {
   it('is limited to 10 / s burst 30 per session', async () => {
     const limited = await makeApp({ RATE_LIMIT_DISABLED: 'false' }, { tickMs: 50 });
     const k2 = new P2Kit(limited, await listen(limited.app));
+    // The bucket's clock is held still, so how long the requests take on a loaded machine cannot refill it.
+    let now = Date.now();
+    reportClock.now = () => now;
     try {
       const a = await signup(limited.app);
       await licenceP2(limited, a);
       const s = await k2.active(a);
-      const codes = (
-        await Promise.all(
-          // 100 at once: even when a loaded machine spreads them over a few seconds of 10 / s refill, burst 30 runs out.
-          Array.from({ length: 100 }, (_, i) =>
-            call(limited.app, `/api/v1/sessions/${s.sessionId}/events`, { cookie: a.cookie, body: { action: 'tab.action', data: { kind: 'tabs.pin', opId: OP, tabId: i } } }),
-          ),
-        )
-      ).map((r) => r.statusCode);
-      expect(codes.filter((c) => c === 201).length).toBeGreaterThanOrEqual(30);
-      expect(codes).toContain(429);
+      const report = (i: number) =>
+        call(limited.app, `/api/v1/sessions/${s.sessionId}/events`, { cookie: a.cookie, body: { action: 'tab.action', data: { kind: 'tabs.pin', opId: OP, tabId: i } } });
+      const burst = await Promise.all(Array.from({ length: 40 }, (_, i) => report(i)));
+      expect(burst.filter((r) => r.statusCode === 201)).toHaveLength(30);
+      const refused = burst.filter((r) => r.statusCode === 429);
+      expect(refused).toHaveLength(10);
+      expect(refused[0]!.json().error.code).toBe('rate_limited');
+      expect(refused[0]!.headers['retry-after']).toBe('1');
+      now += 500; // half a second refills 5 at 10 / s
+      const refill = await Promise.all(Array.from({ length: 8 }, (_, i) => report(100 + i)));
+      expect(refill.filter((r) => r.statusCode === 201)).toHaveLength(5);
+      expect(refill.filter((r) => r.statusCode === 429)).toHaveLength(3);
     } finally {
+      reportClock.now = () => Date.now();
       k2.closeAll();
       await limited.close();
     }

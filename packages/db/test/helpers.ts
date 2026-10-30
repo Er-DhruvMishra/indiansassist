@@ -1,8 +1,19 @@
+import { readFileSync } from 'node:fs';
+import { inject } from 'vitest';
 import { closeDb, createDb, migrate, type Db } from '../src/index.js';
 
-/** Fresh in-memory PGlite with every migration applied. */
+let template: Blob | null | undefined;
+
+/**
+ * Fresh in-memory PGlite with every migration applied, started from the run's migrated template
+ * (test/global-setup.ts) when there is one; `migrate` then only confirms the journal.
+ */
 export async function freshDb(): Promise<Db> {
-  const db = await createDb({ databaseUrl: 'memory://' });
+  if (template === undefined) {
+    const file = inject('pgliteTemplate');
+    template = file ? new Blob([readFileSync(file)]) : null;
+  }
+  const db = await createDb({ databaseUrl: 'memory://', ...(template ? { pgliteLoadDataDir: template } : {}) });
   await migrate(db);
   return db;
 }

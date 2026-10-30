@@ -39,6 +39,11 @@ export type CreateDbOptions = {
   pgliteDir?: string;
   /** pg Pool size (pg driver only). */
   poolMax?: number;
+  /**
+   * PGlite only: start from a `dumpDataDir()` tarball instead of running initdb. Tests load one migrated template
+   * per run, which skips about 4 s of CPU and 250 MB of heap per database.
+   */
+  pgliteLoadDataDir?: Blob;
 };
 
 export type ResolvedTarget = { kind: 'pglite'; dataDir: string | null } | { kind: 'pg'; connectionString: string };
@@ -60,7 +65,8 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<Db> {
   const target = resolveDbTarget(opts);
   if (target.kind === 'pglite') {
     if (target.dataDir) mkdirSync(target.dataDir, { recursive: true });
-    const client = target.dataDir ? new PGlite(target.dataDir) : new PGlite();
+    const extra = opts.pgliteLoadDataDir ? { loadDataDir: opts.pgliteLoadDataDir } : {};
+    const client = target.dataDir ? new PGlite(target.dataDir, extra) : new PGlite(extra);
     await client.waitReady;
     const db = drizzlePglite({ client, schema });
     handles.set(db, { kind: 'pglite', client, dataDir: target.dataDir });

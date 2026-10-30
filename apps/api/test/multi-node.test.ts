@@ -9,14 +9,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { closeDb, createDb, getSession, listAuditBySession, migrate, type Db } from '@indiansassist/db';
+import { closeDb, getSession, listAuditBySession, type Db } from '@indiansassist/db';
 import { RedisLimiter } from '../src/adapters/limiter-redis.js';
 import { RedisPresence } from '../src/adapters/presence-redis.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { createMetrics } from '../src/lib/metrics.js';
 import { FakeRedisServer } from './fake-redis.js';
-import { call, createToken, listen, signup, SignalClient, TURN_SECRET, WEB_ORIGIN, type TestApp } from './helpers.js';
+import { call, createToken, listen, makeDb, signup, SignalClient, trackServerErrors, TURN_SECRET, WEB_ORIGIN, type TestApp } from './helpers.js';
 import { sleep } from './signal-kit.js';
 
 type Node = TestApp & { url: string; nodeId: string };
@@ -56,6 +56,7 @@ async function startNode(nodeId: string): Promise<Node> {
     metrics: createMetrics({ defaults: false }),
     timing: { graceMs: 400, tickMs: 50 },
   });
+  trackServerErrors(app);
   await app.ready();
   await presence.heartbeatNode(nodeId, 90);
   const url = await listen(app);
@@ -101,8 +102,7 @@ async function bridgedActive() {
 }
 
 beforeAll(async () => {
-  db = await createDb({ databaseUrl: 'memory://' });
-  await migrate(db);
+  db = await makeDb();
   srv = new FakeRedisServer();
   A = await startNode('node-a');
   B = await startNode('node-b');

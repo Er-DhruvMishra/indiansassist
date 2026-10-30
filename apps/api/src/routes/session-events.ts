@@ -43,11 +43,14 @@ type Body = ReturnType<typeof sessionEventRequestSchema.parse>;
 const buckets = new Map<string, TokenBucket>();
 const MAX_BUCKETS = 10_000;
 
+/** The buckets' clock: wall time, read through this object so tests can hold it still and assert the burst exactly. */
+export const reportClock: { now: () => number } = { now: () => Date.now() };
+
 export function takeReport(sessionId: string): boolean {
   let b = buckets.get(sessionId);
   if (!b) {
     if (buckets.size >= MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
-    b = new TokenBucket(LIMITS.assistEventsPerSec, LIMITS.assistEventsBurst);
+    b = new TokenBucket(LIMITS.assistEventsPerSec, LIMITS.assistEventsBurst, () => reportClock.now());
     buckets.set(sessionId, b);
   }
   return b.take();

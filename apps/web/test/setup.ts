@@ -1,5 +1,9 @@
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
+
+// findBy* / waitFor default to 1 s, which a lazy route's first render can exceed when `pnpm -r test` runs every
+// package at once; a passing wait returns as soon as it matches, so only a genuine failure waits the longer bound.
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();

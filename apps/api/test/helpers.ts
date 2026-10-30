@@ -1,9 +1,10 @@
 /** Test harness: buildApp on in-memory PGlite, cookie-aware inject helpers and a small `/signal` client. */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb, createDb, migrate, type Db } from '@indiansassist/db';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
+import { inject } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -20,6 +21,22 @@ export type TestApp = {
   storageDir: string;
   close: () => Promise<void>;
 };
+
+let template: Blob | null | undefined;
+
+/**
+ * A fresh in-memory PGlite with every migration applied, started from the run's migrated template
+ * (test/global-setup.ts) when there is one. `migrate` still runs: on the template it only confirms the journal.
+ */
+export async function makeDb(): Promise<Db> {
+  if (template === undefined) {
+    const file = inject('pgliteTemplate');
+    template = file ? new Blob([readFileSync(file)]) : null;
+  }
+  const db = await createDb({ databaseUrl: 'memory://', ...(template ? { pgliteLoadDataDir: template } : {}) });
+  await migrate(db);
+  return db;
+}
 
 export async function makeApp(env: Record<string, string> = {}, timing: Partial<Timing> = {}): Promise<TestApp> {
   const storageDir = mkdtempSync(join(tmpdir(), 'ia-api-test-'));
@@ -42,9 +59,9 @@ export async function makeApp(env: Record<string, string> = {}, timing: Partial<
     },
     { persistSecrets: false },
   );
-  const db = await createDb({ databaseUrl: 'memory://' });
-  await migrate(db);
+  const db = await makeDb();
   const { app, ctx } = await buildApp({ config, db, logLevel: 'silent', metrics: createMetrics({ defaults: false }), timing });
+  trackServerErrors(app);
   await app.ready();
   return {
     app,
@@ -57,6 +74,36 @@ export async function makeApp(env: Record<string, string> = {}, timing: Partial<
       rmSync(storageDir, { recursive: true, force: true });
     },
   };
+}
+
+const serverErrors = new WeakMap<FastifyInstance, string[]>();
+
+function describeError(err: unknown, depth = 0): string {
+  if (!(err instanceof Error)) return String(err);
+  const e = err as Error & { code?: unknown; cause?: unknown };
+  const own = `${e.name}${e.code !== undefined ? ` [${String(e.code)}]` : ''}: ${e.message}`;
+  return e.cause !== undefined && depth < 3 ? `${own} <- ${describeError(e.cause, depth + 1)}` : own;
+}
+
+/**
+ * Records the server-side cause of every 5xx (the app logger is silent in tests) so a helper that sees an
+ * unexpected status can say why; IA_TEST_DEBUG=1 also prints each one with its stack. Call before `ready()`.
+ */
+export function trackServerErrors(app: FastifyInstance): void {
+  const list: string[] = [];
+  serverErrors.set(app, list);
+  app.addHook('onError', async (req, _reply, err) => {
+    const line = `${req.method} ${req.url.split('?')[0]}: ${describeError(err)}`;
+    list.push(line);
+    if (list.length > 20) list.shift();
+    if (process.env['IA_TEST_DEBUG']) console.error(`[IA_TEST_DEBUG] ${line}\n${err.stack ?? ''}`);
+  });
+}
+
+/** The most recent server-side error recorded by trackServerErrors, for failure messages. */
+export function lastServerError(app: FastifyInstance): string {
+  const list = serverErrors.get(app);
+  return list && list.length > 0 ? ` (server: ${list[list.length - 1]})` : '';
 }
 
 export type Call = {
@@ -107,7 +154,7 @@ export async function signup(app: FastifyInstance, over: Record<string, unknown>
   const res = await call(app, '/api/v1/auth/signup', {
     body: { orgName: `Org ${id}`, name: 'Priya S', email: `${id}@example.test`, password: PASSWORD, ...over },
   });
-  if (res.statusCode !== 201) throw new Error(`signup failed ${res.statusCode} ${res.body}`);
+  if (res.statusCode !== 201) throw new Error(`signup failed ${res.statusCode} ${res.body}${lastServerError(app)}`);
   const body = res.json() as { user: Account['user']; org: Account['org'] };
   return { cookie: cookieOf(res), user: body.user, org: body.org };
 }
@@ -116,10 +163,10 @@ export async function signup(app: FastifyInstance, over: Record<string, unknown>
 export async function addMember(app: FastifyInstance, admin: Account, role: string, name = `User ${uniq()}`): Promise<Account> {
   const email = `${uniq(role)}@example.test`;
   const inv = await call(app, '/api/v1/users/invite', { cookie: admin.cookie, body: { email, name, role } });
-  if (inv.statusCode !== 201) throw new Error(`invite failed ${inv.statusCode} ${inv.body}`);
+  if (inv.statusCode !== 201) throw new Error(`invite failed ${inv.statusCode} ${inv.body}${lastServerError(app)}`);
   const secret = (inv.json() as { inviteUrl: string }).inviteUrl.split('#i=')[1]!;
   const acc = await call(app, '/api/v1/auth/accept-invite', { body: { invite: secret, name, password: PASSWORD } });
-  if (acc.statusCode !== 200) throw new Error(`accept failed ${acc.statusCode} ${acc.body}`);
+  if (acc.statusCode !== 200) throw new Error(`accept failed ${acc.statusCode} ${acc.body}${lastServerError(app)}`);
   const body = acc.json() as { user: Account['user']; org: Account['org'] };
   return { cookie: cookieOf(acc), user: body.user, org: body.org };
 }
@@ -130,7 +177,7 @@ export async function createToken(
   body: Record<string, unknown> = { tier: 'p1_browser', typ: 'one_time' },
 ): Promise<{ token: { id: string; shortCode: string; status: string }; compact: string; joinUrl: string }> {
   const res = await call(app, '/api/v1/tokens', { cookie: acc.cookie, body });
-  if (res.statusCode !== 201) throw new Error(`token create failed ${res.statusCode} ${res.body}`);
+  if (res.statusCode !== 201) throw new Error(`token create failed ${res.statusCode} ${res.body}${lastServerError(app)}`);
   return res.json();
 }
 

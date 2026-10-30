@@ -12,7 +12,19 @@ import { STORAGE_KEYS, type DownloadPrepareReply, type PublicToken } from '@indi
 import { JoinPage } from '../src/desk/JoinPage';
 import { JoinP3, P3_INTRO, P3_IOS, P3_UNAVAILABLE, type JoinP3Env } from '../src/desk/JoinP3';
 import { AGENT_SEEN_KEY, deepLinkFor, detectPlatform, tryDeepLink } from '../src/desk/agentDownload';
+import type * as AgentDownload from '../src/desk/agentDownload';
 import { IDS, jsonResponse } from './fakes';
+
+// jsdom implements neither navigation nor downloads (it logs "Not implemented: navigation"): the JoinPage test below
+// runs the default env, so its deep link and `<a download>` click are no-ops here. Tests passing an env are unaffected.
+vi.mock('../src/desk/agentDownload', async (importOriginal) => {
+  const real = await importOriginal<typeof AgentDownload>();
+  return {
+    ...real,
+    browserDeepLinkEnv: () => ({ ...real.browserDeepLinkEnv(), assign: () => undefined }),
+    clickDownload: () => undefined,
+  };
+});
 
 const CODE = 'ia1.3f9a1c2b4d5e6f70.eyJ2IjoxfQ.c2ln';
 const WIN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36';
@@ -152,6 +164,7 @@ describe('JoinP3 (Android, iOS)', () => {
     render(<JoinP3 info={token()} code={CODE} accent="#000" expired={false} env={e} />);
     const link = screen.getByRole('link', { name: 'Open in the IndiansAssist app' });
     expect(link.getAttribute('href')).toBe(`http://localhost:5173/join#t=${encodeURIComponent(CODE)}`);
+    link.addEventListener('click', (ev) => ev.preventDefault()); // jsdom cannot follow the App Link; the onClick still runs
     await user.click(link);
     await user.click(await screen.findByRole('button', { name: 'Get the app' }));
     await waitFor(() => expect(e.prepare).toHaveBeenCalledWith(CODE, 'android', 'universal'));

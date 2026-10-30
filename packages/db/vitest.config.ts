@@ -5,6 +5,7 @@ export default defineConfig({
     name: 'db',
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    globalSetup: ['test/global-setup.ts'],
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },
