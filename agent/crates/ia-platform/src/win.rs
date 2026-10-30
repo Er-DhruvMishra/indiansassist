@@ -123,7 +123,7 @@ fn write_sz(subkey: &str, name: &str, value: &str) -> io::Result<()> {
         RegCreateKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR(wsub.as_ptr()),
-            None,
+            0,
             PCWSTR::null(),
             REG_OPTION_NON_VOLATILE,
             KEY_WRITE,
@@ -142,7 +142,7 @@ fn write_sz(subkey: &str, name: &str, value: &str) -> io::Result<()> {
     let bytes: &[u8] =
         unsafe { std::slice::from_raw_parts(wval.as_ptr() as *const u8, wval.len() * 2) };
     // SAFETY: hkey live; name NUL-terminated; bytes covers the wide value incl. NUL.
-    let set = unsafe { RegSetValueExW(hkey, PCWSTR(wname.as_ptr()), None, REG_SZ, Some(bytes)) };
+    let set = unsafe { RegSetValueExW(hkey, PCWSTR(wname.as_ptr()), 0, REG_SZ, Some(bytes)) };
     // SAFETY: close the key we opened.
     let _ = unsafe { RegCloseKey(hkey) };
     if set.is_err() {

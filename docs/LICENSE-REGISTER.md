@@ -45,7 +45,7 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | subtle | BSD-3-Clause | constant-time compares | in use (Phase C) |
 | base64, hex | MIT OR Apache-2.0 | base64url / hex encodings | in use (Phase C) |
 | rand, rand_core | MIT OR Apache-2.0 | CSPRNG (desk codes, ephemeral keys) | in use (Phase C) |
-| getrandom (pinned =0.2.11) | MIT OR Apache-2.0 | OS entropy; pinned below the 0.2.12 raw-dylib change for the gnu dev toolchain (see agent/README.md) | in use (Phase C) |
+| getrandom | MIT OR Apache-2.0 | OS entropy (via rand); the earlier `=0.2.11` gnu-only pin is lifted now the MSVC host is the build target (ia-core still cross-checks on gnu) | in use (Phase C) |
 | regex | MIT OR Apache-2.0 | filename grammar, cmd value rule, path allow-list | in use (Phase C) |
 | url | MIT OR Apache-2.0 | strict deep-link parsing (§2.5) | in use (Phase C) |
 | icu_normalizer 2.4 (+ icu_normalizer_data, icu_provider, icu_collections, zerovec; already pulled in by url -> idna) | Unicode-3.0 | NFC in the A F5 `sanitiseFileName` port (`ia_core::files`) | in use (Phase C) |
@@ -56,16 +56,18 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | egui, eframe | MIT OR Apache-2.0 | consent/pill/panel UI | in use (Phase C, `gui` feature) |
 | tray-icon | MIT OR Apache-2.0 | tray icon | in use (Phase C, `gui` feature) |
 | tokio, tokio-tungstenite, futures-util | MIT (futures-util MIT OR Apache-2.0) | async runtime + `/signal` WS client | in use (Phase C, `media` feature) |
-| webrtc (webrtc-rs, with its ice/dtls/srtp/sctp/sdp/interceptor crates) | MIT OR Apache-2.0 | native WebRTC peer | in use (Phase C, `media` feature) |
-| libvpx (via vpx-sys/vpx), libopus (via audiopus/audiopus_sys) | BSD-3-Clause (wrappers MIT) | VP8/VP9 video, Opus audio | planned (Phase C `media` capture/encode path; built in CI) |
+| bytes, async-trait | MIT (async-trait MIT OR Apache-2.0) | data-channel buffers and webrtc-rs async callback traits | in use (Phase C, `media` feature) |
+| webrtc (webrtc-rs, pinned =0.17.1, with its ice/dtls/srtp/sctp/sdp/interceptor/rtp/rtcp/stun/turn/util/mdns/data/media crates and ring) | MIT OR Apache-2.0 (ring: ISC AND MIT AND OpenSSL) | native WebRTC peer (last release with the classic MediaEngine/interceptor API) | in use (Phase C, `media` feature) |
+| shiguredo_libvpx (=2026.2.0-canary.3; downloads a prebuilt static libvpx v1.17.0) | Apache-2.0 (wrapper); libvpx BSD-3-Clause | VP8/VP9 encode (prebuilt libvpx: no nasm/make needed on this host; §11.2 deviation from vpx-sys/vendored, see agent/README.md) | in use (Phase C, `media` feature) |
+| audiopus, audiopus_sys (libopus built from source via `cc`) | MIT (wrapper); libopus BSD-3-Clause | Opus voice encode (capability advertised; RTP audio path is stubbed, see agent/README.md) | in use (Phase C, `media` feature) |
 | rav1e | BSD-2-Clause | AV1 (feature `av1`, off by default) | planned (Phase C, off by default) |
 | openh264 | BSD-2-Clause (Cisco binary caveat, §4.2: MPEG-LA royalty exposure; not shipped in the default build) | H.264 software (feature `h264-sw`, off by default) | planned (Phase C, off by default) |
 | yuvutils-rs | BSD-3-Clause OR Apache-2.0 | BGRA→I420 (SIMD; the self-contained converter is the interim path) | planned (Phase C capture path) |
 | fast_image_resize | MIT OR Apache-2.0 | ladder downscale | planned (Phase C capture path) |
 | image | MIT OR Apache-2.0 | org-logo decode with limits (§3.3) | planned (Phase C `gui`) |
-| cpal | MIT OR Apache-2.0 | WASAPI audio I/O | planned (Phase C `media` voice) |
+| cpal | MIT OR Apache-2.0 | WASAPI audio I/O (voice device layer; full duplex stubbed) | in use (Phase C `media`) |
 | crossbeam-channel | MIT OR Apache-2.0 | bounded capture/encode channels (§4.1) | planned (Phase C `media`) |
-| rustls, webpki-roots | Apache-2.0 / MIT / ISC (webpki-roots MPL-2.0) | TLS for the WS/HTTP client (no native-tls/schannel) | planned (Phase C `media`) |
+| rustls, webpki-roots | Apache-2.0 / MIT / ISC (webpki-roots MPL-2.0) | TLS for the WS/HTTP client (no native-tls/schannel) | in use (Phase C `media`) |
 | **Phase C Android host (`apps/android`, Kotlin)** | | | |
 | io.getstream:stream-webrtc-android 1.3.10 (prebuilt Google libwebrtc) | Apache-2.0 (wrapper); libwebrtc BSD-3-Clause with its bundled third-party code (BoringSSL OpenSSL/ISC, libvpx BSD-3-Clause, libopus BSD-3-Clause, libyuv BSD-3-Clause, usrsctp BSD-3-Clause) | MediaProjection capture into a VideoTrack, MediaCodec / VP8 encode, SDP/ICE/DTLS-SRTP/SCTP, voice | in use (Phase C) |
 | com.google.crypto.tink:tink-android 1.18.0 (pinned; `subtle` X25519/HKDF/Ed25519 and `aead.internal.InsecureNonceXChaCha20Poly1305`) | Apache-2.0 | §1.3 handshake and frame crypto, compact-token Ed25519 verification | in use (Phase C) |

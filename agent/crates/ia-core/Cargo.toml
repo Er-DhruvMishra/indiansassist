@@ -22,11 +22,6 @@ base64.workspace = true
 hex.workspace = true
 rand.workspace = true
 rand_core.workspace = true
-# Pin getrandom below 0.2.12: from 0.2.12 it links the Windows CSPRNG via `raw-dylib`,
-# which on the gnu toolchain needs `dlltool` + `as`; this machine's self-contained
-# toolchain has neither. 0.2.11 links `advapi32` the ordinary way (libadvapi32.a is
-# bundled). See agent/README.md.
-getrandom = "=0.2.11"
 regex.workspace = true
 url.workspace = true
 thiserror.workspace = true

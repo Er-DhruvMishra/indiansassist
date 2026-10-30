@@ -1,14 +1,21 @@
 # Repo-root cargo config for the agent/ Rust workspace (Phase C).
 #
-# The build machine runs the x86_64-pc-windows-gnu toolchain whose linker is
-# rustup's self-contained MinGW; there is NO MSVC toolchain and NO C compiler
-# (the bundled x86_64-w64-mingw32-gcc is a linker only, it has no cc1). The
-# default feature set therefore stays pure-Rust so `cargo build/test/clippy`
-# are green here. The `media`/`gui` features (webrtc-rs, libvpx, libopus,
-# rustls, cpal, egui) require a full C toolchain + nasm and are built in CI on
-# the msvc release targets. See agent/README.md.
+# The build machine now has Visual Studio 2022 Build Tools (MSVC 14.44 + Windows
+# SDK) and rustup's stable-x86_64-pc-windows-msvc is the default host, so the
+# whole workspace — including the `media` / `winapi` / `gui` features (webrtc-rs,
+# libvpx, libopus, rustls, cpal, egui, the Win32 layer) — builds and links here,
+# like the CI release targets. libvpx is taken as a prebuilt static library
+# (`shiguredo_libvpx`, §11.2 deviation in agent/README.md); nasm and GNU make are
+# not installed and are no longer needed. libopus is built from source by
+# `audiopus_sys` through the `cc` crate (MSVC discovers its own compiler).
+#
+# The pure-Rust library crates (ia-core and the pure logic of the others) still
+# compile on the gnu toolchain with no features, so the cross-check
+# `cargo +stable-x86_64-pc-windows-gnu test -p ia-core` stays green. The full
+# `ia-agent` binary requires MSVC (prebuilt libvpx is MSVC-ABI only).
 
 # The agent workspace lives at agent/; its default target dir is agent/target
-# (git-ignored). Static CRT is a RELEASE (msvc) concern: `+crt-static` behaves
-# differently on the gnu toolchain (contract §11.3), so it is applied only in the
-# CI release profile, not here — nothing is overridden for the dev build.
+# (git-ignored). Static CRT is a RELEASE concern: `+crt-static` is applied only
+# in the CI release profile (§11.3), not here — nothing is overridden for the
+# dev build. The dev build links the CRT dynamically (the prebuilt libvpx is
+# built against the dynamic CRT, `vpxmd`).

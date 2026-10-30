@@ -67,6 +67,71 @@ pub fn offer_order(
     order
 }
 
+/// Register the video codecs (in `order`) and Opus into a webrtc-rs `MediaEngine` with the
+/// exact payload types, fmtp lines and RTCP feedback of §4.2 / §6.3. The SDP the peer offers
+/// is authoritative; this keeps the registration byte-exact with `fixtures/agent/sdp-codecs.json`.
+#[cfg(feature = "media")]
+pub fn register_into_media_engine(
+    me: &mut webrtc::api::media_engine::MediaEngine,
+    order: &[VideoCodec],
+) -> Result<(), webrtc::Error> {
+    use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS, MIME_TYPE_VP8, MIME_TYPE_VP9};
+    use webrtc::rtp_transceiver::rtp_codec::{
+        RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
+    };
+    use webrtc::rtp_transceiver::RTCPFeedback;
+
+    let fb = || {
+        ["nack", "nack pli", "goog-remb", "transport-cc"]
+            .iter()
+            .map(|s| {
+                let (typ, parameter) = s.split_once(' ').unwrap_or((s, ""));
+                RTCPFeedback {
+                    typ: typ.to_string(),
+                    parameter: parameter.to_string(),
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    for codec in order {
+        let mime = match codec.encoder {
+            VideoEncoder::Vp8 => MIME_TYPE_VP8,
+            VideoEncoder::Vp9 => MIME_TYPE_VP9,
+            VideoEncoder::H264 => MIME_TYPE_H264,
+            VideoEncoder::Av1 => "video/AV1",
+        };
+        me.register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: mime.to_string(),
+                    clock_rate: 90000,
+                    channels: 0,
+                    sdp_fmtp_line: codec.fmtp.to_string(),
+                    rtcp_feedback: fb(),
+                },
+                payload_type: codec.payload_type,
+                stats_id: String::new(),
+            },
+            RTPCodecType::Video,
+        )?;
+    }
+    me.register_codec(
+        RTCRtpCodecParameters {
+            capability: RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_OPUS.to_string(),
+                clock_rate: 48000,
+                channels: 2,
+                sdp_fmtp_line: OPUS_FMTP.to_string(),
+                rtcp_feedback: vec![],
+            },
+            payload_type: OPUS_PT,
+            stats_id: String::new(),
+        },
+        RTPCodecType::Audio,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

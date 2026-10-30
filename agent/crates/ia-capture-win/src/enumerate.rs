@@ -4,9 +4,10 @@
 use ia_core::types::MonitorInfo;
 use windows::Win32::Foundation::{BOOL, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW, MONITORINFOF_PRIMARY,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
 struct Raw {
     rect: RECT,
@@ -65,4 +66,28 @@ pub fn enumerate() -> Vec<MonitorInfo> {
             mid: None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod win_tests {
+    use super::enumerate;
+
+    /// DXGI/GDI enumeration smoke (contract §15.2): enumerate the real monitors and check
+    /// the id/ordering invariants. Skipped on a headless runner with no monitor.
+    #[test]
+    fn enumeration_ids_are_primary_first_and_contiguous() {
+        let monitors = enumerate();
+        if monitors.is_empty() {
+            eprintln!("no monitor present; skipping enumeration smoke");
+            return;
+        }
+        // Ids are 1..=n in order.
+        for (i, m) in monitors.iter().enumerate() {
+            assert_eq!(m.id, (i + 1) as u32, "ids are assigned 1..n in order");
+            assert!(m.id >= 1 && m.id <= 16);
+        }
+        // The first monitor is the primary (contract §3.6 convention).
+        assert!(monitors[0].primary, "primary monitor sorts first");
+        assert_eq!(monitors.iter().filter(|m| m.primary).count(), 1);
+    }
 }

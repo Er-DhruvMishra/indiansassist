@@ -19,116 +19,167 @@ exit.
 
 ## Build environment — important
 
-This machine runs **only** the `x86_64-pc-windows-gnu` toolchain (rustup's self-contained
-MinGW linker). It has **no MSVC build tools, no C compiler, no `nasm`, no `make`, no
-`cmake`** — the bundled `x86_64-w64-mingw32-gcc.exe` is a *linker only* (it has no `cc1`),
-and there is no `as.exe`.
+The build host now has **Visual Studio 2022 Build Tools (MSVC 14.44 + Windows SDK)** and
+rustup's `stable-x86_64-pc-windows-msvc` is the default toolchain (`rust-toolchain.toml`).
+The **whole workspace builds and links here**, including the `media` / `winapi` / `gui`
+features — no separate CI machine is needed to compile the runnable agent.
 
-Two consequences shape the whole workspace:
+* `nasm` and GNU `make` are **not** installed and are **not** needed: libvpx is taken as a
+  **prebuilt** static library (see the libvpx note below), and libopus is built from source
+  by `audiopus_sys` through the `cc` crate (MSVC discovers its own compiler).
+* The library crates still build pure-Rust with **no features** on the gnu toolchain, so the
+  security-critical core (`ia-core`: the `ia.sec` X25519 + HKDF + XChaCha20-Poly1305
+  handshake and frames, the token/sidecar/filename grammars, file sanitisation, playbook
+  argument validation, the ABR controller, the state machine) keeps a second-toolchain
+  cross-check: `cargo +stable-x86_64-pc-windows-gnu test -p ia-core`.
+* The **full `ia-agent` binary requires MSVC** — the prebuilt libvpx is MSVC-ABI only, so it
+  cannot link under gnu. `ia-agent`'s default features are `media` + `winapi` + `gui`.
 
-1. **The default build is pure Rust and green on gnu.** `cargo build` / `cargo test` /
-   `cargo clippy` with no features touch no C and compile here. This is where every
-   security-critical piece lives — the `ia.sec` X25519 + HKDF + XChaCha20-Poly1305
-   handshake and frames, the token/sidecar/filename grammars, file sanitisation, playbook
-   argument validation, the ABR controller and the state machine — fully implemented and
-   unit-tested, plus a headless loopback integration test that runs the handshake and an
-   encrypted `ia.control`/`ia.chat`/frame round-trip end to end in-process.
+Features:
+* `media` (on `ia-agent`): the `webrtc` crate (pinned `=0.17.1`, → `ring`), libvpx (VP8/VP9),
+  libopus, rustls, cpal, the `/signal` client and the session orchestration.
+* `winapi` (on `ia-platform` / `ia-input-win` / `ia-capture-win`): the `windows` crate — the
+  real `SendInput`, DXGI/GDI capture, monitor enumeration, registry, known folders and
+  `sys_lib` late-binding.
+* `gui` (on `ia-ui`): egui/eframe/tray-icon rendering.
+* `dev` (on `ia-agent`): the local-testing switches `--api-origin` / `--signal-url` /
+  `--auto-consent` and `IA_CODEC_PREF`. A release build omits `dev`, so those switches do not
+  exist in it (the §2.1 compile-time guarantee), and the exe is a GUI-subsystem app with no
+  console. Build with `--features dev` for a console build you can drive from a terminal.
 
-2. **Everything that needs a C toolchain is behind an off-by-default feature.**
-   * `media` (on `ia-agent`): the `webrtc` crate (→ `ring`), libvpx, libopus, rustls, cpal —
-     all need a C compiler + nasm. Built in CI on the msvc release targets.
-   * `winapi` (on `ia-platform` / `ia-input-win` / `ia-capture-win`): the `windows` crate
-     (prebuilt `windows-targets` import libs, no `dlltool`) — the real `SendInput`,
-     DXGI/GDI capture, registry, known folders and `sys_lib` late-binding.
-   * `gui` (on `ia-ui`): egui/eframe/tray-icon rendering.
+### libvpx (prebuilt) — §11.2 deviation
 
-### `getrandom` pin
+The contract named `env-libvpx-sys`/`vpx` with a vendored libvpx built by `nasm` + `make`.
+This host has neither tool, so the workspace uses **`shiguredo_libvpx`** (Apache-2.0 wrapper;
+libvpx v1.17.0, BSD-3-Clause), whose build script downloads a **prebuilt static** libvpx for
+`x86_64-pc-windows-msvc` and links it — no nasm/make, no vendored source compile. It exposes
+a safe VP8/VP9 encoder (`Encoder` / `EncoderConfig`), used by `ia_agent::vp8`. One libvpx
+tuning the contract names, `VP8E_SET_SCREEN_CONTENT_MODE`, is not exposed by this wrapper;
+the other screen-content settings (CBR, error-resilient, no look-ahead, high `cpu_used`,
+bounded keyframe interval) are applied. Network is needed at **build** time to fetch the
+prebuilt archive.
 
-`getrandom` ≥ 0.2.12 links the Windows CSPRNG via `raw-dylib`, which on the gnu toolchain
-needs `dlltool` **and** `as`; this machine has neither. `ia-core` pins `getrandom = "=0.2.11"`,
-which links `advapi32` the ordinary way against the bundled `libadvapi32.a`. CI on the msvc
-targets has no such constraint.
+### `getrandom`
 
-### `dlltool` on PATH
-
-The gnu toolchain's `dlltool.exe` lives in
-`$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained` and is not
-on PATH by default here. Nothing in the default build needs it (the `getrandom` pin removes
-the only `raw-dylib` user), but the root `agent:*` npm scripts add that directory to PATH so
-a future `raw-dylib` dependency links without manual setup.
+The earlier gnu-only `getrandom = "=0.2.11"` pin is **lifted** (it existed only for the gnu
+`raw-dylib` linker gap). `getrandom` 0.2.17 builds on both the msvc host and the gnu
+cross-check here.
 
 ## Gates (run from `agent/`)
 
 ```sh
-export PATH="$USERPROFILE/.cargo/bin:$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained:$PATH"
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+export PATH="$USERPROFILE/.cargo/bin:$PATH"
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo build --release -p ia-agent        # default features; GUI-subsystem exe
 ```
 
-or from the repo root: `pnpm agent:build`, `pnpm agent:test`, `pnpm agent:clippy`.
+The ia-core gnu cross-check (optional, second toolchain):
+
+```sh
+cargo +stable-x86_64-pc-windows-gnu test -p ia-core
+```
 
 ### CI (release, msvc)
 
-CI adds the msvc targets and a full C toolchain + nasm, then builds the signed release:
+CI builds the signed release for both msvc targets:
 
 ```sh
-cargo build --release --locked --features media \
-  --target x86_64-pc-windows-msvc
-cargo build --release --locked --features media \
-  --target aarch64-pc-windows-msvc
+cargo build --release --locked --target x86_64-pc-windows-msvc -p ia-agent
+cargo build --release --locked --target aarch64-pc-windows-msvc -p ia-agent
 ```
 
 followed by the import-table gate (§11.3: every load-time import must be a KnownDLL;
 everything else goes through `ia_platform::sys_lib`), the ≤ 25 MiB size check, Authenticode
 signing (Azure Trusted Signing / EV HSM), and the `WinVerifyTrust` self-check. `+crt-static`
-is applied only in the release profile because it behaves differently on gnu (§11.3).
-`docs/release.md` is the home for these CI-only steps.
+is applied only in the release profile (§11.3). `docs/release.md` is the home for these
+CI-only steps. (The `aarch64` prebuilt libvpx is a CI prerequisite; this host builds `x64`.)
 
-## Running against `pnpm dev`
+## Running
 
-The runnable agent requires the `media` + `winapi` + `gui` features, hence a C toolchain —
-it is produced by CI, not by this machine. With that build:
+Build a console (dev) exe you can drive from a terminal:
 
-1. `pnpm dev` brings up `apps/api` (signaling at `ws://localhost:4000/signal`) and
-   `apps/web`.
-2. Create a `p3_portable` token in the dashboard and download the stub, or run
-   `IndiansAssist.exe --code <12-digit>` / `--url indiansassist://join?t=<compact>`.
-3. The agent resolves the token source (the default dev build prints which carrier won and
-   exits), shows the consent window, and on **Share my screen** connects as a native Desk.
+```sh
+cargo build --release -p ia-agent --features dev
+./target/release/IndiansAssist.exe --help
+```
 
-## Self-delete stub in CI
+Against a local API (`pnpm --filter @indiansassist/api dev`, signaling at
+`ws://localhost:4000/signal`):
+
+```sh
+./target/release/IndiansAssist.exe --code <12-digit> --api-origin http://localhost:4000
+```
+
+The agent resolves the token source (§2.1), opens the `/signal` socket as a native
+Origin-less Desk, sends `desk.hello`, and knocks/polls. **The dev API has no P3 signaling
+path yet**, so a `p3_portable` session cannot complete end to end: an unknown code returns
+`token_not_found` and the agent reports the outcome and exits — the hello/knock/poll
+exchange is what is exercised live. The consent window, the `ia.sec` handshake over the data
+channel, the encrypted `ia.control` ops and the video tracks attach once a real
+`session.created` arrives, and the two-peer media + crypto path is covered by the in-process
+loopback test (below).
+
+The default release build (no `dev`) is a GUI-subsystem exe with no console and no local
+override switches; it is the shape CI signs and serves.
+
+## Self-delete stub
 
 The released stub is byte-identical per download and Authenticode-signed; the per-download
 configuration rides on the **filename desk code** (§2.3) or the signed `.iaconfig` sidecar
 (§2.4), never on appended trailer bytes (which would break the signature). The stub removes
 itself on a clean exit: the user instance via a fixed-text `%TEMP%` cmd stub whose arguments
 are allow-listed (`ia-platform::selfdelete`), the elevated child via
-`MOVEFILE_DELAY_UNTIL_REBOOT` with no user-writable script (§10 D2/D3).
+`MOVEFILE_DELAY_UNTIL_REBOOT` with no user-writable script (§10 D2/D3). The decision logic is
+implemented and tested (`ia_agent::elevate`, `ia_platform::selfdelete`); the actual process
+spawn / `MoveFileEx` wiring is the remaining self-delete work.
 
-## What is implemented here vs. CI
+## What is implemented and what is still stubbed
 
-**Built and tested on the gnu dev machine (default features):** all of `ia-core`; the
-pure logic of every other crate (scancode table, pointer mapping, BGRA→I420 converter,
-canvas letterbox, UI view-model + self-defence gate, token-source precedence, elevation
-flow, self-delete decision, SDP codec spec); the headless loopback test.
+**Built and exercised on this MSVC host (default `media` + `winapi` + `gui`):**
+* `ia-core` in full, cross-checked on gnu.
+* `ia-agent`: CLI parsing with the dev switches (`cli`), token-source precedence
+  (`tokensource`), the SDP codec table + `MediaEngine` registration (`codecs`), the `ia.sec`
+  handshake **driver** (`sechs`), the VP8 encoder over prebuilt libvpx (`vp8`), the synthetic
+  capture source (`capture`), the webrtc-rs peer with per-monitor VP8 tracks + the seven data
+  channels + `a=max-message-size:131072` (`peer`), the data-channel handshake + sample pump
+  (`channels`), the rustls `/signal` client with `desk.hello`/knock/poll (`signal`), and the
+  session orchestration (`session`).
+* The `winapi` layer (DXGI/GDI capture scaffolding, monitor enumeration, `SendInput`
+  injection + scancodes, registry protocol handler, known folders, `sys_lib`).
+* The `gui` view-model and its egui rendering (consent window, pill, panel).
+* Tests: all unit tests; the **two-peer webrtc loopback** (`tests/loopback.rs`
+  `media_loopback`) — two real peers negotiate, complete the §1.3 handshake with matching
+  SAS, and a **VP8 keyframe arrives at the receiving peer**; Windows-only, skip-if-no-monitor
+  tests for monitor enumeration and `SendInput` coordinate mapping.
 
-**Compiled by CI (feature-gated; needs a C toolchain / display):** the `windows`-crate
-Win32 layer (`winapi`), the egui rendering (`gui`), and the webrtc-rs peer + libvpx/libopus
-encoders + signaling (`media`), including the full two-peer DTLS-SRTP/SCTP variant of the
-loopback test.
+**Stubbed / not yet wired (needs the P3 API path, a display, or Phase D):**
+* The live session past `session.created`: consent-window event loop, the handshake run over
+  the real `ia.sec` channel in a live session, the encrypted `ia.control` op dispatch with
+  level gating, chat/file/voice channels, `agent.stats`, Stop/teardown, and the self-delete
+  spawn. The pieces exist as tested units and the loopback proves the media path; stitching
+  them into a live session waits on the dev API's P3 signaling.
+* **Voice**: the Opus encoder (`audiopus`) links and the capability is advertised, but the
+  cpal duplex capture/render loop and the audio RTP track are not wired — voice is effectively
+  deferred until the live path exists.
+* **Capture**: the GDI fallback + enumeration are real; the DXGI Desktop Duplication primary
+  path and the SIMD `yuvutils-rs`/`fast_image_resize` conversion are still to come (the
+  self-contained BT.601 converter in `ia-capture-win::convert` is the oracle).
+* H.264 (Media Foundation) and AV1 (`rav1e`, feature `av1`) encoders are not built in the
+  default set; VP8/VP9 via libvpx are.
 
 ## Contract deviations (see also the final report)
 
+* **Prebuilt libvpx** via `shiguredo_libvpx` instead of a vendored `env-libvpx-sys`/`vpx`
+  build (no nasm/make on this host); see the libvpx note above. `VP8E_SET_SCREEN_CONTENT_MODE`
+  is not exposed by that wrapper.
+* **webrtc-rs pinned to `=0.17.1`** — the last release with the classic
+  `MediaEngine`/`interceptor`/`TrackLocalStaticSample` API this code targets; its sibling
+  crates are pinned to the matching patch in `Cargo.lock`.
 * Cross-language parity: `crates/ia-core/tests/shared_vectors.rs` loads the shared fixtures in
   `packages/shared/test/fixtures/agent/` (`sec-vectors.json`, `agent-names.json`,
   `file-lists.json`), the same files the TypeScript and Kotlin tests load (§13.1, §15.1). The
   contract's per-topic fixture names (`file-names.json`, `playbook-args.json`, `abr.json`,
   `sdp-codecs.json`, `playbook-frames.json`) are not split out yet: file names live in
   `sec-vectors.json`, and the ABR, SDP-codec and playbook vectors are still this crate's own.
-* `ia-capture-win`'s `winapi` path ships the GDI fallback capturer and monitor enumeration;
-  the DXGI Desktop Duplication primary path (§4.1) and the SIMD `yuvutils-rs`/`fast_image_resize`
-  conversion are the remaining capture work (the self-contained BT.601 converter is the
-  oracle they are checked against).
-* The `media` peer module is scaffolded (codec table, structure) but the full webrtc-rs wiring
-  is CI-track work because it cannot build on this machine.

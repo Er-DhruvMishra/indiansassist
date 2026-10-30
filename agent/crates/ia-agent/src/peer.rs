@@ -1,19 +1,185 @@
-//! webrtc-rs peer wiring (contract §1.2, §3.6, §4), compiled under `media`.
+//! The webrtc-rs peer (contract §1.2, §3.6, §4), compiled under `media`.
 //!
-//! NOTE: the `media` feature pulls `webrtc` (→ `ring`) and the libvpx/libopus encoders,
-//! which need a C toolchain + nasm. That toolchain is absent on the gnu dev machine, so
-//! this module and `tests/loopback.rs` are **built and run in CI** on the msvc targets,
-//! not by the default dev gate. See agent/README.md.
-//!
-//! Structure (built here when `media` is on):
-//! * `MediaEngine` registered from [`crate::codecs`] (exact fmtp lines),
-//! * one `TrackLocalStaticSample` per consented monitor (§3.6 M1), plus the recorder track,
-//! * the seven data channels created by the Desk once per PC (§1.3), with `ia.sec` carrying
-//!   the [`ia_core::sec`] handshake and the rest wrapped in [`ia_core::secchan`] frames,
-//! * the [`ia_core::abr`] controller fed from RTCP (REMB/TWCC).
+//! Builds the `MediaEngine` from [`crate::codecs`] (exact fmtp lines), a `SettingEngine`
+//! that advertises `a=max-message-size:131072` (§1.3 interop) and the default interceptor
+//! registry (nack / reports / twcc). The Desk adds one `TrackLocalStaticSample` per
+//! consented monitor (§3.6 M1) and creates the seven ordered+reliable data channels once
+//! per peer connection (§1.3); the Assist side receives them through `on_data_channel`.
+//! SDP negotiation (offer/answer/ICE) is driven by [`crate::signal`] in a real session and
+//! by the in-process loopback test with vanilla ICE.
 
-/// Placeholder entry used by `main` under the `media` feature until the full peer loop is
-/// wired; the real `run()` opens the WS signaling client and the peer connection.
-pub fn run_placeholder() {
-    tracing::info!("media build: peer wiring is CI-compiled; see agent/README.md");
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+use webrtc::api::interceptor_registry::register_default_interceptors;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
+use webrtc::api::setting_engine::{SctpMaxMessageSize, SettingEngine};
+use webrtc::api::APIBuilder;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::RTCDataChannel;
+use webrtc::interceptor::registry::Registry;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::TrackLocal;
+
+use crate::codecs::{self, VP8};
+use ia_core::sec::fingerprint_from_sdp;
+use ia_core::types::{limits, P3_DATA_CHANNEL_LABELS};
+
+/// Which side of the connection this peer plays (the Desk is impolite and offers first, A).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerRole {
+    Desk,
+    Assist,
+}
+
+/// A built peer connection with its data channels (by label) and, for the Desk, the per
+/// monitor video tracks.
+pub struct AgentPeer {
+    pub role: PeerRole,
+    pub pc: Arc<RTCPeerConnection>,
+    pub channels: Arc<Mutex<HashMap<String, Arc<RTCDataChannel>>>>,
+    pub video_tracks: Vec<Arc<TrackLocalStaticSample>>,
+}
+
+fn build_api(has_recorder: bool) -> Result<webrtc::api::API, webrtc::Error> {
+    let mut me = MediaEngine::default();
+    let order = codecs::offer_order(has_recorder, false, false);
+    codecs::register_into_media_engine(&mut me, &order)?;
+    let registry = register_default_interceptors(Registry::new(), &mut me)?;
+    let mut se = SettingEngine::default();
+    // Advertise a=max-message-size:131072 so a 64 KiB playbook body fits (§1.3).
+    se.set_sctp_max_message_size_can_send(SctpMaxMessageSize::Bounded(
+        limits::SEC_FRAME_MAX_BYTES as u32,
+    ));
+    Ok(APIBuilder::new()
+        .with_media_engine(me)
+        .with_interceptor_registry(registry)
+        .with_setting_engine(se)
+        .build())
+}
+
+impl AgentPeer {
+    /// Build the peer. The Desk adds a VP8 track per `monitor_ids` and creates the seven
+    /// channels; the Assist collects channels the Desk opens.
+    pub async fn new(
+        role: PeerRole,
+        monitor_ids: &[u32],
+        has_recorder: bool,
+    ) -> Result<Self, webrtc::Error> {
+        let api = build_api(has_recorder)?;
+        let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+        let channels: Arc<Mutex<HashMap<String, Arc<RTCDataChannel>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        let mut video_tracks = Vec::new();
+        if role == PeerRole::Desk {
+            for id in monitor_ids {
+                let track = Arc::new(TrackLocalStaticSample::new(
+                    RTCRtpCodecCapability {
+                        mime_type: MIME_TYPE_VP8.to_string(),
+                        clock_rate: 90000,
+                        ..Default::default()
+                    },
+                    format!("monitor-{id}"),
+                    "ia-screen".to_string(),
+                ));
+                pc.add_track(Arc::clone(&track) as Arc<dyn TrackLocal + Send + Sync>)
+                    .await?;
+                video_tracks.push(track);
+            }
+            // Create the seven channels once per PC, ordered + reliable (§1.3).
+            let init = RTCDataChannelInit {
+                ordered: Some(true),
+                ..Default::default()
+            };
+            let mut map = channels.lock().await;
+            for label in P3_DATA_CHANNEL_LABELS {
+                let dc = pc.create_data_channel(label, Some(init.clone())).await?;
+                map.insert((*label).to_string(), dc);
+            }
+        } else {
+            // The Assist registers channels the Desk announces in-band.
+            let chans = Arc::clone(&channels);
+            pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+                let chans = Arc::clone(&chans);
+                Box::pin(async move {
+                    chans.lock().await.insert(dc.label().to_string(), dc);
+                })
+            }));
+        }
+
+        Ok(Self {
+            role,
+            pc,
+            channels,
+            video_tracks,
+        })
+    }
+
+    /// Create the offer, set it locally, and return the gathered (non-trickle) SDP.
+    pub async fn offer(&self) -> Result<String, webrtc::Error> {
+        let offer = self.pc.create_offer(None).await?;
+        let mut gathered = self.pc.gathering_complete_promise().await;
+        self.pc.set_local_description(offer).await?;
+        let _ = gathered.recv().await;
+        Ok(self.local_sdp().await.unwrap_or_default())
+    }
+
+    /// Accept a remote offer and return the gathered answer SDP.
+    pub async fn accept_offer(&self, remote_sdp: String) -> Result<String, webrtc::Error> {
+        self.pc
+            .set_remote_description(RTCSessionDescription::offer(remote_sdp)?)
+            .await?;
+        let answer = self.pc.create_answer(None).await?;
+        let mut gathered = self.pc.gathering_complete_promise().await;
+        self.pc.set_local_description(answer).await?;
+        let _ = gathered.recv().await;
+        Ok(self.local_sdp().await.unwrap_or_default())
+    }
+
+    /// Apply the remote answer (the Desk side after the Assist answers).
+    pub async fn accept_answer(&self, remote_sdp: String) -> Result<(), webrtc::Error> {
+        self.pc
+            .set_remote_description(RTCSessionDescription::answer(remote_sdp)?)
+            .await
+    }
+
+    async fn local_sdp(&self) -> Option<String> {
+        // `local_description` carries the gathered candidates (the "pending or current"
+        // description); `current_local_description` is None until negotiation completes.
+        self.pc.local_description().await.map(|d| d.sdp)
+    }
+
+    /// Our DTLS fingerprint and the peer's, normalised to 64 hex chars (§1.3 step 1).
+    pub async fn fingerprints(&self) -> Option<(String, String)> {
+        let local = self.pc.local_description().await?;
+        let remote = self.pc.remote_description().await?;
+        Some((
+            fingerprint_from_sdp(&local.sdp)?,
+            fingerprint_from_sdp(&remote.sdp)?,
+        ))
+    }
+
+    /// Get a channel by label once it exists (the Assist populates them asynchronously).
+    pub async fn channel(&self, label: &str) -> Option<Arc<RTCDataChannel>> {
+        self.channels.lock().await.get(label).cloned()
+    }
+
+    /// The VP8 track for a monitor id (Desk only).
+    pub fn video_track(&self, monitor_id: u32) -> Option<Arc<TrackLocalStaticSample>> {
+        self.video_tracks
+            .iter()
+            .find(|t| t.id() == format!("monitor-{monitor_id}"))
+            .cloned()
+    }
+}
+
+/// The track codec a Desk monitor stream uses (VP8 software default, §4.2).
+pub fn default_video_codec() -> codecs::VideoCodec {
+    VP8
 }

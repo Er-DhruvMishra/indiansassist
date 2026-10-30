@@ -9,11 +9,11 @@ members = [
     "crates/ia-agent",
 ]
 
-# Phase C contract §11.3: MSRV Rust 1.99; dev target x86_64-pc-windows-gnu.
-# The default build (no features) is pure-Rust and builds on the gnu toolchain
-# without a C compiler / nasm. Every C/native-media dependency (webrtc-rs, libvpx,
-# libopus, rustls, cpal) lives behind the off-by-default `media`/`gui` features that
-# CI enables on the x86_64/aarch64-pc-windows-msvc release targets. See agent/README.md.
+# Phase C contract §11.3: MSRV Rust 1.99; build host x86_64-pc-windows-msvc.
+# The full `ia-agent` binary (features `media` + `winapi` + `gui`, default on this
+# MSVC host) links webrtc-rs, a prebuilt libvpx, libopus, rustls, cpal and egui.
+# The library crates still compile pure-Rust with no features on the gnu toolchain
+# (ia-core cross-check), but the binary needs MSVC. See agent/README.md.
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
@@ -54,10 +54,23 @@ yuvutils-rs = "0.5.5"
 fast_image_resize = "4.2.1"
 image = { version = "0.25.2", default-features = false, features = ["png", "jpeg"] }
 
-# Async runtime + WS client. tokio and tokio-tungstenite (no TLS backend) are pure Rust.
+# Async runtime + WS client. tokio-tungstenite uses the rustls + webpki-roots TLS
+# backend (§11.2; no native-tls / schannel). `wss:` is reached through rustls.
 tokio = { version = "1.40.0", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
-tokio-tungstenite = { version = "0.24.0", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "0.24.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3.30"
+bytes = "1.7.1"
+async-trait = "0.1.81"
+
+# Media stack (feature `media`, MSVC only). webrtc-rs 0.17.1 is the last release with
+# the classic Pion-shaped API (MediaEngine / interceptor / TrackLocalStaticSample);
+# its sibling crates are pinned to the matching patch in Cargo.lock. libvpx is a
+# prebuilt static library fetched by `shiguredo_libvpx` (no nasm / make). libopus is
+# built from source by `audiopus_sys` via the `cc` crate. See agent/README.md §11.2.
+webrtc = "=0.17.1"
+shiguredo_libvpx = "=2026.2.0-canary.3"
+audiopus = "0.2.0"
+cpal = "0.15.3"
 
 # Internal crates
 ia-core = { path = "crates/ia-core" }

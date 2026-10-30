@@ -1,7 +1,7 @@
-# Phase C contract §11.3. The build machine's only usable toolchain is the gnu one
-# (rustup's self-contained MinGW linker; no MSVC tools, no C compiler, no nasm). Pin it
-# explicitly so cargo never auto-installs the msvc host (which cannot link here). CI adds
-# the msvc targets to a gnu-or-msvc host for the signed release build.
+# Phase C contract §11.3. The build machine now has Visual Studio 2022 Build Tools
+# (MSVC 14.44 + Windows SDK), so the workspace builds on the msvc host like the CI
+# release targets. The pure-Rust default features of the library crates still compile
+# on stable-x86_64-pc-windows-gnu (`cargo +stable-x86_64-pc-windows-gnu test -p ia-core`).
 [toolchain]
-channel = "stable-x86_64-pc-windows-gnu"
+channel = "stable-x86_64-pc-windows-msvc"
 components = ["rustfmt", "clippy"]

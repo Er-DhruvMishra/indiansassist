@@ -4,9 +4,10 @@
 //! synthetic I420 frame — "proving the frame path and the crypto handshake with no OS
 //! capture or input".
 //!
-//! This runs on the gnu dev target. The full variant that carries these frames over two
-//! real webrtc-rs peers (DTLS-SRTP + SCTP) is built and run in CI under the `media`
-//! feature (webrtc-rs → ring needs a C toolchain, absent here). See agent/README.md.
+//! The pure part runs on any target (the ia-core cross-check). The `media` variant below
+//! (`#[cfg(feature = "media")]`) carries the handshake and a synthetic VP8 stream over two
+//! real webrtc-rs peers (DTLS-SRTP + SCTP) and asserts a VP8 keyframe arrives at the
+//! receiving peer — the media + crypto path the contract's §15.2 loopback requires.
 
 use ia_core::sec::{
     commit_hash, transcript_hash, EphemeralKey, SessionKeys, Side, SideInfo, SEC_SUITE,
@@ -194,4 +195,152 @@ fn assist_to_desk(desk_channel: &mut ia_core::secchan::SecChannel, frame: &[u8])
 fn desk_to_assist(assist_channel: &mut ia_core::secchan::SecChannel, frame: &[u8]) -> String {
     let opened = assist_channel.open(frame).expect("assist opens desk frame");
     opened.as_text().expect("text frame").to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Media variant: two real webrtc-rs peers (contract §15.2). Only built with the
+// `media` feature (default on the MSVC host).
+// ---------------------------------------------------------------------------
+#[cfg(feature = "media")]
+mod media_loopback {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use ia_agent::capture::SyntheticCapturer;
+    use ia_agent::channels::{run_handshake, send_frames};
+    use ia_agent::peer::{AgentPeer, PeerRole};
+    use ia_agent::vp8::Vp8Encoder;
+    use ia_core::sec::Side;
+    use tokio::sync::oneshot;
+    use webrtc::rtp::codecs::vp8::Vp8Packet;
+    use webrtc::rtp::packetizer::Depacketizer;
+    use webrtc::track::track_remote::TrackRemote;
+
+    /// Spawn a reader that resolves the returned receiver when a VP8 keyframe arrives.
+    fn watch_for_keyframe(track: Arc<TrackRemote>) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let mut tx = Some(tx);
+            let mut vp8 = Vp8Packet::default();
+            while let Ok((pkt, _)) = track.read_rtp().await {
+                if pkt.payload.is_empty() {
+                    continue;
+                }
+                let head = vp8.is_partition_head(&pkt.payload);
+                if let Ok(payload) = vp8.depacketize(&pkt.payload) {
+                    // First partition of a VP8 key frame: the P bit (bit 0) is 0.
+                    if head && !payload.is_empty() && (payload[0] & 0x01) == 0 {
+                        if let Some(tx) = tx.take() {
+                            let _ = tx.send(());
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+        rx
+    }
+
+    async fn await_channel(
+        peer: &AgentPeer,
+        label: &str,
+    ) -> Arc<webrtc::data_channel::RTCDataChannel> {
+        for _ in 0..200 {
+            if let Some(dc) = peer.channel(label).await {
+                return dc;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("channel {label} never opened");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_peers_handshake_and_a_vp8_keyframe_arrives() {
+        let desk = AgentPeer::new(PeerRole::Desk, &[1], false)
+            .await
+            .expect("desk peer");
+        let assist = AgentPeer::new(PeerRole::Assist, &[], false)
+            .await
+            .expect("assist peer");
+
+        // Capture the first inbound video track on the Assist before negotiating.
+        let (track_tx, track_rx) = oneshot::channel::<Arc<TrackRemote>>();
+        let track_tx = Arc::new(std::sync::Mutex::new(Some(track_tx)));
+        assist.pc.on_track(Box::new(move |track, _recv, _trans| {
+            if let Some(tx) = track_tx.lock().unwrap().take() {
+                let _ = tx.send(track);
+            }
+            Box::pin(async {})
+        }));
+
+        // Vanilla-ICE offer/answer (host candidates over loopback).
+        let offer = desk.offer().await.expect("offer");
+        let answer = assist.accept_offer(offer).await.expect("answer");
+        desk.accept_answer(answer).await.expect("accept answer");
+
+        // Fingerprints from each side's descriptions (§1.3 step 1).
+        let (desk_own, desk_remote) = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(f) = desk.fingerprints().await {
+                    return f;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("desk fingerprints");
+        let (assist_own, assist_remote) = assist.fingerprints().await.expect("assist fingerprints");
+        assert_eq!(desk_own, assist_remote);
+        assert_eq!(assist_own, desk_remote);
+
+        let desk_sec = await_channel(&desk, "ia.sec").await;
+        let assist_sec = await_channel(&assist, "ia.sec").await;
+
+        // Drive the handshake concurrently over the real ia.sec channel.
+        let d = tokio::spawn(async move {
+            run_handshake(desk_sec, Side::Desk, "loopback", 0, &desk_own, &desk_remote).await
+        });
+        let a = tokio::spawn(async move {
+            run_handshake(
+                assist_sec,
+                Side::Assist,
+                "loopback",
+                0,
+                &assist_own,
+                &assist_remote,
+            )
+            .await
+        });
+        let (_dk, desk_sas) = d.await.unwrap().expect("desk handshake");
+        let (_ak, assist_sas) = a.await.unwrap().expect("assist handshake");
+        assert_eq!(
+            desk_sas, assist_sas,
+            "both peers derive the same security code"
+        );
+        assert_eq!(desk_sas.len(), 6);
+
+        // Stream synthetic VP8 from the Desk; a keyframe is forced on the first frame and
+        // libvpx emits one every second (fps * keyframe_secs), so a keyframe is in flight
+        // whenever the reader attaches to the inbound track.
+        let desk_track = desk.video_track(1).expect("monitor-1 track");
+        let mut encoder = Vp8Encoder::new(64, 64, 800, 15, 1).expect("encoder");
+        let mut cap = SyntheticCapturer::single(64, 64);
+        let sender = tokio::spawn(async move {
+            send_frames(desk_track, &mut encoder, &mut cap, 1, 90, 15).await
+        });
+
+        // The inbound track appears once the first RTP packet arrives.
+        let remote = tokio::time::timeout(Duration::from_secs(8), track_rx)
+            .await
+            .expect("inbound track within 8s")
+            .expect("track channel");
+        let keyframe = watch_for_keyframe(remote);
+
+        tokio::time::timeout(Duration::from_secs(10), keyframe)
+            .await
+            .expect("a VP8 keyframe must arrive within 10s")
+            .expect("keyframe signal");
+        let kf = sender.await.unwrap().expect("send_frames");
+        assert!(kf >= 1, "the Desk must have sent at least one keyframe");
+    }
 }

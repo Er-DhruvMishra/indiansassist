@@ -177,3 +177,36 @@ impl InputSink for WinInput {
         }
     }
 }
+
+#[cfg(test)]
+mod win_tests {
+    use super::WinInput;
+    use crate::mapping::map_to_virtual;
+    use ia_core::types::MonitorInfo;
+
+    /// SendInput coordinate mapping against the real virtual screen (contract §15.2),
+    /// without injecting (no `SendInput` call, so the cursor does not move). Skipped if the
+    /// virtual screen has no extent (headless).
+    #[test]
+    fn maps_a_monitor_corner_into_the_absolute_range() {
+        let vs = WinInput::virtual_screen();
+        if vs.width <= 0 || vs.height <= 0 {
+            eprintln!("no virtual screen; skipping SendInput mapping test");
+            return;
+        }
+        let mon = MonitorInfo {
+            id: 1,
+            name: "DISPLAY1".into(),
+            primary: true,
+            x: vs.x,
+            y: vs.y,
+            width: vs.width as u32,
+            height: vs.height as u32,
+            scale: 1.0,
+            mid: None,
+        };
+        assert_eq!(map_to_virtual(&mon, 0.0, 0.0, vs), (0, 0));
+        let (dx, dy) = map_to_virtual(&mon, 1.0, 1.0, vs);
+        assert_eq!((dx, dy), (65535, 65535));
+    }
+}
