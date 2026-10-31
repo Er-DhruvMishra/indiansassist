@@ -21,6 +21,7 @@
 pub mod abr;
 pub mod canonical;
 pub mod capture_decision;
+pub mod clipsync;
 pub mod consent;
 pub mod control;
 pub mod ctl;

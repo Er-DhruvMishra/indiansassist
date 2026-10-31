@@ -7,7 +7,9 @@
 pub mod cli;
 pub mod codecs;
 pub mod elevate;
+pub mod filerecv;
 pub mod live;
+pub mod pbrun;
 pub mod sechs;
 pub mod tokensource;
 

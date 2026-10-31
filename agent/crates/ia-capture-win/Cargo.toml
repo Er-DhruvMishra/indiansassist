@@ -12,16 +12,21 @@ default = []
 # The production capture path adopts yuvutils-rs (BGRA->I420) and fast_image_resize
 # (ladder downscale); until the DXGI path is wired in CI the GDI path here uses a
 # self-contained BT.601 converter so the `winapi` build needs no extra C/SIMD crates.
-winapi = ["dep:windows"]
+winapi = ["dep:windows", "dep:tracing", "ia-platform/winapi"]
 
 [dependencies]
 ia-core.workspace = true
 ia-platform.workspace = true
+tracing = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
 ] }

@@ -476,3 +476,31 @@ fn modifiers_are_strict_like_the_shared_schema() {
     let extra = r#"{"ctrl":false,"shift":true,"alt":false,"meta":false,"fn":true}"#;
     assert!(serde_json::from_str::<Modifiers>(extra).is_err());
 }
+
+/// `fixtures/agent/playbook-args.json`: the agent path (`canonicalCases`, canonical strings)
+/// and the cmd value rule (`cmdCases`) agree with the TypeScript `validatePlaybookArgs`.
+#[test]
+fn playbook_args_canonical_and_cmd_cases_agree_with_shared() {
+    use ia_core::playbook::{cmd_value_re, validate_canonical_playbook_args, PlaybookParam};
+    use ia_core::types::PlaybookInterpreter;
+    use std::collections::BTreeMap;
+    let v = fixture("playbook-args.json");
+    let params: Vec<PlaybookParam> = serde_json::from_value(v["params"].clone()).unwrap();
+    for case in v["canonicalCases"].as_array().unwrap() {
+        let args: BTreeMap<String, Value> = serde_json::from_value(case["args"].clone()).unwrap();
+        let got = validate_canonical_playbook_args(&params, &args, PlaybookInterpreter::Powershell);
+        let want_ok = case["ok"].as_bool().unwrap();
+        assert_eq!(got.is_ok(), want_ok, "{}: {got:?}", s(case, "name"));
+        if let (Err(e), Some(param)) = (&got, case["param"].as_str()) {
+            assert!(e.contains(param), "{}: {e}", s(case, "name"));
+        }
+    }
+    for case in v["cmdCases"].as_array().unwrap() {
+        assert_eq!(
+            cmd_value_re().is_match(s(case, "value")),
+            case["ok"].as_bool().unwrap(),
+            "{}",
+            s(case, "name")
+        );
+    }
+}

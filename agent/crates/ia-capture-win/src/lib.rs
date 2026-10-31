@@ -7,6 +7,8 @@ pub mod canvas;
 pub mod convert;
 
 #[cfg(all(windows, feature = "winapi"))]
+pub mod dxgi;
+#[cfg(all(windows, feature = "winapi"))]
 pub mod enumerate;
 #[cfg(all(windows, feature = "winapi"))]
 pub mod gdi;

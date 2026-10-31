@@ -341,6 +341,70 @@ fn fake_assist_file_offer_is_received_to_the_right_name_and_bytes() {
     assert_eq!(bytes, data);
 }
 
+/// §6.1 F3 over real `SecChannel`s: the Desk streams an accepted offer into
+/// `<final>.<hex>.iapart` (final name chosen first, against a file already in the folder),
+/// renames it without replacing anything on `file.done` + hash match, and writes the
+/// Mark-of-the-Web. Uses a temp folder this test creates.
+#[test]
+fn fake_assist_file_streams_to_iapart_then_final_name_with_motw() {
+    use ia_agent::filerecv::{taken_names, PartFile};
+    use ia_core::filexfer::{encode_file_chunk, FileOffer, Receiver, FILE_CHUNK_SIZE};
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+
+    let (kd, ka, _) = handshake();
+    let (mut desk, mut assist) = channel_pair(&kd, &ka, "ia.file");
+    let dir = std::env::temp_dir().join(format!("ia-loopback-file-{}", rand::random::<u32>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("notes.txt"), b"already here").unwrap();
+
+    let data: Vec<u8> = (0..(FILE_CHUNK_SIZE * 2 + 100))
+        .map(|i| (i % 253) as u8)
+        .collect();
+    let sha = hex::encode(Sha256::digest(&data));
+    let chunks = data.len().div_ceil(FILE_CHUNK_SIZE);
+    let offer_json = serde_json::json!({
+        "t": "file.offer", "fileId": 9, "name": "notes.txt", "size": data.len(),
+        "mime": "text/plain", "sha256": sha, "chunkSize": FILE_CHUNK_SIZE, "chunks": chunks, "ts": 1
+    })
+    .to_string();
+    let frame = assist.seal_text(&offer_json).unwrap();
+    let offer = FileOffer::parse(&assist_to_desk(&mut desk, &frame)).unwrap();
+
+    let in_flight = HashSet::new();
+    let (mut recv, accepted) =
+        Receiver::accept_streaming(&offer, &taken_names(&dir, &in_flight)).unwrap();
+    assert_eq!(accepted.final_name, "notes (2).txt");
+    let mut part = PartFile::create(&dir, "notes.txt", &accepted.final_name).unwrap();
+    assert!(part.part_path().to_string_lossy().ends_with(".iapart"));
+
+    for (i, c) in data.chunks(FILE_CHUNK_SIZE).enumerate() {
+        let frame = assist
+            .seal_binary(&encode_file_chunk(9, i as u32, c))
+            .unwrap();
+        let opened = desk.open(&frame).unwrap();
+        let (_, idx, payload) = ia_core::filexfer::decode_file_chunk(&opened.plaintext).unwrap();
+        recv.on_chunk(idx, payload).unwrap();
+        part.write(payload).unwrap();
+        // Nothing is visible under the final name until file.done.
+        assert!(!dir.join("notes (2).txt").exists());
+    }
+    recv.finish_streaming().unwrap();
+    let saved = part.commit(&in_flight).unwrap();
+    assert_eq!(saved, dir.join("notes (2).txt"));
+    assert_eq!(std::fs::read(&saved).unwrap(), data);
+    assert_eq!(
+        std::fs::read(dir.join("notes.txt")).unwrap(),
+        b"already here"
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        ia_agent::filerecv::read_motw(&saved).unwrap(),
+        ia_agent::filerecv::MOTW
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn fake_assist_playbook_run_streams_output_and_exit_code() {
     use ia_core::ctl::{dispatch, Action, CtlReq, DispatchCtx};
@@ -359,6 +423,8 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
         id: "pb-1".into(),
         body_hash: body_hash.clone(),
         requires_elevation: false,
+        parameters: vec![],
+        timeout_sec: 120,
     }];
 
     // Assist -> Desk playbook.run on ia.control (ctl.req.id === runId, §8.4).
@@ -402,28 +468,67 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
         interpreter: PlaybookInterpreter::Powershell,
         requires_elevation,
         timeout_sec: 120,
+        args: Default::default(),
     };
     check_run(&run, &manifest, ElevationLevel::User).expect("run passes the pinned-hash check");
 
-    // Desk -> Assist pb.output then pb.end on ia.playbook (exit 0).
-    let out = PbOutput {
-        t: "pb.output".into(),
-        run_id: rid.clone(),
-        stream: "stdout".into(),
-        seq: 0,
-        chunk: "ok\r\n".into(),
-        ts: 10,
+    // Run it for real through the hardened runner (job object, stdin body, paced output) and
+    // relay every pb.output and the pb.end over the encrypted ia.playbook channel (§8.5).
+    #[cfg(windows)]
+    let (outputs, exit) = {
+        let dir = std::env::temp_dir().join(format!("ia-loopback-pb-{}", rand::random::<u32>()));
+        let (events, end) = ia_agent::pbrun::run_collect(ia_agent::pbrun::RunSpec {
+            run_id: rid.clone(),
+            interpreter: PlaybookInterpreter::Powershell,
+            body: run.body.clone(),
+            env: vec![],
+            timeout: std::time::Duration::from_secs(60),
+            run_dir: dir.clone(),
+            limits: Default::default(),
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        let outs: Vec<PbOutput> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                ia_agent::pbrun::RunEvent::Output { stream, seq, chunk } => Some(PbOutput {
+                    t: "pb.output".into(),
+                    run_id: rid.clone(),
+                    stream: stream.into(),
+                    seq,
+                    chunk,
+                    ts: 10,
+                }),
+                _ => None,
+            })
+            .collect();
+        (outs, end.exit)
     };
-    let f = desk_pb
-        .seal_text(&serde_json::to_string(&out).unwrap())
-        .unwrap();
-    let got_out: PbOutput = serde_json::from_str(&desk_to_assist(&mut assist_pb, &f)).unwrap();
-    assert_eq!(got_out.chunk, "ok\r\n");
+    #[cfg(not(windows))]
+    let (outputs, exit) = (
+        vec![PbOutput {
+            t: "pb.output".into(),
+            run_id: rid.clone(),
+            stream: "stdout".into(),
+            seq: 0,
+            chunk: "ok\r\n".into(),
+            ts: 10,
+        }],
+        Some(0),
+    );
+    let mut relayed = String::new();
+    for out in &outputs {
+        let f = desk_pb
+            .seal_text(&serde_json::to_string(out).unwrap())
+            .unwrap();
+        let got_out: PbOutput = serde_json::from_str(&desk_to_assist(&mut assist_pb, &f)).unwrap();
+        relayed.push_str(&got_out.chunk);
+    }
+    assert!(relayed.contains("ok"), "{relayed:?}");
 
     let end = PbEnd {
         t: "pb.end".into(),
         run_id: rid,
-        exit: Some(0),
+        exit,
         duration_ms: 5,
         truncated: false,
         ran_as: "user".into(),

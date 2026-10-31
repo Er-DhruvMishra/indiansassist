@@ -1,11 +1,8 @@
 //! Session orchestration (contract §3) for the `media` build: resolve the signaling URL,
-//! open the `/signal` socket, send `desk.hello`, then knock and poll. The consent window,
-//! the `ia.sec` handshake over the data channel, the encrypted control channel, the video
-//! tracks and teardown attach from here once a `session.created` arrives.
-//!
-//! The dev API has no P3 signaling path yet, so a live session cannot complete end to end
-//! (§ task note); this drives the hello/knock/poll exchange and reports what the server
-//! answered, and the in-process loopback test exercises the media + crypto path.
+//! open the `/signal` socket, send `desk.hello`, then knock and poll. Once a
+//! `session.created` arrives the live serve loop (`crate::serve`) takes over: the consent
+//! window (or the dev `--auto-consent`), the `ia.sec` handshake over the data channel, the
+//! encrypted channels, the video track, the indicator UI and teardown.
 
 use std::time::Duration;
 
@@ -100,7 +97,16 @@ pub async fn run_signaling(
         Drive::Outcome(o) => return Ok(o),
     };
     let (mut writer, mut ws_rx) = client.split();
-    let out = crate::serve::run_live_session(&mut writer, &mut ws_rx, cli, &created, budget).await;
+    let joined_by_code = matches!(token, TokenInput::ShortCode(_));
+    let out = crate::serve::run_live_session(
+        &mut writer,
+        &mut ws_rx,
+        cli,
+        &created,
+        budget,
+        joined_by_code,
+    )
+    .await;
     tracing::info!(outcome = ?out, "live serve loop returned");
     match out {
         Ok(_) => Ok(SignalOutcome::SessionCreated),

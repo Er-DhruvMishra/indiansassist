@@ -165,6 +165,105 @@ fn validate_string_value(
     Ok(())
 }
 
+fn int_canon_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(?:0|-?[1-9][0-9]{0,15})$").unwrap())
+}
+
+fn is_nfc(s: &str) -> bool {
+    icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(s) == s
+}
+
+/// Canonicalise a param `default` (typed, from the manifest) to its canonical string.
+fn canonical_default(p: &PlaybookParam, v: &Value) -> Result<String, String> {
+    match (p.ty, v) {
+        (ParamType::Bool, Value::Bool(b)) => Ok(b.to_string()),
+        (ParamType::Int, Value::Number(n)) if n.is_i64() => Ok(n.as_i64().unwrap_or(0).to_string()),
+        (ParamType::String | ParamType::Enum, Value::String(s)) => Ok(s.clone()),
+        _ => Err(format!("bad_args: {} default has the wrong type", p.name)),
+    }
+}
+
+/// The **agent path** of `validatePlaybookArgs` (contract §8.4; the TypeScript
+/// `validatePlaybookArgs(params, args, interpreter, { canonical: true })`): every provided
+/// value is the canonical string the server shipped in the `202` reply — `true` / `false`,
+/// a decimal integer with no sign for zero and no leading zero, strings already in NFC. No
+/// coercion: `"TRUE"`, `"+5"` or `"05"` are refused. An unknown parameter is refused. A
+/// missing optional parameter takes its manifest default. Returns the `IA_PARAM_<NAME>`
+/// values (upper-cased names are applied by the runner).
+pub fn validate_canonical_playbook_args(
+    params: &[PlaybookParam],
+    args: &BTreeMap<String, Value>,
+    interpreter: PlaybookInterpreter,
+) -> Result<BTreeMap<String, String>, String> {
+    for k in args.keys() {
+        if !params.iter().any(|p| &p.name == k) {
+            return Err(format!("bad_args: unknown parameter {k}"));
+        }
+    }
+    let mut out = BTreeMap::new();
+    for p in params {
+        if !param_name_re().is_match(&p.name) {
+            return Err(format!("bad_args: param name {}", p.name));
+        }
+        let (s, from_default) = match (args.get(&p.name), &p.default) {
+            (Some(Value::String(s)), _) => (s.clone(), false),
+            (Some(_), _) => return Err(format!("bad_args: {} must be a canonical string", p.name)),
+            (None, Some(d)) => (canonical_default(p, d)?, true),
+            (None, None) if p.required => return Err(format!("bad_args: {} required", p.name)),
+            (None, None) => continue,
+        };
+        match p.ty {
+            ParamType::Bool => {
+                if s != "true" && s != "false" {
+                    return Err(format!("bad_args: {} expected true or false", p.name));
+                }
+            }
+            ParamType::Int => {
+                if !int_canon_re().is_match(&s) {
+                    return Err(format!("bad_args: {} expected a canonical integer", p.name));
+                }
+                let n: i64 = s
+                    .parse()
+                    .map_err(|_| format!("bad_args: {} expected a canonical integer", p.name))?;
+                if p.min.is_some_and(|min| n < min) || p.max.is_some_and(|max| n > max) {
+                    return Err(format!("bad_args: {} out of range", p.name));
+                }
+            }
+            ParamType::String | ParamType::Enum => {
+                if !from_default && !is_nfc(&s) {
+                    return Err(format!("bad_args: {} not in NFC", p.name));
+                }
+                if p.ty == ParamType::Enum {
+                    if s.chars().count() > 4000 || has_c0_control(&s) {
+                        return Err(format!("bad_args: {} bad enum value", p.name));
+                    }
+                    if interpreter == PlaybookInterpreter::Cmd && !cmd_value_re().is_match(&s) {
+                        return Err(format!("bad_args: {} fails cmd value rule", p.name));
+                    }
+                    let allowed = p.enum_values.as_deref().unwrap_or(&[]);
+                    if !allowed.contains(&s) {
+                        return Err(format!("bad_args: {} not in enum", p.name));
+                    }
+                } else {
+                    validate_string_value(p, &s, interpreter)?;
+                }
+            }
+        }
+        out.insert(p.name.clone(), s);
+    }
+    Ok(out)
+}
+
+/// The `IA_PARAM_<NAME>` environment for a validated arg set (contract §8.4): the param name
+/// upper-cased, the canonical string as the value. Values travel out of band as data.
+pub fn param_env(canonical: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    canonical
+        .iter()
+        .map(|(k, v)| (format!("IA_PARAM_{}", k.to_ascii_uppercase()), v.clone()))
+        .collect()
+}
+
 /// Result of linting a playbook body (contract §8.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintResult {
@@ -287,11 +386,31 @@ pub struct PbEnd {
 
 /// The pinned manifest entry the agent received at `session.created` (contract §8.3). Only
 /// the fields the agent's run checks need.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ManifestEntry {
     pub id: String,
     pub body_hash: String,
     pub requires_elevation: bool,
+    /// The pinned `parameters` (re-validated on every run, §8.4).
+    pub parameters: Vec<PlaybookParam>,
+    /// The pinned `timeoutSec` (1..=900); the runner enforces it (§8.5 O3).
+    pub timeout_sec: u32,
+}
+
+impl ManifestEntry {
+    /// The timeout the runner enforces: the pinned manifest value clamped to
+    /// `1..=LIMITS.playbookTimeoutMaxSec` (a run op cannot extend it).
+    pub fn effective_timeout_sec(&self, requested: u32) -> u32 {
+        let pinned = if self.timeout_sec == 0 {
+            120
+        } else {
+            self.timeout_sec
+        };
+        let asked = if requested == 0 { pinned } else { requested };
+        asked
+            .min(pinned)
+            .clamp(1, crate::types::limits::PLAYBOOK_TIMEOUT_MAX_SEC)
+    }
 }
 
 /// A `playbook.run` op's body-bearing args (contract §8.4), copied verbatim from the REST
@@ -305,6 +424,8 @@ pub struct RunRequest {
     pub interpreter: PlaybookInterpreter,
     pub requires_elevation: bool,
     pub timeout_sec: u32,
+    /// The canonical-string args copied from the `202` reply (re-validated, §8.4).
+    pub args: BTreeMap<String, Value>,
 }
 
 /// The agent's checks before running (contract §8.4). Each failure maps to a
@@ -562,17 +683,24 @@ mod tests {
             interpreter: PlaybookInterpreter::Powershell,
             requires_elevation,
             timeout_sec: 120,
+            args: BTreeMap::new(),
+        }
+    }
+
+    fn entry(id: &str, body_hash: &str, requires_elevation: bool) -> ManifestEntry {
+        ManifestEntry {
+            id: id.into(),
+            body_hash: body_hash.into(),
+            requires_elevation,
+            parameters: vec![],
+            timeout_sec: 120,
         }
     }
 
     #[test]
     fn check_run_passes_when_hash_and_elevation_agree() {
         let run = run_req("Write-Output 'hi'", false);
-        let manifest = vec![ManifestEntry {
-            id: "pb-1".into(),
-            body_hash: run.body_hash.clone(),
-            requires_elevation: false,
-        }];
+        let manifest = vec![entry("pb-1", &run.body_hash, false)];
         assert_eq!(check_run(&run, &manifest, ElevationLevel::User), Ok(()));
     }
 
@@ -585,26 +713,83 @@ mod tests {
             Err(PlaybookError::NotAllowed)
         );
         // hash mismatch
-        let bad_hash = vec![ManifestEntry {
-            id: "pb-1".into(),
-            body_hash: "00".repeat(32),
-            requires_elevation: true,
-        }];
+        let bad_hash = vec![entry("pb-1", &"00".repeat(32), true)];
         assert_eq!(
             check_run(&run, &bad_hash, ElevationLevel::Admin),
             Err(PlaybookError::HashMismatch)
         );
         // requiresElevation but a user instance
-        let good = vec![ManifestEntry {
-            id: "pb-1".into(),
-            body_hash: run.body_hash.clone(),
-            requires_elevation: true,
-        }];
+        let good = vec![entry("pb-1", &run.body_hash, true)];
         assert_eq!(
             check_run(&run, &good, ElevationLevel::User),
             Err(PlaybookError::ElevationRequired)
         );
         assert_eq!(check_run(&run, &good, ElevationLevel::Admin), Ok(()));
+    }
+
+    fn fixture_params() -> Vec<PlaybookParam> {
+        serde_json::from_value(json!([
+            { "name": "host", "label": "Host", "type": "string", "required": true, "pattern": "[A-Za-z0-9.-]{1,253}" },
+            { "name": "count", "label": "Count", "type": "int", "required": false, "min": -5, "max": 100, "default": 4 },
+            { "name": "verbose", "label": "Verbose", "type": "bool", "required": false, "default": false },
+            { "name": "mode", "label": "Mode", "type": "enum", "required": false, "enum": ["fast", "full"] }
+        ]))
+        .unwrap()
+    }
+
+    #[test]
+    fn canonical_args_accept_server_strings_and_apply_defaults() {
+        let ps = fixture_params();
+        let out = validate_canonical_playbook_args(
+            &ps,
+            &args(&[("host", json!("example.com"))]),
+            PlaybookInterpreter::Powershell,
+        )
+        .unwrap();
+        assert_eq!(out.get("count").unwrap(), "4");
+        assert_eq!(out.get("verbose").unwrap(), "false");
+        assert!(!out.contains_key("mode"));
+        let env = param_env(&out);
+        assert!(env.contains(&("IA_PARAM_HOST".to_string(), "example.com".to_string())));
+    }
+
+    #[test]
+    fn canonical_args_refuse_non_canonical_and_unknown() {
+        let ps = fixture_params();
+        for bad in [
+            args(&[("host", json!("a")), ("count", json!("+5"))]),
+            args(&[("host", json!("a")), ("count", json!("05"))]),
+            args(&[("host", json!("a")), ("verbose", json!("TRUE"))]),
+            args(&[("host", json!("a")), ("count", json!(5))]),
+            args(&[("host", json!("a")), ("extra", json!("x"))]),
+            args(&[("host", json!("a b"))]),
+            args(&[]),
+        ] {
+            assert!(
+                validate_canonical_playbook_args(&ps, &bad, PlaybookInterpreter::Powershell)
+                    .is_err(),
+                "{bad:?}"
+            );
+        }
+        // NFD input is not canonical.
+        let nfd = PlaybookParam {
+            pattern: Some(".*".into()),
+            ..fixture_params()[0].clone()
+        };
+        assert!(validate_canonical_playbook_args(
+            &[nfd],
+            &args(&[("host", json!("e\u{301}"))]),
+            PlaybookInterpreter::Powershell
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn effective_timeout_never_exceeds_the_pin() {
+        let e = entry("x", "h", false);
+        assert_eq!(e.effective_timeout_sec(0), 120);
+        assert_eq!(e.effective_timeout_sec(30), 30);
+        assert_eq!(e.effective_timeout_sec(5000), 120);
     }
 
     #[test]

@@ -2,11 +2,10 @@
 //!
 //! The full build (feature `media`, default on the MSVC host) has no console window and
 //! drives the signaling client, the webrtc-rs peer, the VP8 encoder and the egui UI. It
-//! resolves the token-source precedence (§2.1), connects to `/signal`, and runs the hello /
-//! knock / poll exchange; the consent window, the `ia.sec` handshake and the media tracks
-//! attach once a `session.created` arrives. The dev API has no P3 path yet, so a live
-//! session cannot complete end to end — the exchange reports what the server answered and
-//! the in-process loopback test covers the media + crypto path.
+//! resolves the token-source precedence (§2.1), connects to `/signal`, runs the hello /
+//! knock / poll exchange, and once a `session.created` arrives hands over to the live serve
+//! loop: the consent window (UI thread), the `ia.sec` handshake, the encrypted channels, the
+//! media track, the indicator pill / panel / tray, and Stop + teardown.
 #![cfg_attr(
     all(feature = "media", not(feature = "dev")),
     windows_subsystem = "windows"
@@ -90,10 +89,12 @@ fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
             "dev session flags"
         );
     }
+    // Headless dev runs wait 20 s for a technician; a run with the consent window waits up to
+    // 30 minutes (the knock stays open until the technician accepts or the token expires).
     let budget = cli
         .stop_after
         .map(|s| Duration::from_secs(s.saturating_add(10)))
-        .unwrap_or_else(|| Duration::from_secs(20));
+        .unwrap_or_else(|| Duration::from_secs(if cli.auto_consent.is_some() { 20 } else { 1800 }));
     let outcome = rt.block_on(ia_agent::session::run_signaling(
         cli, &r.token, r.source, budget,
     ));

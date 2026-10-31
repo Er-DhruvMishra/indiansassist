@@ -13,5 +13,6 @@ pub mod inject;
 pub mod clipboard;
 
 /// The agent's own injection tag written to `dwExtraInfo` (`IA_1`, contract §5.3), so the
-/// §3.5 low-level hooks can drop injected events over the agent's own windows.
-pub const IA_INJECT_TAG: usize = 0x4941_5F31;
+/// §3.5 low-level hooks can drop injected events over the agent's own windows. Defined in
+/// `ia-core` so the UI's self-defence hook (`ia-ui`) uses the same value.
+pub use ia_core::types::IA_INJECT_TAG;

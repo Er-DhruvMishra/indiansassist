@@ -247,6 +247,11 @@ pub fn sec_label_id(label: &str) -> Option<u8> {
 /// `WS_CLOSE.handedOver` (contract §7.2).
 pub const WS_CLOSE_HANDED_OVER: u16 = 4411;
 
+/// The agent's own injection tag written to `dwExtraInfo` on every `SendInput` event
+/// (`IA_1`, contract §5.3). The §3.5 low-level hooks drop tagged events over the agent's
+/// own windows, and prompt buttons refuse a click whose message carries it.
+pub const IA_INJECT_TAG: usize = 0x4941_5F31;
+
 /// Keyboard / pointer modifier state carried on every op (contract §5.1).
 /// Strict like the shared B `modifiersSchema`: all four keys required, nothing else.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,0 +1,78 @@
+{
+  "description": "Read-only fixture playbooks for tests/playbooks.rs (contract section 8.4/8.5). None of them changes system state: they print, sleep, read their IA_PARAM_* environment, or start a sleeping child process that the job object must kill. They run in a temp run dir the test creates.",
+  "playbooks": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "name": "echo params",
+      "interpreter": "powershell",
+      "timeoutSec": 60,
+      "parameters": [
+        {
+          "name": "host",
+          "label": "Host",
+          "type": "string",
+          "required": true,
+          "pattern": "[A-Za-z0-9.-]{1,253}"
+        },
+        {
+          "name": "count",
+          "label": "Count",
+          "type": "int",
+          "required": false,
+          "min": 0,
+          "max": 10,
+          "default": 4
+        }
+      ],
+      "body": "Write-Output \"host=$env:IA_PARAM_HOST count=$env:IA_PARAM_COUNT leak=[$env:IA_PARAM_LEAK]\"\n[Console]::Error.WriteLine('to stderr')\nWrite-Output \"cwd=$((Get-Location).Path)\"\nexit 3\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "name": "unicode",
+      "interpreter": "powershell",
+      "timeoutSec": 60,
+      "parameters": [],
+      "body": "Write-Output \"caf$([char]0x00E9) $([char]0x0928)$([char]0x092E)$([char]0x0938)$([char]0x094D)$([char]0x0924)$([char]0x0947) ok\"\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "name": "sleep",
+      "interpreter": "powershell",
+      "timeoutSec": 2,
+      "parameters": [],
+      "body": "Write-Output 'sleeping'\nStart-Sleep -Seconds 60\nWrite-Output 'never'\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "name": "tree",
+      "interpreter": "powershell",
+      "timeoutSec": 120,
+      "parameters": [],
+      "body": "$p = Start-Process -PassThru -WindowStyle Hidden -FilePath \"$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120'\nWrite-Output \"CHILD $($p.Id)\"\nStart-Sleep -Seconds 120\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "name": "flood",
+      "interpreter": "powershell",
+      "timeoutSec": 60,
+      "parameters": [],
+      "body": "$line = 'x' * 99\nfor ($i = 0; $i -lt 3000; $i++) { Write-Output $line }\nexit 0\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "name": "cmd echo",
+      "interpreter": "cmd",
+      "timeoutSec": 60,
+      "parameters": [
+        {
+          "name": "host",
+          "label": "Host",
+          "type": "string",
+          "required": true,
+          "pattern": "[A-Za-z0-9.-]{1,253}"
+        }
+      ],
+      "body": "@echo off\r\nset \"h=%IA_PARAM_HOST%\"\r\necho cmd host %h%\r\nping -n 2 127.0.0.1 >nul\r\nexit /b 2\r\n"
+    }
+  ]
+}

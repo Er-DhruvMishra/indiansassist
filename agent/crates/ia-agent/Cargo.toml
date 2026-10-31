@@ -21,7 +21,7 @@ path = "src/lib.rs"
 default = ["media", "winapi", "gui"]
 # `dev` compiles the local-testing switches (`--api-origin`, `--signal-url`,
 # `--auto-consent`, `IA_CODEC_PREF`); a release build omits them (§2.1, §4.2).
-dev = []
+dev = ["ia-ui/dev"]
 # The webrtc-rs peer, VP8/VP9 (libvpx) + Opus encoders, rustls signaling client.
 media = [
     "dep:tokio",
@@ -52,6 +52,8 @@ ia-ui.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_json.workspace = true
+rand.workspace = true
+uuid.workspace = true
 
 tokio = { workspace = true, optional = true, features = ["process", "io-std", "signal"] }
 tokio-tungstenite = { workspace = true, optional = true }
@@ -62,6 +64,21 @@ webrtc = { workspace = true, optional = true }
 shiguredo_libvpx = { workspace = true, optional = true }
 audiopus = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
+
+# The Win32 calls the binary makes itself (§8.4 playbook job object, owner-only run file,
+# token queries; §6.1 rename-without-replace). Pure bindings; no extra DLL is imported.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 serde_json.workspace = true

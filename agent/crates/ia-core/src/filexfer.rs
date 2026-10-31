@@ -112,10 +112,18 @@ pub struct AcceptedOffer {
     pub executable: bool,
 }
 
+/// The key a name is compared under in the `taken` set: Windows file names are
+/// case-insensitive, so `Report.PDF` collides with `report.pdf`.
+pub fn taken_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
 /// Choose the collision-free final name (contract §6.1 F3): `<stem> (2).<ext>`, `(3)`…
-/// against existing files and in-flight transfers.
+/// against existing files and in-flight transfers. `taken` holds [`taken_key`]s (lower-case);
+/// the comparison is case-insensitive.
 pub fn choose_final_name(leaf: &str, taken: &HashSet<String>) -> String {
-    if !taken.contains(leaf) {
+    let is_taken = |n: &str| taken.contains(&taken_key(n)) || taken.contains(n);
+    if !is_taken(leaf) {
         return leaf.to_string();
     }
     let (stem, ext) = match leaf.rfind('.') {
@@ -125,15 +133,16 @@ pub fn choose_final_name(leaf: &str, taken: &HashSet<String>) -> String {
     let mut n = 2u32;
     loop {
         let candidate = format!("{stem} ({n}){ext}");
-        if !taken.contains(&candidate) {
+        if !is_taken(&candidate) {
             return candidate;
         }
         n += 1;
     }
 }
 
-/// The streaming file receiver (contract §6.1). In this pure form the bytes accumulate in
-/// memory; the binary swaps the sink for a `.iapart` file handle.
+/// The streaming file receiver (contract §6.1). [`Receiver::accept`] keeps the bytes in memory
+/// (tests, the loopback); [`Receiver::accept_streaming`] only validates order/size and hashes,
+/// while the binary writes each accepted chunk to a `<final>.<hex>.iapart` file.
 #[derive(Debug)]
 pub struct Receiver {
     file_id: u32,
@@ -142,6 +151,8 @@ pub struct Receiver {
     declared_sha256: String,
     expected_chunks: u32,
     next_chunk: u32,
+    received: u64,
+    keep_bytes: bool,
     bytes: Vec<u8>,
     hasher: Sha256,
     done: bool,
@@ -152,6 +163,23 @@ impl Receiver {
     pub fn accept(
         offer: &FileOffer,
         taken: &HashSet<String>,
+    ) -> Result<(Receiver, AcceptedOffer), RejectReason> {
+        Self::accept_inner(offer, taken, true)
+    }
+
+    /// As [`Receiver::accept`] but nothing is buffered: the caller streams each chunk to disk
+    /// after [`Receiver::on_chunk`] accepted it and calls [`Receiver::finish_streaming`].
+    pub fn accept_streaming(
+        offer: &FileOffer,
+        taken: &HashSet<String>,
+    ) -> Result<(Receiver, AcceptedOffer), RejectReason> {
+        Self::accept_inner(offer, taken, false)
+    }
+
+    fn accept_inner(
+        offer: &FileOffer,
+        taken: &HashSet<String>,
+        keep_bytes: bool,
     ) -> Result<(Receiver, AcceptedOffer), RejectReason> {
         if offer.size > limits::FILE_MAX_BYTES_NATIVE {
             return Err(RejectReason::TooLarge);
@@ -177,6 +205,8 @@ impl Receiver {
             declared_sha256: offer.sha256.to_ascii_lowercase(),
             expected_chunks: offer.chunks,
             next_chunk: 0,
+            received: 0,
+            keep_bytes,
             bytes: Vec::new(),
             hasher: Sha256::new(),
             done: false,
@@ -209,26 +239,51 @@ impl Receiver {
         if payload.len() > FILE_CHUNK_SIZE {
             return Err(CancelReason::BadChunk);
         }
-        if self.bytes.len() as u64 + payload.len() as u64 > self.declared_size {
+        if self.received + payload.len() as u64 > self.declared_size {
             return Err(CancelReason::Overflow);
         }
         self.hasher.update(payload);
-        self.bytes.extend_from_slice(payload);
+        if self.keep_bytes {
+            self.bytes.extend_from_slice(payload);
+        }
+        self.received += payload.len() as u64;
         self.next_chunk += 1;
         Ok(())
     }
 
-    /// `file.done`: verify every chunk arrived, the size matches and the sha256 matches.
-    /// Returns the final name and the received bytes, or the cancel reason.
-    pub fn finish(mut self) -> Result<(String, Vec<u8>), CancelReason> {
-        if self.next_chunk != self.expected_chunks || self.bytes.len() as u64 != self.declared_size
-        {
+    /// Bytes accepted so far.
+    pub fn received(&self) -> u64 {
+        self.received
+    }
+
+    /// The declared size of the offer.
+    pub fn declared_size(&self) -> u64 {
+        self.declared_size
+    }
+
+    /// The streaming `file.done` check: every chunk arrived, the size and the sha256 match.
+    /// Returns the final name; the caller then commits its `.iapart` file.
+    pub fn finish_streaming(mut self) -> Result<String, CancelReason> {
+        self.verify()?;
+        self.done = true;
+        Ok(self.final_name)
+    }
+
+    fn verify(&mut self) -> Result<(), CancelReason> {
+        if self.next_chunk != self.expected_chunks || self.received != self.declared_size {
             return Err(CancelReason::Aborted);
         }
         let digest = hex::encode(self.hasher.finalize_reset());
         if digest != self.declared_sha256 {
             return Err(CancelReason::HashMismatch);
         }
+        Ok(())
+    }
+
+    /// `file.done`: verify every chunk arrived, the size matches and the sha256 matches.
+    /// Returns the final name and the received bytes, or the cancel reason.
+    pub fn finish(mut self) -> Result<(String, Vec<u8>), CancelReason> {
+        self.verify()?;
         self.done = true;
         Ok((self.final_name, self.bytes))
     }
@@ -343,5 +398,34 @@ mod tests {
         taken.insert("report (2).pdf".to_string());
         assert_eq!(choose_final_name("report.pdf", &taken), "report (3).pdf");
         assert_eq!(choose_final_name("fresh.txt", &taken), "fresh.txt");
+        // Case-insensitive like NTFS: `Report.PDF` collides with `report.pdf`.
+        assert_eq!(choose_final_name("Report.PDF", &taken), "Report (3).PDF");
+    }
+
+    #[test]
+    fn streaming_receiver_hashes_without_buffering() {
+        let data: Vec<u8> = (0..(FILE_CHUNK_SIZE as u32 * 2 + 3))
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let offer = offer_for("stream.bin", &data);
+        let (mut recv, accepted) = Receiver::accept_streaming(&offer, &HashSet::new()).unwrap();
+        assert_eq!(accepted.final_name, "stream.bin");
+        for (i, c) in data.chunks(FILE_CHUNK_SIZE).enumerate() {
+            recv.on_chunk(i as u32, c).unwrap();
+        }
+        assert_eq!(recv.received(), data.len() as u64);
+        assert_eq!(recv.finish_streaming().unwrap(), "stream.bin");
+
+        // A short transfer is aborted, a wrong hash is a mismatch.
+        let (mut short, _) = Receiver::accept_streaming(&offer, &HashSet::new()).unwrap();
+        short.on_chunk(0, &data[..FILE_CHUNK_SIZE]).unwrap();
+        assert_eq!(short.finish_streaming(), Err(CancelReason::Aborted));
+        let mut bad = offer.clone();
+        bad.sha256 = "11".repeat(32);
+        let (mut wrong, _) = Receiver::accept_streaming(&bad, &HashSet::new()).unwrap();
+        for (i, c) in data.chunks(FILE_CHUNK_SIZE).enumerate() {
+            wrong.on_chunk(i as u32, c).unwrap();
+        }
+        assert_eq!(wrong.finish_streaming(), Err(CancelReason::HashMismatch));
     }
 }
