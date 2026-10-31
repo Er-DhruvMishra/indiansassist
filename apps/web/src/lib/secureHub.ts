@@ -49,11 +49,20 @@ export type SecureHubOptions = {
   isOrderlyEnd?: () => boolean;
   /** False once the peer connection is `closed` / `failed`; the channel lifetime rule only applies while it lives. */
   connectionAlive?: () => boolean;
+  /**
+   * F9: how long a channel close with no stop message waits for a server-initiated end (`session.ended` /
+   * `consent.changed`) to be recognised as orderly before it is declared `sec.fail { reason: 'channel' }`. The Desk's
+   * P2P close can beat the console's WS `session.ended`; without this window the race is mis-recorded as a channel
+   * violation. Defaults to `CHANNEL_CLOSE_GRACE_MS`.
+   */
+  channelCloseGraceMs?: number;
   /** Injected in tests (fixed keys, no timer). */
   handshake?: (send: (m: SecMessage) => void, fpr: { own: string; remote: string }) => SecHandshake;
 };
 
 const HOLD_MAX = 512;
+/** F9 default grace: a server-initiated end has this long to arrive before a channel close is a violation. */
+export const CHANNEL_CLOSE_GRACE_MS = 1500;
 /** Inbound messages that announce the Desk's hard rule 2 teardown (A section 8.1, `ia.ctrl`). */
 const PEER_END_MESSAGES: ReadonlySet<string> = new Set(['stop.sharing', 'consent.revoked']);
 
@@ -89,13 +98,19 @@ export class SecureHub implements HubLike {
     return this.closing || this.failed || this.peerEnd !== null || this.o.isOrderlyEnd?.() === true || this.o.connectionAlive?.() === false;
   }
 
-  /** Channel lifetime rule, decided one macrotask after the close so a same-tick stop message is seen first. */
+  /**
+   * Channel lifetime rule, decided after a grace window rather than at once. A same-tick stop message is seen first
+   * (as before), and additionally a server-initiated end whose `session.ended` / `consent.changed` is still in flight
+   * over the WS has this long to arrive and make the close orderly (F9): the Desk tears its P2P down before its WS end
+   * frame reaches the server, so the close can beat the end. When the end is recognised the owner tears the link down
+   * (`close()`), which clears this timer, so the grace never ends in a false `sec.fail { reason: 'channel' }`.
+   */
   private onChannelClose(): void {
     if (this.closeIsOrderly()) return;
     const timer = setTimeout(() => {
       this.closeTimers.delete(timer);
       if (!this.closeIsOrderly()) this.fail('channel');
-    }, 0);
+    }, this.o.channelCloseGraceMs ?? CHANNEL_CLOSE_GRACE_MS);
     this.closeTimers.add(timer);
   }
 

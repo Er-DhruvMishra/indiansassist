@@ -113,6 +113,7 @@ beforeEach(() => {
     },
     loadPolicy: async () => ({ requireSasConfirm: true }),
     peerEndFallbackMs: 200,
+    channelCloseGraceMs: 100,
     runPlaybook: async (_s, playbookId, args) => ({
       runId: 'c'.repeat(32),
       opId: '0123456789abcdef',
@@ -201,6 +202,7 @@ describe('AgentConsoleController', () => {
 
   it('reports elevation.requested with the reason before the op; runs a playbook verbatim from the 202', async () => {
     const d = await live();
+    ctrl.confirmSas(d.hs.result!.sas); // C9: playbooks and elevation need the confirmed security code
     void ctrl.requestElevation('install the printer driver');
     await vi.waitFor(() => expect(d.inbox.some((m) => m['op'] === 'elevation.request')).toBe(true));
     const rep = reports.find((r) => r.action === 'elevation.requested')!;
@@ -331,5 +333,86 @@ describe('AgentConsoleController', () => {
   it('skip is refused while the org requires the confirmation', async () => {
     await live();
     expect(ctrl.skipSas()).toBe(false);
+  });
+
+  // ---------- C2: the SAS gate is reset on every link and the generation must advance monotonically ----------
+
+  it('refuses a restart offer that replays the confirmed generation and keeps Control blocked (C2)', async () => {
+    const d0 = await live();
+    ctrl.confirmSas(d0.hs.result!.sas);
+    expect(ctrl.setInputMode('control')).toBe(true);
+    // A forged / replayed restart offer at the same generation must not reuse the gen-0 confirmation.
+    ws.receive({ t: 'webrtc.offer', sessionId: IDS.session, sdp: 'v=0 replay', restart: true, gen: 0 });
+    await vi.waitFor(() => expect(ws.ofType('session.end')).toHaveLength(1));
+    expect(ws.ofType('session.end')[0]!['note']).toBe('sec:commit');
+    expect(reports.find((r) => r.action === 'sec.failed')?.data).toEqual({ reason: 'commit' });
+    expect(ctrl.setInputMode('control')).toBe(false);
+    expect(FakePeerConnection.instances[0]!.closed).toBe(true);
+  });
+
+  it('refuses a restart offer that carries no generation after one was confirmed (C2)', async () => {
+    const d0 = await live();
+    ctrl.confirmSas(d0.hs.result!.sas);
+    ws.receive({ t: 'webrtc.offer', sessionId: IDS.session, sdp: 'v=0 nogen', restart: true });
+    await vi.waitFor(() => expect(ws.ofType('session.end')).toHaveLength(1));
+    expect(ws.ofType('session.end')[0]!['note']).toBe('sec:commit');
+    expect(reports.find((r) => r.action === 'sec.failed')?.data).toEqual({ reason: 'commit' });
+    expect(ctrl.setInputMode('control')).toBe(false);
+  });
+
+  // ---------- C9: playbooks, cancel and elevation share the control + SAS gate ----------
+
+  it('does not run a playbook, cancel a run, or request elevation before the SAS is confirmed (C9)', async () => {
+    const d = await live();
+    expect(await ctrl.runPlaybook(ctrl.snapshot.playbooks[0]!, {})).toMatch(/security code/i);
+    expect(await ctrl.requestElevation('install the printer driver')).toBe(false);
+    await ctrl.cancelPlaybook('c'.repeat(32));
+    await settle();
+    expect(d.inbox.some((m) => m['op'] === 'playbook.run')).toBe(false);
+    expect(d.inbox.some((m) => m['op'] === 'elevation.request')).toBe(false);
+    expect(d.inbox.some((m) => m['op'] === 'playbook.cancel')).toBe(false);
+    expect(reports.some((r) => r.action === 'elevation.requested')).toBe(false);
+    expect(ctrl.snapshot.runs).toHaveLength(0);
+    expect(ctrl.snapshot.sasPrompt).toBe(true);
+  });
+
+  // ---------- C13: chat.channel_open and WS chat forgery defence ----------
+
+  it('announces chat.channel_open on establish and drops a WS chat.message once ia.chat is open (C13)', async () => {
+    const d = await live();
+    expect(ws.ofType('chat.channel_open')).toHaveLength(1);
+    ws.receive({ t: 'chat.message', sessionId: IDS.session, msgId: IDS.other, from: 'desk', text: 'forged', ts: 1 });
+    expect(ctrl.snapshot.chat.some((c) => c.text === 'forged')).toBe(false);
+    deskSend(d, 'ia.chat', { t: 'chat', msgId: IDS.token, from: 'desk', text: 'real', ts: 2 });
+    expect(ctrl.snapshot.chat.some((c) => c.text === 'real')).toBe(true);
+  });
+
+  it('accepts the WS chat.message relay only while ia.chat is not yet open (C13)', async () => {
+    ws.receive({ t: 'chat.message', sessionId: IDS.session, msgId: IDS.other, from: 'desk', text: 'early', ts: 1 });
+    expect(ctrl.snapshot.chat.some((c) => c.text === 'early')).toBe(true);
+    await live();
+    ws.receive({ t: 'chat.message', sessionId: IDS.session, msgId: IDS.token, from: 'desk', text: 'late', ts: 2 });
+    expect(ctrl.snapshot.chat.some((c) => c.text === 'late')).toBe(false);
+  });
+
+  // ---------- F9: a server-initiated end racing the Desk's P2P close is not a channel violation ----------
+
+  it('waits out the channel-close grace for a server-initiated session.ended (no sec.fail channel) (F9)', async () => {
+    const d = await live();
+    vi.useFakeTimers();
+    try {
+      // The Desk tears its P2P down (a channel closes) before the server's session.ended reaches the console.
+      d.chans.get('ia.control')!.close();
+      await vi.advanceTimersByTimeAsync(50); // still inside the 100 ms grace
+      expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+      ws.receive(sessionEnded('timeout')); // the real end arrives: the link is torn down and the grace timer cleared
+      await vi.advanceTimersByTimeAsync(200); // past the original grace deadline
+      expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+      expect(ws.ofType('session.end')).toHaveLength(0);
+      expect(ctrl.snapshot.phase).toBe('ended');
+      expect(ctrl.snapshot.ended?.endReason).toBe('timeout');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -107,6 +107,16 @@ export class AgentConsoleController extends AgentControllerCore {
     return this.snap.inputMode === 'control' && controlBlocker(this.snap) === null;
   }
 
+  /**
+   * C9: the gate for control-level actions that do not travel over the input surface (playbooks, elevation). It is
+   * exactly `controlBlocker(snap) === null`: the secure channel is established, the user granted at least `control`,
+   * and this generation's security code is confirmed. Unlike `controlling` it does not require the input mode to be
+   * `control`, but it must never be bypassed the way `runPlaybook` / `cancelPlaybook` / `requestElevation` used to.
+   */
+  private get controlGranted(): boolean {
+    return controlBlocker(this.snap) === null;
+  }
+
   // ---------- monitors (section 3.6) ----------
 
   /** Views one monitor (selecting it when it is not streaming) or `all` (selects every monitor, mosaic). */
@@ -184,6 +194,12 @@ export class AgentConsoleController extends AgentControllerCore {
   async requestElevation(reason: string): Promise<boolean> {
     const why = reason.trim();
     if (why.length < 1 || why.length > 500) return false;
+    // C9: elevation is a control-level action; never request it (and never POST `elevation.requested`) at view or
+    // before the security code is confirmed. Prompt for the code instead.
+    if (!this.controlGranted) {
+      this.openSasPrompt(true);
+      return false;
+    }
     const { id, opId } = this.ops.newId();
     this.set({ elevation: { opId, state: 'requesting' } });
     await this.report({ action: 'elevation.requested', data: { opId }, reason: why });
@@ -262,6 +278,11 @@ export class AgentConsoleController extends AgentControllerCore {
   // ---------- playbooks (section 8) ----------
 
   async runPlaybook(pb: PlaybookManifest, args: Record<string, PlaybookArgValue>, reason?: string): Promise<string | null> {
+    // C9: a playbook runs arbitrary, pre-approved code at control level; gate it on the same predicate as input.
+    if (!this.controlGranted) {
+      this.openSasPrompt(true);
+      return 'Confirm the security code before running a playbook.';
+    }
     const run = this.d.runPlaybook ?? playbooksApi.run;
     let reply;
     try {
@@ -276,6 +297,11 @@ export class AgentConsoleController extends AgentControllerCore {
   }
 
   async cancelPlaybook(runId: string): Promise<void> {
+    // C9: cancelling a run is also a control-level op; do not send it unless control is granted and the code confirmed.
+    if (!this.controlGranted) {
+      this.openSasPrompt(true);
+      return;
+    }
     await this.ops.request('playbook.cancel', { runId }, `${runId}:cancel`);
   }
 

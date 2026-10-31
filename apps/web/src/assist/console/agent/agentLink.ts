@@ -34,6 +34,8 @@ export type AgentLinkOptions = {
   handshake?: SecureHubOptions['handshake'];
   /** The controller's orderly-end flag: channel closes after it are teardown, not `sec.fail { reason: 'channel' }`. */
   isOrderlyEnd?: () => boolean;
+  /** F9: how long a channel close waits for a server-initiated end before it is declared a channel violation. */
+  channelCloseGraceMs?: number;
 };
 
 export class AgentLink {
@@ -55,6 +57,7 @@ export class AgentLink {
         const st = this.peer.pc.connectionState;
         return st !== 'closed' && st !== 'failed';
       },
+      channelCloseGraceMs: o.channelCloseGraceMs,
       handshake: o.handshake,
     });
     this.files = new FileTransfer(this.hub, 'assist', (l) => o.events.onTransfers(l), o.attest, NATIVE_SEND_OPTIONS);

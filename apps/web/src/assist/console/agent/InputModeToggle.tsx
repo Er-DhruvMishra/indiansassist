@@ -48,7 +48,7 @@ export function InputModeToggle({
       <Button size="sm" variant={mode === 'control' ? 'primary' : 'secondary'} aria-pressed={mode === 'control'} disabled={!controlReady} onClick={() => onMode('control')}>
         Control
       </Button>
-      <Button size="sm" variant="secondary" disabled={!secured || !canElevate || elevated} onClick={onElevate}>
+      <Button size="sm" variant="secondary" disabled={!controlReady || !canElevate || elevated} onClick={onElevate}>
         Elevated
       </Button>
       <Badge tone={elevated ? 'red' : levelOk ? 'green' : 'neutral'}>{chip}</Badge>

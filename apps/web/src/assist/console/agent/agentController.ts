@@ -42,6 +42,8 @@ export type AgentControllerDeps = {
   loadPolicy?: () => Promise<{ requireSasConfirm: boolean }>;
   /** Overrides `AGENT_PEER_END_FALLBACK_MS` (tests). */
   peerEndFallbackMs?: number;
+  /** Overrides the F9 channel-close grace (tests). */
+  channelCloseGraceMs?: number;
 };
 
 /** How the session is ending, once known; `null` while it is live. */
@@ -66,6 +68,12 @@ export class AgentControllerCore {
   private oldTransfers: AgentSnapshot['transfers'] = [];
   private endingBy: EndingBy | null = null;
   private peerEndTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * C2: the highest key generation this console has ever built a link for, kept independently of `this.link` (which
+   * is cleared on every rebuild). A restart offer must advance it by exactly one; it is never reset for the life of
+   * the controller, so a replayed or omitted `gen` can never reuse a stale SAS confirmation.
+   */
+  private lastGen: number | null = null;
 
   constructor(protected readonly deps: AgentControllerDeps) {
     this.ops = new OpTracker(deps.sessionId, (m) => this.link?.hub.send(m as never) ?? false);
@@ -141,7 +149,7 @@ export class AgentControllerCore {
         this.iceServers = toRtcIceServers(m.iceServers);
         this.link?.peer.refreshIce(this.iceServers, false);
       })),
-      s.on('chat.message', mine((m) => this.receiveChat(m))),
+      s.on('chat.message', mine((m) => this.receiveWsChat(m))),
       s.on('session.ended', mine((m: SessionEnded) => {
         this.endingBy = 'server';
         this.clearPeerEndTimer();
@@ -182,7 +190,19 @@ export class AgentControllerCore {
 
   private onOffer(sdp: string, restart: boolean, gen: number | undefined): void {
     if (restart || !this.link || this.link.isClosed) {
-      const next = gen ?? (this.link ? this.link.o.gen + 1 : 0);
+      let next: number;
+      if (this.lastGen === null) {
+        // The first peer connection this console builds (the initial handshake, or a resume after a reload): there
+        // is no earlier confirmation to replay against, so the offered generation is accepted as the baseline.
+        next = typeof gen === 'number' ? gen : 0;
+      } else {
+        // C2: a rebuild must advance the generation by exactly one. A restart offer that replays an old / equal
+        // generation, or omits it, is the MITM-at-rebuild case (it would reuse a stale SAS confirmation); refuse it
+        // outright as a handshake-order violation (section 1.3 step 9, `commit`).
+        if (typeof gen !== 'number' || gen !== this.lastGen + 1) return void this.onSecFailed('commit');
+        next = gen;
+      }
+      this.lastGen = next;
       this.closeLink();
       this.buildLink(next);
     }
@@ -191,7 +211,9 @@ export class AgentControllerCore {
 
   private buildLink(gen: number): void {
     const confirmedBefore = this.snap.sasConfirmedGen !== null;
-    this.set({ phase: 'securing', sec: { state: 'securing', gen, sas: null, failReason: null }, inputMode: 'view' });
+    // C2: every new link starts with no confirmed generation, so the SAS must be re-compared even if a rebuild
+    // happens to reuse a generation number; the gate can never ride on a stale confirmation.
+    this.set({ phase: 'securing', sec: { state: 'securing', gen, sas: null, failReason: null }, inputMode: 'view', sasConfirmedGen: null });
     this.link = new AgentLink({
       sessionId: this.id,
       gen,
@@ -200,6 +222,7 @@ export class AgentControllerCore {
       RTCPeerConnectionImpl: this.deps.RTCPeerConnectionImpl,
       fingerprints: this.deps.fingerprints,
       handshake: this.deps.handshake,
+      channelCloseGraceMs: this.deps.channelCloseGraceMs,
       isOrderlyEnd: () => this.endingBy !== null,
       attest: async (action, data) => {
         await sessionsApi.fileEvent(this.id, action, data);
@@ -216,7 +239,12 @@ export class AgentControllerCore {
           if (st === 'failed') this.set({ notice: 'The media connection failed; waiting for the Desk to rebuild it.' });
         },
         onEstablished: (r) => {
-          const history = [...this.snap.sasHistory.filter((h) => h.gen !== r.gen), { gen: r.gen, sas: r.sas }];
+          // C13: announce the encrypted chat channel to the server so it stops relaying WS `chat.message`
+          // (mirrors controller.ts / mirrorController.ts). A relay that keeps forwarding afterwards is then
+          // detectable and dropped in `receiveWsChat`.
+          this.deps.signal.send({ t: 'chat.channel_open', sessionId: this.id });
+          // C2: sasHistory is append-only; a generation already recorded is never overwritten.
+          const history = this.snap.sasHistory.some((h) => h.gen === r.gen) ? this.snap.sasHistory : [...this.snap.sasHistory, { gen: r.gen, sas: r.sas }];
           this.set({
             phase: 'live',
             sec: { state: 'established', gen: r.gen, sas: r.sas, failReason: null },
@@ -316,6 +344,17 @@ export class AgentControllerCore {
   protected receiveChat(m: { msgId: string; text: string; ts?: unknown }): void {
     const ts = typeof m.ts === 'number' ? m.ts : Date.now();
     this.set({ chat: addChat(this.snap.chat, { msgId: m.msgId, from: 'desk', text: m.text, ts, mine: false }) });
+  }
+
+  /**
+   * C13: the WS `chat.message` relay (A X7) is the one declared plaintext gap, usable only while the encrypted
+   * `ia.chat` channel is not yet established. Once it is open, the console has sent `chat.channel_open` and the
+   * server must stop relaying; a WS `chat.message` arriving then can only be a forgery by a compromised relay, so it
+   * is dropped rather than shown as if it came from the Desk.
+   */
+  private receiveWsChat(m: { msgId: string; text: string; ts?: unknown }): void {
+    if (this.link?.hub.isOpen('ia.chat')) return;
+    this.receiveChat(m);
   }
 
   sendChat(text: string): void {

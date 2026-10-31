@@ -192,7 +192,7 @@ export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentCo
               playbooks={snap.playbooks}
               runs={snap.runs}
               elevated={elevated}
-              canRun={secured && levelAllows(tier, snap.consent.level, 'control')}
+              canRun={sasOk(snap) && levelAllows(tier, snap.consent.level, 'control')}
               supported={hasFeature(snap, 'playbooks')}
               onRun={(pb, args) => ctrl.runPlaybook(pb, args)}
               onCancel={(id) => void ctrl.cancelPlaybook(id)}
