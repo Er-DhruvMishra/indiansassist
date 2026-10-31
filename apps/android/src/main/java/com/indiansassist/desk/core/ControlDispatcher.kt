@@ -40,13 +40,16 @@ class ControlDispatcher(
     private val screen: ScreenInfo,
     private val guard: InputGuard,
     private val audit: InputAudit,
-    clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     val strokes = StrokeTracker(clock)
     private val ops = TokenBucket(30.0, 60.0, clock)
     private val textBudget = TokenBucket(400.0, 2048.0, clock)
     private var quality = "auto"
     private val modifierCodes = setOf("ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight")
+    // C15 consent-fatigue: one outstanding level prompt per session, then a cooldown after a Refuse/timeout.
+    @Volatile private var levelPromptOutstanding = false
+    @Volatile private var levelCooldownUntil = 0L
 
     fun handle(req: ControlRequest): ControlOutcome {
         val op = req.parsed
@@ -71,9 +74,31 @@ class ControlDispatcher(
             is AgentOp.Key -> key(req, op)
             is AgentOp.Text -> text(req, op)
             is AgentOp.Nav -> result(req, input.nav(op.action), "key")
-            is AgentOp.LevelRequest -> ControlOutcome.LevelPrompt(req.id, op.reason)
+            is AgentOp.LevelRequest -> levelRequest(req, op)
             is AgentOp.Unsupported -> reply(req, "not_supported", op.message)
         }
+    }
+
+    /**
+     * `level.request` with the C15 consent-fatigue rules: answer `ok` at once when already at control, `busy` while a
+     * prompt is already outstanding, and `refused` (counted in `control.input.refused`) during the cooldown that a
+     * previous Refuse/timeout started. Only an otherwise-eligible request raises a prompt.
+     */
+    private fun levelRequest(req: ControlRequest, op: AgentOp.LevelRequest): ControlOutcome {
+        if (AgentControl.levelAtLeast(guard.state.level, "control")) return ok(req, obj("level" to guard.state.level))
+        if (levelPromptOutstanding) return reply(req, "busy", "a control request is already waiting for the user")
+        if (clock() < levelCooldownUntil) {
+            audit.refused()
+            return reply(req, "refused", "the user recently declined control")
+        }
+        levelPromptOutstanding = true
+        return ControlOutcome.LevelPrompt(req.id, op.reason)
+    }
+
+    /** The controller calls this once the user (or the 60 s timeout) resolves the outstanding prompt (C15). */
+    fun levelPromptResolved(granted: Boolean) {
+        levelPromptOutstanding = false
+        if (!granted) levelCooldownUntil = clock() + LEVEL_COOLDOWN_MS
     }
 
     fun monitors(): JsonObject = obj("monitors" to listOf(AgentControl.monitorInfo(screen.width, screen.height, screen.densityDpi, screen.mid)), "selected" to listOf(1))
@@ -152,4 +177,9 @@ class ControlDispatcher(
 
     private fun ok(req: ControlRequest, result: JsonObject = obj()) = ControlOutcome.Reply(AgentControl.ok(req.id, result))
     private fun reply(req: ControlRequest, code: String, message: String) = ControlOutcome.Reply(AgentControl.err(req.id, code, message))
+
+    companion object {
+        /** Cooldown after a Refuse/timeout before another `level.request` is shown (C15, 30-60 s). */
+        const val LEVEL_COOLDOWN_MS = 45_000L
+    }
 }

@@ -21,6 +21,8 @@ sealed interface DeskEvent {
     data object IndicatorLost : DeskEvent
     data class SecFailed(val reason: String) : DeskEvent
     data object LowerToView : DeskEvent
+    /** The user allowed a `level.request`: the machine issues the `desk.consent_level` raise and tracks its id (C7). */
+    data class LevelGranted(val reqId: String, val opId: String) : DeskEvent
     data object LocalEndTimeout : DeskEvent
 }
 
@@ -41,7 +43,7 @@ sealed interface DeskEffect {
     data class LevelChanged(val level: String) : DeskEffect
     data class PeerSignal(val msg: JsonObject) : DeskEffect
     data class ChatRelay(val msg: JsonObject) : DeskEffect
-    data class LevelReply(val re: String?, val ok: Boolean) : DeskEffect
+    data class LevelReply(val reqId: String?, val ok: Boolean) : DeskEffect
     data object StartLocalEndTimer : DeskEffect
     data object CloseSocket : DeskEffect
     data class Ended(val info: EndInfo) : DeskEffect
@@ -76,6 +78,9 @@ class DeskMachine(private val client: DeskClient, private val deskLabel: String?
     private var reachedActive = false
     private var socketOpen = false
     private var localEndFrame: JsonObject? = null
+    private var levelSeq = 0
+    // C7: the raise requests this machine has sent and not yet seen `consent.level_ok`/`error` for; frameId -> (ctl.req id, locally granted target).
+    private val pendingLevelReq = HashMap<String, Pair<String, String>>()
 
     val isLive: Boolean get() = phase == DeskPhase.ACTIVE || phase == DeskPhase.STARTING
 
@@ -126,6 +131,16 @@ class DeskMachine(private val client: DeskClient, private val deskLabel: String?
                 // The host stops honouring input before the frame is sent (section 3.4).
                 level = "view"
                 listOf(DeskEffect.LevelChanged("view"), DeskEffect.Send(DeskSignal.consentLevel(sid, "view")))
+            }
+        }
+        is DeskEvent.LevelGranted -> {
+            val sid = sessionId
+            // Only the machine issues the raise, and only from `active`; it records the outstanding id so the
+            // server's `consent.level_ok` is trusted only as a reply to a request we actually sent (C7).
+            if (phase != DeskPhase.ACTIVE || sid == null) emptyList() else {
+                val frameId = "lv${levelSeq++}"
+                pendingLevelReq[frameId] = e.reqId to "control"
+                listOf(DeskEffect.Send(DeskSignal.consentLevel(sid, "control", id = frameId, requested = true, opId = e.opId)))
             }
         }
         DeskEvent.LocalEndTimeout -> {
@@ -212,10 +227,7 @@ class DeskMachine(private val client: DeskClient, private val deskLabel: String?
                 if (m.str("state") == "active" && phase == DeskPhase.ACTIVE) listOf(DeskEffect.RebuildPeer(ice)) else emptyList()
             }
             "session.recording" -> listOf(DeskEffect.Recording(m.bool("recording") == true))
-            "consent.level_ok" -> {
-                m.str("level")?.let { level = it }
-                listOf(DeskEffect.LevelChanged(level), DeskEffect.LevelReply(m.str("re"), true))
-            }
+            "consent.level_ok" -> onLevelOk(m)
             "session.ended" -> if (phase == DeskPhase.ENDED) emptyList() else finish(
                 EndInfo(m.str("endReason") ?: "error", local = false, hashChainTail = m.str("hashChainTail"), reachedActive = m.bool("reachedActive") ?: reachedActive),
             )
@@ -273,9 +285,31 @@ class DeskMachine(private val client: DeskClient, private val deskLabel: String?
         }
     }
 
+    /**
+     * `consent.level_ok` (C7): trusted only as the reply to a raise this machine sent (`re` matches an outstanding
+     * frame id). The named level is honoured only when it is `view`/`control` — any out-of-family value ('input'),
+     * `elevated`, or anything unknown maps to `view`, so a malicious server can never store a value that crashes the
+     * input thread — and it is clamped to the locally granted target, so the server can never raise us above it.
+     */
+    private fun onLevelOk(m: JsonObject): List<DeskEffect> {
+        val re = m.str("re")
+        val pending = re?.let { pendingLevelReq.remove(it) } ?: return emptyList()
+        val (reqId, target) = pending
+        val named = m.str("level")
+        val accepted = if (named == "view" || named == "control") named else "view"
+        val targetOrder = AgentControl.LEVEL_ORDER[target] ?: 0
+        level = if ((AgentControl.LEVEL_ORDER[accepted] ?: 0) > targetOrder) target else accepted
+        return listOf(DeskEffect.LevelChanged(level), DeskEffect.LevelReply(reqId, true))
+    }
+
     private fun onError(m: JsonObject): List<DeskEffect> {
         val code = m.str("code") ?: "error"
-        if (m.str("re")?.startsWith("lv") == true) return listOf(DeskEffect.LevelReply(m.str("re"), false))
+        val re = m.str("re")
+        if (re != null && re.startsWith("lv")) {
+            // A refused/failed raise: answer the op false only when it matches a request we actually sent (C7).
+            val pending = pendingLevelReq.remove(re) ?: return emptyList()
+            return listOf(DeskEffect.LevelReply(pending.first, false))
+        }
         return if (code in FATAL_ERRORS && phase != DeskPhase.ENDED) finish(EndInfo("error", local = true, error = code)) else emptyList()
     }
 

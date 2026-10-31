@@ -167,10 +167,44 @@ class ControlDispatcherTest {
         val q = res("os.quality", obj("preset" to "floor")).objOrNull("result")!!
         assertEquals("floor", q.str("preset"))
         assertEquals("floor", screen.quality)
+        // Below control a request raises a prompt (C15).
+        guard.state = guard.state.copy(level = "view")
         val p = d.handle(req("level.request", obj("level" to "control", "reason" to "fix wifi")))
         assertEquals(ControlOutcome.LevelPrompt("r1", "fix wifi"), p)
         assertEquals("control", AgentControl.minLevelFor("os.text"))
         assertEquals("view", AgentControl.minLevelFor("os.monitors"))
         assertEquals("elevated", AgentControl.minLevelFor("os.privacy_screen"))
+    }
+
+    /** C15 consent-fatigue: already-at-control ok, one outstanding prompt (busy), cooldown after a refuse. */
+    @Test
+    fun levelRequestConsentFatigue() {
+        // Already at control: answered ok at once, never a prompt.
+        val ok = (d.handle(req("level.request", obj("level" to "control", "reason" to "x"))) as ControlOutcome.Reply).res
+        assertEquals(true, ok.bool("ok"))
+        assertEquals("control", ok.objOrNull("result")!!.str("level"))
+
+        guard.state = guard.state.copy(level = "view")
+        // First request raises the prompt.
+        assertTrue(d.handle(req("level.request", obj("level" to "control", "reason" to "a"), id = "q1")) is ControlOutcome.LevelPrompt)
+        // While one is outstanding, another is busy.
+        assertEquals("busy", code((d.handle(req("level.request", obj("level" to "control"), id = "q2")) as ControlOutcome.Reply).res))
+        // A refuse starts the cooldown; a further request is refused and counted.
+        d.levelPromptResolved(granted = false)
+        assertEquals("refused", code((d.handle(req("level.request", obj("level" to "control"), id = "q3")) as ControlOutcome.Reply).res))
+        assertEquals(1, audit.flush(force = true).single().data.int("refused"))
+    }
+
+    /** C15: once the cooldown elapses a prompt is shown again. */
+    @Test
+    fun levelRequestAfterCooldown() {
+        var now = 0L
+        val guard = InputGuard().apply { state = GuardState(active = true, level = "view", established = true, inPromptWindow = false) }
+        val d = ControlDispatcher(input, screen, guard, InputAudit { now }) { now }
+        (d.handle(req("level.request", obj("level" to "control"), id = "a")) as ControlOutcome.LevelPrompt)
+        d.levelPromptResolved(granted = false)
+        assertEquals("refused", code((d.handle(req("level.request", obj("level" to "control"), id = "b")) as ControlOutcome.Reply).res))
+        now += ControlDispatcher.LEVEL_COOLDOWN_MS
+        assertTrue(d.handle(req("level.request", obj("level" to "control"), id = "c")) is ControlOutcome.LevelPrompt)
     }
 }

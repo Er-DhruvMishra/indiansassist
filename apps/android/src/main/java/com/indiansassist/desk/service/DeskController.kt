@@ -53,9 +53,7 @@ class DeskController(private val service: SessionService, private val token: Res
     private var live: LiveMedia? = null
     private var poll: ScheduledFuture<*>? = null
     private val timers = mutableListOf<ScheduledFuture<*>>()
-    private var levelSeq = 0
     private var endA11yQueued = false
-    private val levelWaiters = HashMap<String, String>() // desk.consent_level frame id -> ctl.req id
 
     override val sessionId: String get() = machine.sessionId ?: ""
     override val technician: String get() = machine.technician ?: "your technician"
@@ -144,7 +142,7 @@ class DeskController(private val service: SessionService, private val token: Res
             is DeskEffect.PeerSignal -> live?.onPeerSignal(e.msg)
             is DeskEffect.ChatRelay -> live?.onChat(JsonObject(e.msg + ("t" to kotlinx.serialization.json.JsonPrimitive("chat"))))
                 ?: SessionHub.update { it.copy(chat = it.chat + ChatLine(technician, e.msg.str("text") ?: "", System.currentTimeMillis())) }
-            is DeskEffect.LevelReply -> e.re?.let { re -> levelWaiters.remove(re)?.let { id -> answerLevelOp(id, e.ok) } }
+            is DeskEffect.LevelReply -> e.reqId?.let { answerLevelOp(it, e.ok) }
             DeskEffect.StartLocalEndTimer -> exec.schedule({ event(DeskEvent.LocalEndTimeout) }, 5, TimeUnit.SECONDS)
             DeskEffect.CloseSocket -> socket?.close()
             is DeskEffect.Ended -> ended(e)
@@ -190,10 +188,12 @@ class DeskController(private val service: SessionService, private val token: Res
         val sid = machine.sessionId ?: return
         val opId = AgentControl.opIdFor(sid, id)
         if (accept && machine.phase == DeskPhase.ACTIVE) {
-            val frameId = "lv${levelSeq++}"
-            levelWaiters[frameId] = id
-            socket?.send(DeskSignal.consentLevel(sid, "control", id = frameId, requested = true, opId = opId))
+            // Clear the one-outstanding-prompt latch (C15); the machine issues and tracks the raise frame (C7).
+            inputExec.execute { live?.dispatcher?.levelPromptResolved(granted = true) }
+            event(DeskEvent.LevelGranted(id, opId))
         } else {
+            // A Refuse/timeout starts the cooldown so further requests are refused for a while (C15).
+            inputExec.execute { live?.dispatcher?.levelPromptResolved(granted = false) }
             live?.sendControl(AgentControl.err(id, if (timeout) "timeout" else "refused", if (timeout) "no answer on the phone" else "the user refused"))
             outbox.add(OutboxEntry("consent.level_refused", obj("from" to machine.level, "requested" to "control", "opId" to opId, "timeout" to timeout)))
         }

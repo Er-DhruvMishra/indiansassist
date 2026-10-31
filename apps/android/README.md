@@ -41,9 +41,10 @@ JVM (`src/test`), all against `packages/shared/test/fixtures/agent/sec-vectors.j
 | `SecVectorsTest` | section 1.3 with Tink: public keys, commit hashes, transcript, HKDF keys, SAS, confirm MACs; the full Desk state machine fed the vector Assist; two live handshakes; negative vectors (`commit`, `fingerprint`, `suite`, `key`, `mac`), ordering rules, 10 s timeout; the IETF XChaCha20-Poly1305 draft vector |
 | `SecFrameTest` | every vector frame for all six label ids (nonce, AAD, frame bytes), replay / skip / tamper / wrong label / reserved flags, one SecChannel per label per generation, oversize |
 | `HelpersParityTest` | ports checked against the TypeScript build: `canonicalJson`, `sanitiseFileName`, `normaliseTokenInput`, `isValidShortCode`, `fingerprintFromSdp`, `opIdFor`; link and deep-link grammar; `a=max-message-size` munging |
-| `DeskMachineTest` | the Desk state machine: hello / knock / held / consent / active, re-sent `session.created`, Stop order (stop.sharing, teardown, then `session.end`), local end while the socket is down, native resume (stays `active`, rebuild on `ice.refresh`), lost `consent.ok`, `sec:<reason>` and `indicator_lost` endings, decline / revoke, view-only, fatal errors and terminal closes |
+| `DeskMachineTest` | the Desk state machine: hello / knock / held / consent / active, re-sent `session.created`, Stop order (stop.sharing, teardown, then `session.end`), local end while the socket is down, native resume (stays `active`, rebuild on `ice.refresh`), lost `consent.ok`, `sec:<reason>` and `indicator_lost` endings, decline / revoke, view-only, fatal errors and terminal closes; **C7** `consent.level_ok` is trusted only as the reply to a raise the machine itself sent (matching frame id), out-of-family / unknown levels map to `view`, the level is clamped to the locally granted target |
 | `GestureMappingTest` | tap, 600 ms long press, double tap, scroll notch rule (10 % of the shorter side, max 5, inverted), drag continuation at 20 Hz, 55 s lift-and-replace, 2 s dangling stroke |
-| `ControlDispatcherTest` | capability flags (section 12.4), `not_supported` for absent features, strict args (`bad_args`), levels and InputGuard, `secure_window` / own-window refusal, text insertion and audit, `busy`, quality, `level.request` |
+| `ControlDispatcherTest` | capability flags (section 12.4), `not_supported` for absent features, strict args (`bad_args`), levels and InputGuard, `secure_window` / own-window refusal, text insertion and audit, `busy`, quality, `level.request`; **C15** consent-fatigue: `ok` immediately when already at control, one outstanding prompt (`busy` meanwhile), 45 s cooldown after a Refuse/timeout (counted in `control.input.refused`) then a prompt again |
+| `SecGuardsTest` | **C8** `Fingerprint.matches` re-check (a renegotiation on an established PC must carry the SAS-confirmed DTLS fingerprint; a changed or missing value fails closed); **C15** `RebuildLimiter` caps channel-triggered rebuilds at 3 per 10 min |
 | `InputRulesTest` | `os.text` insertion splicing (`hel` + `lo` = `hello`), Backspace / Delete by code point, the InputGuard state table, dispatch windows, token bucket |
 | `WireAndFilesTest` | kotlinx.serialization round-trip of `desk.hello.client`, re-encoding of `packages/shared/test/fixtures/agent` JSON when present, ICE server parsing, attestation outbox (4/s, burst 15, never drops, re-queue on `rate_limited`), `control.input` / `input.text_burst`, the file receiver (F4 rules, passive-risk `bad_name`, 2 GiB cap, hash mismatch) |
 | `BackoffTest` | reconnect backoff and terminal close codes |
@@ -113,6 +114,28 @@ macrotask so a same-tick stop message is seen first). So the Desk's `session.end
 `desk_stopped` (a Desk **Revoke consent** ends as `consent_revoked`), not `error`. The e2e asserts `desk_stopped` as the
 normal case; a console-written `sec.failed { reason: 'channel' }` for an orderly Stop now **fails** the assertion as a
 regression. The Windows agent relies on the same console behaviour.
+
+### Phase C review hardening (C7, C8, C15)
+
+- **C7 — WS `consent.level_ok` is no longer blindly trusted.** The Desk, not the controller, now issues the
+  `desk.consent_level` raise (on `DeskEvent.LevelGranted`, only from `active`) and remembers the frame id it sent.
+  `DeskMachine` accepts a `consent.level_ok` **only** as the reply to such an outstanding id; a named level is honoured
+  only when it is `view`/`control` (any out-of-family value such as the P2 `input`, `elevated`, or anything unknown maps
+  to `view`, so a value that would throw in `AgentControl.levelAtLeast` can never reach `InputGuard`), and it is clamped
+  to the locally granted target so the server can never raise the Desk above it. The dispatcher call is additionally
+  wrapped in `LiveMedia.onControl` so any dispatcher exception answers `ctl.res internal` instead of killing the input
+  thread.
+- **C8 — DTLS fingerprints are re-checked after renegotiation.** `AssistPeer` binds the local/remote fingerprints at
+  `ia.sec` open (the ones the SAS was confirmed against). After any `setRemoteDescription`/`setLocalDescription` on an
+  already-established PC it recomputes `Fingerprint.fromSdp` and fails `sec.fail { reason: 'fingerprint' }` on mismatch,
+  and a remote `webrtc.offer` while established is refused as a stray channel event (`sec.fail { reason: 'channel' }`,
+  §3.7 rebuilds are Desk-initiated) — a signaling MITM can no longer re-terminate the media tracks after the code match.
+- **C15 — consent fatigue and rebuild loops are bounded.** `level.request` answers `ok` at once when already at control,
+  `busy` while one prompt is outstanding, and `refused` (counted in `control.input.refused`) for 45 s after a
+  Refuse/timeout. Channel-triggered secure-channel rebuilds are capped at 3 per 10 min (`RebuildLimiter`); each allowed
+  rebuild chains `desk.event sec.failed { reason: 'channel' }`, and past the cap the session ends (step 9) instead of
+  looping. `AssistPeer.setIce(restartIce = true)` now actually restarts ICE: `onRenegotiationNeeded` re-offers once the
+  first offer has been sent, so a TURN credential refresh is no longer a no-op.
 
 ### Bugs the live e2e found (fixed)
 

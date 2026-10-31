@@ -123,4 +123,15 @@ object Fingerprint {
         }
         return session ?: media
     }
+
+    /**
+     * C8: after a renegotiation on a peer connection that already completed the SAS handshake, the DTLS fingerprint
+     * in [sdp] must still equal the [bound] one the code was confirmed against. A missing fingerprint on either side
+     * fails closed. Constant-time to avoid leaking the bound value.
+     */
+    fun matches(bound: String?, sdp: String?): Boolean {
+        if (bound == null || sdp == null) return false
+        val f = fromSdp(sdp) ?: return false
+        return Bytes.constantTimeEquals(bound, f)
+    }
 }

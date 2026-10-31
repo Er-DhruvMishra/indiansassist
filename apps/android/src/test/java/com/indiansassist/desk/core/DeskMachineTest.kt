@@ -192,6 +192,54 @@ class DeskMachineTest {
         x.handle(DeskEvent.Server(obj("t" to "consent.ok", "state" to "active", "iceServers" to ice)))
     }
 
+    private fun toActiveView(x: DeskMachine = m) {
+        x.handle(DeskEvent.Start("t", "u")); x.handle(DeskEvent.SocketOpen(false))
+        x.handle(DeskEvent.Server(obj("t" to "desk.hello.ok")))
+        x.handle(DeskEvent.Server(obj("t" to "knock.ok", "sessionId" to "s1", "resumeKey" to "rk")))
+        x.handle(DeskEvent.Server(obj("t" to "session.created", "sessionId" to "s1", "state" to "consent_pending")))
+        x.handle(DeskEvent.ConsentAccepted("view"))
+        x.handle(DeskEvent.Server(obj("t" to "consent.ok", "state" to "active", "iceServers" to ice)))
+    }
+
+    @Test
+    fun consentLevelOkTrustedOnlyForOutstandingRequest() {
+        toActiveView()
+        assertEquals("view", m.level)
+        // C7: an unsolicited consent.level_ok (no request outstanding) must never raise the guard.
+        assertTrue(srv("t" to "consent.level_ok", "level" to "control").isEmpty())
+        assertEquals("view", m.level)
+        // A level_ok echoing a frame id we never sent is also ignored.
+        assertTrue(srv("t" to "consent.level_ok", "level" to "control", "re" to "lv9").isEmpty())
+        assertEquals("view", m.level)
+        // The user Allows -> the machine itself issues the raise and tracks its id.
+        val frame = sent(m.handle(DeskEvent.LevelGranted("r5", "op5"))).single()
+        assertEquals("desk.consent_level", frame.str("t"))
+        assertEquals("control", frame.str("level"))
+        assertEquals(true, frame.bool("requested"))
+        val fid = frame.str("id")!!
+        // Only now does a matching consent.level_ok raise to control and answer the op.
+        val e = srv("t" to "consent.level_ok", "re" to fid, "level" to "control")
+        assertEquals(DeskEffect.LevelChanged("control"), e.one<DeskEffect.LevelChanged>())
+        assertEquals(DeskEffect.LevelReply("r5", true), e.one<DeskEffect.LevelReply>())
+        assertEquals("control", m.level)
+        // A second (replayed) level_ok for the same, now-consumed id changes nothing.
+        assertTrue(srv("t" to "consent.level_ok", "re" to fid, "level" to "control").isEmpty())
+    }
+
+    @Test
+    fun consentLevelOkMapsOutOfFamilyValueToView() {
+        toActiveView()
+        val fid = sent(m.handle(DeskEvent.LevelGranted("r1", "op1"))).single().str("id")!!
+        // 'input' is the P2 family; storing it verbatim would crash the input thread. It maps to view (C7).
+        val e = srv("t" to "consent.level_ok", "re" to fid, "level" to "input")
+        assertEquals("view", m.level)
+        assertEquals(DeskEffect.LevelChanged("view"), e.one<DeskEffect.LevelChanged>())
+        // A refused raise (error with the frame id) answers the op false; an unknown frame id is ignored.
+        val fid2 = sent(m.handle(DeskEvent.LevelGranted("r2", "op2"))).single().str("id")!!
+        assertEquals(DeskEffect.LevelReply("r2", false), srv("t" to "error", "code" to "bad_state", "re" to fid2).one<DeskEffect.LevelReply>())
+        assertTrue(srv("t" to "error", "code" to "bad_state", "re" to "lv42").isEmpty())
+    }
+
     @Test
     fun webrtcFramesOnlyWhileLive() {
         assertTrue(srv("t" to "webrtc.answer", "sessionId" to "s1", "sdp" to "x").isEmpty())

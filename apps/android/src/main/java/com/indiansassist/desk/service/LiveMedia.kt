@@ -67,6 +67,7 @@ class LiveMedia(
     @Volatile private var sendCancelled = false
     private var lastBytes = 0L
     private var lastStatsAt = 0L
+    private val rebuildLimiter = com.indiansassist.desk.core.RebuildLimiter()
 
     private val screen = object : ScreenInfo {
         override val width get() = engine?.width ?: 0
@@ -158,7 +159,15 @@ class LiveMedia(
     }
 
     override fun onSecFailure(reason: String) {
-        if (reason == "channel") rebuild(ice) else host.secFailed(reason)
+        if (reason != "channel") { host.secFailed(reason); return }
+        // C15: a channel failure rebuilds with fresh keys, but the loop is capped (3 / 10 min) and each rebuild is
+        // audited (desk.event sec.failed{reason:'channel'}). Past the cap we stop looping and end the session (step 9).
+        if (rebuildLimiter.allow()) {
+            host.attest(OutboxEntry("sec.failed", obj("reason" to "channel")))
+            rebuild(ice)
+        } else {
+            host.secFailed("channel")
+        }
     }
 
     override fun onPlain(label: String, plain: SecPlain) {
@@ -180,7 +189,15 @@ class LiveMedia(
             return
         }
         inputExec.execute {
-            when (val out = dispatcher.handle(req)) {
+            // C7: a malformed guard level (or any dispatcher bug) must answer `internal`, never crash the input thread.
+            val out = try {
+                dispatcher.handle(req)
+            } catch (e: Exception) {
+                android.util.Log.e("IA", "dispatcher", e)
+                sendControl(AgentControl.err(req.id, "internal", "the request could not be handled"))
+                return@execute
+            }
+            when (out) {
                 is ControlOutcome.Reply -> {
                     DevLog.control(req.op, req.id, out.res, (req.parsed as? com.indiansassist.desk.core.AgentOp.Pointer)?.kind)
                     sendControl(out.res)

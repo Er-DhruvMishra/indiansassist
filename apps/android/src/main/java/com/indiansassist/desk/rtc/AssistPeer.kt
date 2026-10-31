@@ -50,6 +50,12 @@ class AssistPeer(
     private var hs: SecHandshake? = null
     private var keys: SecKeys? = null
     @Volatile private var closing = false
+    // C8: the DTLS fingerprints the SAS was confirmed against, bound at `ia.sec` open. A renegotiation on this PC must
+    // never change them (a signaling MITM re-terminating media after the code was compared).
+    private var boundLocalFpr: String? = null
+    private var boundRemoteFpr: String? = null
+    // C15: has the first (initial / rebuild) offer been sent? Only then does a renegotiation re-offer (ICE restart).
+    @Volatile private var negotiated = false
     var videoSender: RtpSender? = null
         private set
     var audioSender: RtpSender? = null
@@ -82,11 +88,11 @@ class AssistPeer(
             override fun onCreateSuccess(desc: SessionDescription) {
                 val munged = SessionDescription(desc.type, SdpMunge.withMaxMessageSize(desc.description))
                 conn.setLocalDescription(object : SdpAdapter() {
-                    override fun onSetSuccess() = post { events.sendSignal(com.indiansassist.desk.core.DeskSignal.offer(sessionId, munged.description, if (restart) true else null, if (restart) gen else null)) }
+                    override fun onSetSuccess() = post { negotiated = true; events.sendSignal(com.indiansassist.desk.core.DeskSignal.offer(sessionId, munged.description, if (restart) true else null, if (restart) gen else null)) }
                     override fun onSetFailure(error: String?) {
                         // A build that refuses the munged line: fall back to the unmodified offer.
                         conn.setLocalDescription(object : SdpAdapter() {
-                            override fun onSetSuccess() = post { events.sendSignal(com.indiansassist.desk.core.DeskSignal.offer(sessionId, desc.description, if (restart) true else null, if (restart) gen else null)) }
+                            override fun onSetSuccess() = post { negotiated = true; events.sendSignal(com.indiansassist.desk.core.DeskSignal.offer(sessionId, desc.description, if (restart) true else null, if (restart) gen else null)) }
                         }, desc)
                     }
                 }, munged)
@@ -98,15 +104,23 @@ class AssistPeer(
     fun onSignal(m: JsonObject) {
         val conn = pc ?: return
         when (m.s("t")) {
-            "webrtc.answer" -> conn.setRemoteDescription(SdpAdapter(), SessionDescription(SessionDescription.Type.ANSWER, m.s("sdp") ?: return))
+            "webrtc.answer" -> conn.setRemoteDescription(object : SdpAdapter() {
+                override fun onSetSuccess() = post { recheckFingerprints() }
+            }, SessionDescription(SessionDescription.Type.ANSWER, m.s("sdp") ?: return))
             "webrtc.offer" -> {
                 if (conn.signalingState() != PeerConnection.SignalingState.STABLE) return // impolite: ignore the collision
+                // C8: per section 3.7 rebuilds are Desk-initiated; a remote offer on an established PC is never
+                // expected. Treat it as a stray channel event (step 9 rebuild), so a relayed offer cannot silently
+                // re-terminate the media tracks after the SAS was confirmed.
+                if (keys != null) return post { fail("channel") }
                 conn.setRemoteDescription(object : SdpAdapter() {
                     override fun onSetSuccess() {
                         conn.createAnswer(object : SdpAdapter() {
                             override fun onCreateSuccess(desc: SessionDescription) {
                                 conn.setLocalDescription(object : SdpAdapter() {
-                                    override fun onSetSuccess() = post { events.sendSignal(com.indiansassist.desk.core.DeskSignal.answer(sessionId, desc.description, null)) }
+                                    override fun onSetSuccess() = post {
+                                        if (recheckFingerprints()) events.sendSignal(com.indiansassist.desk.core.DeskSignal.answer(sessionId, desc.description, null))
+                                    }
                                 }, desc)
                             }
                         }, MediaConstraints())
@@ -173,11 +187,26 @@ class AssistPeer(
 
     private fun post(r: () -> Unit) = exec.execute { if (!closing) r() }
 
+    /**
+     * C8: after any renegotiation on an established PC, the live descriptions must still carry the bound fingerprints.
+     * Before establishment the handshake itself binds them, so this is a no-op. Returns false (and fails) on mismatch.
+     */
+    private fun recheckFingerprints(): Boolean {
+        if (keys == null) return true
+        val conn = pc ?: return true
+        val ok = Fingerprint.matches(boundLocalFpr, conn.localDescription?.description) &&
+            Fingerprint.matches(boundRemoteFpr, conn.remoteDescription?.description)
+        if (!ok) { fail("fingerprint"); return false }
+        return true
+    }
+
     private fun onSecOpen() {
         val conn = pc ?: return
         val local = conn.localDescription?.description?.let { Fingerprint.fromSdp(it) }
         val remote = conn.remoteDescription?.description?.let { Fingerprint.fromSdp(it) }
         if (local == null || remote == null) return fail("fingerprint")
+        boundLocalFpr = local
+        boundRemoteFpr = remote
         val h = SecHandshake(sessionId, gen, Side.DESK, local, remote)
         hs = h
         h.start().forEach { sendSec(it) }
@@ -240,6 +269,15 @@ class AssistPeer(
         override fun onDataChannel(dc: DataChannel) {
             dc.close()
             post { fail("channel") }
+        }
+
+        /**
+         * C15: after the first offer, a renegotiation (e.g. the ICE restart that [setIce] triggers for a TURN
+         * credential refresh) must produce a fresh offer, or the restart is a no-op. The DTLS transport and the data
+         * channels are unchanged, so the fingerprints and `gen` stay the same; this is not a section 3.7 rebuild.
+         */
+        override fun onRenegotiationNeeded() = post {
+            if (negotiated && pc?.signalingState() == PeerConnection.SignalingState.STABLE) offer(restart = false)
         }
     }
 
