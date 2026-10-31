@@ -14,7 +14,9 @@ import {
   type QualityPreset,
 } from '@indiansassist/shared';
 import { playbooksApi } from '../../../lib/agentApi';
+import { errorMessage } from '../../../lib/api';
 import { copyText } from '../../../lib/clipboard';
+import type { GetUserMedia } from '../../../lib/sessionBase';
 import { AgentControllerCore, type AgentControllerDeps } from './agentController';
 import { TextBuffer, modifiersOf, norm, type KeyLike } from './agentInput';
 import { addRun, applyOpError, runErrorText } from './agentPlaybooks';
@@ -29,6 +31,8 @@ const MOVE_STALL_MS = 300;
 
 export type AgentConsoleDeps = AgentControllerDeps & {
   runPlaybook?: typeof playbooksApi.run;
+  /** `navigator.mediaDevices.getUserMedia` (tests inject a fake). */
+  getUserMedia?: GetUserMedia;
 };
 
 export class AgentConsoleController extends AgentControllerCore {
@@ -37,6 +41,9 @@ export class AgentConsoleController extends AgentControllerCore {
   private lastMoveAt = 0;
   private pendingMove: Record<string, unknown> | null = null;
   private moveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The technician's microphone (section 6.3): acquired on the first click, kept across rebuilds, stopped at the end. */
+  private mic: MediaStream | null = null;
+  private micPending = false;
 
   constructor(private readonly d: AgentConsoleDeps) {
     super(d);
@@ -330,11 +337,90 @@ export class AgentConsoleController extends AgentControllerCore {
     this.link?.hub.send({ ...msg, monitorId } as DcAnnot);
   }
 
+  // ---------- voice (section 6.3, A D8) ----------
+
+  get voiceSupported(): boolean {
+    return hasFeature(this.snap, 'voice');
+  }
+
+  /**
+   * The microphone toggle. The first click asks for the mic (audio only, in the click) and attaches it to the agent
+   * link's audio sender (`replaceTrack` on the offered transceiver); later clicks only enable / disable the track,
+   * so turning it back on needs no new prompt and no renegotiation. Every change is `voice.state` on `ia.ctrl`.
+   */
+  async toggleVoice(): Promise<void> {
+    if (!this.voiceSupported || this.snap.sec.state !== 'established' || this.micPending) return;
+    const current = this.mic?.getAudioTracks()[0];
+    if (current) {
+      current.enabled = !current.enabled;
+      this.set({ voiceOn: current.enabled, muted: !current.enabled });
+      this.sendVoiceState();
+      return;
+    }
+    this.micPending = true;
+    let stream: MediaStream;
+    try {
+      const gum = this.d.getUserMedia ?? ((c) => navigator.mediaDevices.getUserMedia(c));
+      stream = await gum({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+    } catch (e) {
+      this.set({ notice: `Microphone unavailable: ${errorMessage(e)}` });
+      return;
+    } finally {
+      this.micPending = false;
+    }
+    const track = stream.getAudioTracks()[0];
+    // The session ended (or the link went away) while the prompt was open: release the device at once.
+    if (!track || this.disposed || !this.link || this.snap.phase === 'ending' || this.snap.phase === 'ended') {
+      for (const t of stream.getTracks()) t.stop();
+      if (!track) this.set({ notice: 'Microphone unavailable: no audio track.' });
+      return;
+    }
+    track.enabled = true;
+    this.mic = stream;
+    this.set({ voiceOn: true, muted: false });
+    await this.attachMic();
+    this.sendVoiceState();
+  }
+
+  private async attachMic(): Promise<void> {
+    const track = this.mic?.getAudioTracks()[0];
+    if (!track || !this.mic || !this.link) return;
+    try {
+      await this.link.setLocalAudio(track, this.mic);
+    } catch (e) {
+      this.set({ notice: `Microphone could not be attached: ${errorMessage(e)}` });
+    }
+  }
+
+  private sendVoiceState(): void {
+    this.link?.hub.send({ t: 'voice.state', from: 'assist', muted: !this.snap.voiceOn, ts: Date.now() });
+  }
+
+  private stopMic(): void {
+    if (!this.mic && !this.snap.voiceOn) return;
+    for (const t of this.mic?.getTracks() ?? []) t.stop();
+    this.mic = null;
+    this.set({ voiceOn: false, muted: false });
+  }
+
+  protected override localAudio(): { track: MediaStreamTrack; stream: MediaStream } | null {
+    const track = this.mic?.getAudioTracks()[0];
+    return track && this.mic ? { track, stream: this.mic } : null;
+  }
+
+  /** After every (re)build: make sure the mic rides the new link and tell the Desk its state. */
+  protected override onSecured(): void {
+    if (!this.mic) return;
+    void this.attachMic().then(() => this.sendVoiceState());
+  }
+
   override teardown(): void {
     if (this.moveTimer) clearTimeout(this.moveTimer);
     this.moveTimer = null;
     this.pendingMove = null;
     this.text?.dispose();
     super.teardown();
+    // Hard rule 2: input first, then the link, then every local track (rebuilds use closeLink and keep the mic).
+    this.stopMic();
   }
 }

@@ -24,6 +24,11 @@ export type PeerOptions = {
   onTrack?: (track: MediaStreamTrack, streams: readonly MediaStream[], mid: string | null) => void;
   onChannel?: (label: DataChannelLabel, channel: RTCDataChannel) => void;
   onConnectionState?: (state: RTCPeerConnectionState) => void;
+  /**
+   * Runs after a remote offer is applied and before the answer is created: the place to set a transceiver's
+   * direction (or attach a track with `replaceTrack`) so the answer carries it without a renegotiation.
+   */
+  beforeAnswer?: (pc: RTCPeerConnection) => void | Promise<void>;
   /** Injected in tests. */
   RTCPeerConnectionImpl?: typeof RTCPeerConnection;
 };
@@ -134,6 +139,8 @@ export class PeerSession {
       if (this.ignoreOffer) return;
       await this.pc.setRemoteDescription(description);
       if (description.type === 'offer') {
+        await this.opts.beforeAnswer?.(this.pc);
+        if (this.closed) return;
         await this.pc.setLocalDescription();
         const sdp = this.pc.localDescription?.sdp;
         if (sdp && !this.closed) this.opts.send({ t: 'webrtc.answer', sdp });

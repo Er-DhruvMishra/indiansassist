@@ -27,7 +27,7 @@ import { InputReporter, type InputReport } from './agentInput';
 import { AgentLink } from './agentLink';
 import { OpTracker } from './agentOps';
 import { applyEnd, applyOutput } from './agentPlaybooks';
-import { AGENT_INITIAL, type AgentSnapshot } from './agentState';
+import { AGENT_INITIAL, hasFeature, type AgentSnapshot } from './agentState';
 import { glassFromReport, sessionStatsFrame } from './agentStatsFold';
 
 export type AgentControllerDeps = {
@@ -224,6 +224,8 @@ export class AgentControllerCore {
       handshake: this.deps.handshake,
       channelCloseGraceMs: this.deps.channelCloseGraceMs,
       isOrderlyEnd: () => this.endingBy !== null,
+      voice: () => hasFeature(this.snap, 'voice'),
+      localAudio: () => this.localAudio(),
       attest: async (action, data) => {
         await sessionsApi.fileEvent(this.id, action, data);
         return true;
@@ -252,6 +254,7 @@ export class AgentControllerCore {
             sasPrompt: confirmedBefore,
             notice: r.gen > 0 ? 'Security code changed. Confirm the new code with the user before controlling.' : null,
           });
+          this.onSecured();
         },
         onFailed: (reason) => void this.onSecFailed(reason),
         onMessage: (m) => this.route(m),
@@ -303,6 +306,8 @@ export class AgentControllerCore {
         this.link?.hub.send({ t: 'pong', ts: Date.now() });
         return;
       case 'voice.state':
+        // The Desk's microphone indicator; our own state never echoes back as the Desk's.
+        if (m.from !== 'desk') return;
         return this.set({ peerMuted: m.muted });
       case 'stop.sharing':
         return this.onPeerEnd('desk_stopped');
@@ -340,6 +345,14 @@ export class AgentControllerCore {
   protected onControlEvent(_e: { kind: string } & Record<string, unknown>): void {
     void _e;
   }
+
+  /** The technician's microphone for a new link (the action half owns it); null = none. */
+  protected localAudio(): { track: MediaStreamTrack; stream: MediaStream } | null {
+    return null;
+  }
+
+  /** Called once per link when its secure channel is established (after the snapshot update). */
+  protected onSecured(): void {}
 
   protected receiveChat(m: { msgId: string; text: string; ts?: unknown }): void {
     const ts = typeof m.ts === 'number' ? m.ts : Date.now();

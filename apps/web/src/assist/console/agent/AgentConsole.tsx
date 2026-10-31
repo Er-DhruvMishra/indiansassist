@@ -2,7 +2,8 @@
  * The P3 technician console (docs/specs/phase-c-contracts.md section 13.4), mounted by /app/sessions/:id when
  * `session.tier === 'p3_portable'` (sibling of `MirrorConsole`). Video of the viewed monitor (or the mosaic) through
  * the A watermark `RemoteView`, the security code in the header, the input mode, monitors, clipboard, elevation,
- * playbooks, agent statistics, chat and files. The logic lives in `AgentConsoleController`.
+ * playbooks, agent statistics, voice (when the Desk advertises `voice`), chat and files. The logic lives in
+ * `AgentConsoleController`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { sasDisplay, type AgentCapabilities, type SessionCreated } from '@indiansassist/shared';
@@ -10,6 +11,7 @@ import { useAuth } from '../../../auth/AuthContext';
 import { ChatPanel } from '../../../components/ChatPanel';
 import { Dialog } from '../../../components/Dialog';
 import { FilePanel } from '../../../components/FilePanel';
+import { RemoteAudio, VoiceControls } from '../../../components/VoiceControls';
 import { Alert, Badge, Button, Card, Spinner } from '../../../components/ui';
 import { EMPTY_ANNOT, applyAnnot, makeClear, pruneAnnot, type AnnotTool } from '../../../lib/annotation';
 import { humanise } from '../../../lib/format';
@@ -86,6 +88,7 @@ export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentCo
   const secured = snap.sec.state === 'established';
   const controlling = snap.inputMode === 'control' && controlBlocker(snap) === null;
   const elevated = levelAllows(tier, snap.consent.level, 'elevated');
+  const voice = hasFeature(snap, 'voice');
   const actions = useMemo<OverlayActions>(
     () => ({
       pointer: (m, k, nx, ny, b, mods) => ctrl.pointer(m, k, nx, ny, b, mods),
@@ -184,6 +187,21 @@ export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentCo
               <AgentStats stats={snap.agentStats} glassMs={snap.glassMs} />
             </div>
           </Card>
+          {voice && (
+            <Card>
+              <VoiceControls
+                on={snap.voiceOn}
+                muted={snap.muted}
+                peerMuted={snap.peerMuted}
+                peerName={peerName}
+                disabled={!secured}
+                labels={{ on: 'Turn microphone on', off: 'Turn microphone off' }}
+                onToggle={() => void ctrl.toggleVoice()}
+              />
+              <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">The Desk has no echo cancellation; if you hear an echo, ask the user to wear a headset.</p>
+              <RemoteAudio stream={snap.remoteAudio} />
+            </Card>
+          )}
           <Card>
             <ClipboardToggle on={snap.clipboardSync} allowed={ctrl.clipboardAllowed} received={snap.clipboardReceived} onToggle={(on) => ctrl.setClipboardSync(on)} />
           </Card>

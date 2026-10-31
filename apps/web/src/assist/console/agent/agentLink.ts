@@ -36,7 +36,13 @@ export type AgentLinkOptions = {
   isOrderlyEnd?: () => boolean;
   /** F9: how long a channel close waits for a server-initiated end before it is declared a channel violation. */
   channelCloseGraceMs?: number;
+  /** The Desk advertises `voice`: answer its audio m-line `sendrecv` so the technician's mic needs no renegotiation. */
+  voice?: () => boolean;
+  /** The technician's microphone, when on; attached to the audio sender at answer time (re-attach after a rebuild). */
+  localAudio?: () => { track: MediaStreamTrack; stream: MediaStream } | null;
 };
+
+export type LocalAudioResult = 'replaced' | 'added' | 'none';
 
 export class AgentLink {
   readonly peer: PeerSession;
@@ -69,6 +75,7 @@ export class AgentLink {
       onTrack: (t, s, mid) => o.events.onTrack(t, s, mid),
       onChannel: (label, ch) => this.hub.attach(label, ch),
       onConnectionState: (s) => o.events.onConnectionState(s),
+      beforeAnswer: () => this.prepareAudio(),
       RTCPeerConnectionImpl: o.RTCPeerConnectionImpl,
     });
   }
@@ -98,6 +105,49 @@ export class AgentLink {
 
   addTrack(track: MediaStreamTrack, stream: MediaStream): void {
     this.peer.addTrack(track, stream, { keep: true });
+  }
+
+  /** The audio transceiver the agent's offer created (section 6.3: one Opus track, added at start, muted). */
+  private audioTransceiver(): RTCRtpTransceiver | null {
+    const pc = this.peer.pc as RTCPeerConnection & { getTransceivers?: () => RTCRtpTransceiver[] };
+    const list = pc.getTransceivers?.() ?? [];
+    return list.find((t) => t.direction !== 'stopped' && t.currentDirection !== 'stopped' && t.receiver.track?.kind === 'audio') ?? null;
+  }
+
+  /**
+   * `beforeAnswer`: the agent never accepts an offer from the console on this link, so the audio m-line is answered
+   * `sendrecv` up front (no RTP flows until a track is attached) and the mic, when on, is attached with
+   * `replaceTrack` on that transceiver instead of a second m-line.
+   */
+  private async prepareAudio(): Promise<void> {
+    if (this.o.voice?.() !== true) return;
+    const t = this.audioTransceiver();
+    if (!t) return;
+    if (t.direction === 'recvonly') t.direction = 'sendrecv';
+    else if (t.direction === 'inactive') t.direction = 'sendonly';
+    const local = this.o.localAudio?.();
+    if (local && t.sender.track !== local.track) {
+      try {
+        await t.sender.replaceTrack(local.track);
+      } catch {
+        /* closed meanwhile */
+      }
+    }
+  }
+
+  /**
+   * Attaches the technician's mic: `replaceTrack` on the offered audio transceiver when there is one (idempotent),
+   * else `addTrack` (kept across close: the controller owns and stops it).
+   */
+  async setLocalAudio(track: MediaStreamTrack, stream: MediaStream): Promise<LocalAudioResult> {
+    if (this.closed) return 'none';
+    const t = this.audioTransceiver();
+    if (t) {
+      if (t.sender.track !== track) await t.sender.replaceTrack(track);
+      return 'replaced';
+    }
+    this.peer.addTrack(track, stream, { keep: true });
+    return 'added';
   }
 
   close(): void {
