@@ -178,10 +178,13 @@ are allow-listed (`ia-platform::selfdelete`), the elevated child via
 `MOVEFILE_DELAY_UNTIL_REBOOT` with no user-writable script (§10 D2/D3). The decision logic is
 implemented and tested (`ia_agent::elevate`, `ia_platform::selfdelete`); the serve loop computes
 and logs the decision on Stop and, for a user standalone instance that is not keeping the binary,
-**writes** the cmd stub (`serve::perform_self_delete`). It does **not yet spawn** it (no detached
-`CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB` launch), does not create it
-`CREATE_NEW` under a random name, and does not sweep the working dir / sidecar / HKCU keys; the
-elevated child's `MoveFileEx` path is Phase-D-adjacent work.
+runs `serve::selfdel::perform_self_delete`: it first deletes `%LOCALAPPDATA%\IndiansAssist\`, the
+`<exe>.iaconfig` sidecar and the HKCU `indiansassist` handler key in-process, checks that `%TEMP%`
+canonicalises under `%USERPROFILE%`, creates `%TEMP%\ia-cleanup-<32 hex>.cmd` with `CREATE_NEW`, and
+spawns `%SystemRoot%\System32\cmd.exe /c <stub> <pid> <exe>` with
+`CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB`. **It is never run by an automated
+test** (the e2e passes `--no-self-delete`); only the decision, the stub text, the `%TEMP%`-under-profile
+check and the stub name are unit-tested. The elevated child's `MoveFileEx` path is Phase-D-adjacent work.
 
 ## What is implemented and what is still stubbed
 
@@ -215,7 +218,7 @@ elevated child's `MoveFileEx` path is Phase-D-adjacent work.
 * **Serve loop** (`serve`): consent from the window (release) or `--auto-consent` (dev headless); `desk.consent granted`
   carries the monitors and clipboard the Desk chose; decline / Escape / close / deadline send `desk.consent revoked`.
   Live: `ctl.event monitors` / `agent_level`; the VP8 pump (DXGI with GDI fallback, or the synthetic source);
-  `agent.stats` every 5 s with the real capture path; chat both ways (technician lines appear in the panel and as a
+  `agent.stats` every 2 s with **measured** values (see the review-fix list below); chat both ways (technician lines appear in the panel and as a
   pill toast; the panel sends Desk lines as A §8.1 `chat`); `recording.state` / `session.recording` drive the pill's
   recording label; file offers are **prompted** in the panel (auto-accepted only headless) and streamed to disk
   (below); an Assist `level.request` from `view` is **prompted** (its `ctl.res` is deferred until Allow / Refuse / 60 s;
@@ -273,7 +276,65 @@ produced the panel prompt and Allow re-enabled the console's Control button; Sto
 ended view appeared, then `session.end` and the self-delete decision. **Not verified with a physical mouse**: the
 rendered pixels, physical clicks, dragging the pill, the tray icon and menu, and the physical-press gate in action.
 
+**Phase C review fixes (data/phase-c-review, this pass):**
+* **§1.3 step 9 (C1 / F7 / F8).** A frame that fails `SecChannel::open` (decrypt / replay / sequence / oversize) ends
+  the session as `LiveOutcome::SecFailed`: `sec.fail { reason }` on `ia.sec`, WS `desk.event sec.failed
+  { reason, channel }`, hard-rule-2 teardown, WS `session.end { note: 'sec:<reason>' }`. `on_message` / `on_close`
+  are registered on all six encrypted channels **before** `sec.commit` (frames buffer on the inbound bus until keys
+  exist); a channel close while the PC is alive or a remote `ondatachannel` on the Desk PC is `sec.fail channel`
+  (fails are tagged with the key generation so a rebuild ignores the old PC's closes). Handshake / negotiation
+  failures (timeout, fingerprint, received `sec.fail`, mac, no answer) emit the same `sec.failed` + `session.end`
+  instead of the process exiting. Unit test: an injected tampered frame opens as `decrypt` and yields
+  `note: 'sec:decrypt'`.
+* **`ia.sec` driver (C14 / F15).** Constant-time fingerprint compare (`subtle`); reasons aligned with the contract
+  table (unknown suite / `v` = `suite`, checked first; wrong sessionId / side, second hello, malformed frames, unknown
+  `t` and an unknown received `sec.fail` reason = `commit`); the shared secret is `Zeroizing`; one 10 s budget from
+  `ia.sec` open rather than per message.
+* **ICE servers (F5).** `consent.ok.iceServers` (`urls` string or array, `username`, `credential`) becomes the
+  `RTCConfiguration` of every PC the agent builds.
+* **Rebuild (F2 / §3.7).** `assist.reconnected { state: 'active' }`, `ice.refresh`, or a peer connection
+  `disconnected` for more than 8 s closes the PC, builds a fresh one (tracks + seven channels), re-offers
+  `{ restart: true, gen: gen + 1 }` (the console accepts exactly `lastGen + 1`), re-runs the handshake under the new
+  gen and restarts the pump; `failed` tears down with `sec:timeout`. Not exercised by the e2e.
+* **Stats (F13 / C-06).** `agent.stats` every 2 s (`AGENT_STATS_INTERVAL_MS`) from a send-path meter: `sentKbps`,
+  `sentFps` / `captureFps`, `encodeMs` and per-monitor fps are measured; `targetKbps` / `rung` / `floorMode` come from
+  `ia_core::abr::AbrController` fed by REMB and receiver-report loss read from the RTP sender's RTCP (the REMB is
+  raised to the loss-free delivered throughput of the interval, a measured lower bound: Chrome keeps a stale ~200 kbps
+  REMB when transport-cc is negotiated and the sender never probes, which otherwise showed a false "Low bandwidth
+  mode" at ~1 Mbps); `os.quality`
+  sets the controller preset; `cpuPercent` and `recorderKbps` are `null` (not measured).
+* **Desk reporter (F14).** `desk.event control.input` (+ `input.text_burst` above 200 chars) every 10 s when non-empty
+  and once more before `session.end`; `desk.event file.received { fileId, direction, name, bytes, sha256 }` after a
+  save; `ctl.event prompt` for the file and level prompt cards (`shown` / `answered`, the shared states).
+* **`ctl.res` shape (found while running the e2e, pre-existing).** Every agent `ctl.res` lacked `ts` and a refusal
+  carried `error: "<code>"`; the shared strict `controlResponseSchema` wants `ts` and `error: { code, message }`, so the
+  console dropped every agent response (`[sec] dropped message on ia.control bad_payload`; the e2e passed only because
+  its assertions read the agent log). `ia_core::ctl::{ok_response, error_response}` now build the exact shape and the
+  serve loop uses them.
+* **Playbook ids (C6).** `ctl::dispatch_playbook_run` refuses a `runId` that is not `^[0-9a-f]{32}$`, a non-UUID
+  `playbookId` or a non-64-hex `bodyHash` with `bad_args` (cancel likewise checks `runId`); `pbrun` re-checks the
+  lower-case hex `runId` before it becomes a path component.
+* **Startup (C10, partial).** First statement of `main()`: `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`
+  + `SetDllDirectoryW("")`. A non-`dev` build has no `ws://localhost` default (it uses a compiled `IA_API_ORIGIN`,
+  else an empty URL).
+* **Elevation (F11 / C-03).** Until the runas relaunch exists, an **interactive** build answers
+  `elevation.request` with `ctl.event elevation { state: 'failed', cause: 'policy' }` and `desk.event
+  elevation.failed { error: 'uac_unavailable' }` and does **not** send `desk.elevation` (no hand-over that can never
+  complete, no `handover_expired` chain). The **headless dev** path (`--auto-consent`, the e2e) still sends
+  `desk.elevation`, so the existing `elevation.handover_minted` e2e assertion keeps covering the server mint.
+
 **Stubbed / not yet wired:**
+* **Server recorder (F12 / C-05)**: the agent does not answer `webrtc.offer { peer: 'recorder' }`; no second
+  PeerConnection was wired this pass. The API side should exclude `p3_portable` from `needsRecorder` until it is.
+* **ABR -> encoder**: the rung is computed and reported but not applied back to libvpx (the wrapper has no runtime
+  bitrate / fps / size setter; the pump stays at 1200 kbps / 15 fps at native size). No TWCC estimator input.
+* **C10 rest**: the late-bound system libraries are not all routed through `ia_platform::sys_lib`, there is no local
+  `checkToken` against the region key before the first network call, and no WinVerifyTrust self-check.
+* **Elevation**: the `ShellExecuteExW(runas)` relaunch, the named-pipe transport and the elevated child stay stubbed.
+  The admin-instance playbook paths (limited linked token, `%ProgramData%` run dir with the high-integrity label) are
+  not implemented; an elevated agent refuses non-elevation playbooks instead.
+* **1.5 s pre-consent sleep** (headless only) is kept until the console reliably gets the level on resume /
+  `session.created`; dropping it now would race the e2e console's `consent.changed` subscription.
 * **Consent window extras**: no org logo (`logoData`), no "Screen capture is not available" Retry step before consent
   (capture starts after `consent.ok`), a generic region in the recording sentence, no §2.4 / §2.6 sidecar lines (only
   the dev-build line).
@@ -281,12 +342,7 @@ rendered pixels, physical clicks, dragging the pill, the tray icon and menu, and
   prompt from playbook output (§8.5 O1; the marker parser exists), no **Open folder** / sniffed-type display, no receipt
   JSON download (the ended view shows a text receipt only), no microphone button.
 * **Desk -> Assist clipboard** is polled (400 ms, sequence-number debounce) rather than `AddClipboardFormatListener`;
-  the `clipboard.sync` / `control.input` §3.8 aggregates are not flushed to the server on Stop yet.
-* **Prompt events**: the B `ctl.event prompt` (`promptKind: 'file' | 'elevation'`) is not emitted.
-* **Elevation**: `elevation.request` sends `desk.elevation` (the server mints and audits the hand-over); the
-  `ShellExecuteExW(runas)` relaunch, the named-pipe transport and the elevated child stay stubbed. The admin-instance
-  playbook paths (limited linked token, `%ProgramData%` run dir with the high-integrity label) are not implemented; an
-  elevated agent refuses non-elevation playbooks instead.
+  the `clipboard.sync` §3.8 aggregate is not reported.
 * **Capture**: one monitor (the primary consented one) is streamed; DXGI is unverified on a live desktop (the locked
   host made the capture test fall back to GDI, which the test accepts); no dirty rects / cursor compositing, no SIMD
   `yuvutils-rs` / `fast_image_resize` path, capture runs on a runtime worker rather than a dedicated thread, and no

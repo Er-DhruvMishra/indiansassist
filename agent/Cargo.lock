@@ -1859,6 +1859,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shiguredo_libvpx",
+ "subtle",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -1866,6 +1867,7 @@ dependencies = [
  "uuid",
  "webrtc",
  "windows 0.58.0",
+ "zeroize",
 ]
 
 [[package]]

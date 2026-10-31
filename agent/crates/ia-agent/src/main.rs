@@ -16,6 +16,11 @@ use ia_agent::tokensource::{resolve, Candidates};
 use ia_core::join_input::normalise_token_input;
 
 fn main() {
+    // DLL-search hardening (contract §14 / security C10): before any thread or late-bound
+    // load, restrict the loader to System32 and clear the DLL directory so a planted DLL in
+    // the exe's folder (Downloads) cannot be side-loaded. Must be the first statement.
+    harden_dll_search();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     let cli = match Cli::parse(&args) {
@@ -50,6 +55,24 @@ fn main() {
 
     run(&cli, resolved);
 }
+
+/// Restrict the DLL search path to System32 and clear the application DLL directory (§14 /
+/// C10). Everything non-KnownDLL is reached through `ia_platform::sys_lib` at run time.
+#[cfg(windows)]
+fn harden_dll_search() {
+    use windows::core::w;
+    use windows::Win32::System::LibraryLoader::{
+        SetDefaultDllDirectories, SetDllDirectoryW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    };
+    // SAFETY: both calls take process-wide loader flags / a NUL-terminated wide string.
+    unsafe {
+        let _ = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+        let _ = SetDllDirectoryW(w!(""));
+    }
+}
+
+#[cfg(not(windows))]
+fn harden_dll_search() {}
 
 #[cfg(feature = "media")]
 fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {

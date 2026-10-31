@@ -146,16 +146,44 @@ pub struct Dispatched {
     pub refused: bool,
 }
 
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A successful `ctl.res` in the exact shared shape (`controlResponseSchema`, strict):
+/// `{ t, id, ok: true, result, ts }`. The console drops a response without `ts`.
+pub fn ok_response(id: &str, result: Value) -> Value {
+    json!({ "t": "ctl.res", "id": id, "ok": true, "result": result, "ts": now_ms() })
+}
+
+/// A refused `ctl.res` in the exact shared shape: `{ t, id, ok: false, error: { code, message },
+/// ts }` (the B §5.1 envelope reused by P3; `message` is at most 200 chars, empty when none).
+pub fn error_response(id: &str, code: &str, message: Option<&str>) -> Value {
+    let message: String = message.unwrap_or("").chars().take(200).collect();
+    json!({
+        "t": "ctl.res", "id": id, "ok": false,
+        "error": { "code": code, "message": message },
+        "ts": now_ms(),
+    })
+}
+
+/// The error code of a `ctl.res` built by [`error_response`] (`None` for a success).
+pub fn error_code(res: &Value) -> Option<&str> {
+    res.get("error")
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_str())
+}
+
 fn ok_res(id: &str, result: Value) -> Value {
-    json!({ "t": "ctl.res", "id": id, "ok": true, "result": result })
+    ok_response(id, result)
 }
 
 fn err_res(id: &str, code: &str, message: Option<&str>) -> Value {
-    let mut e = json!({ "t": "ctl.res", "id": id, "ok": false, "error": code });
-    if let Some(m) = message {
-        e["message"] = json!(m);
-    }
-    e
+    error_response(id, code, message)
 }
 
 fn refused(id: &str, code: &str, message: Option<&str>) -> Dispatched {
@@ -440,6 +468,24 @@ fn dispatch_elevation_request(id: &str, args: &Value) -> Dispatched {
     }
 }
 
+/// `true` if `s` is exactly `n` lower-case hex characters (contract §8.4 `runId`/`bodyHash`).
+fn is_hex_lower(s: &str, n: usize) -> bool {
+    s.len() == n
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// `true` if `s` is a canonical lower/upper-hex UUID (8-4-4-4-12, contract §8.4 `playbookId`).
+fn is_uuid(s: &str) -> bool {
+    let groups = [8usize, 4, 4, 4, 12];
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == groups.len()
+        && parts
+            .iter()
+            .zip(groups)
+            .all(|(p, g)| p.len() == g && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 fn dispatch_playbook_run(id: &str, req: &CtlReq, _ctx: &DispatchCtx) -> Dispatched {
     let args = &req.args;
     let (Some(run_id), Some(playbook_id), Some(body_hash), Some(body)) = (
@@ -452,6 +498,12 @@ fn dispatch_playbook_run(id: &str, req: &CtlReq, _ctx: &DispatchCtx) -> Dispatch
     };
     // `ctl.req.id` must equal `runId` (contract §8.4, so both reporters pair on opId).
     if req.id != run_id {
+        return refused(id, "bad_args", None);
+    }
+    // Identifier shapes (contract §8.4, security C6): `runId` is 32 lower-case hex, `playbookId`
+    // a UUID, `bodyHash` 64 lower-case hex. These are used as `opId`/path components downstream,
+    // so a bad shape is refused here before anything touches the filesystem.
+    if !is_hex_lower(run_id, 32) || !is_uuid(playbook_id) || !is_hex_lower(body_hash, 64) {
         return refused(id, "bad_args", None);
     }
     let requires_elevation = args
@@ -473,7 +525,7 @@ fn dispatch_playbook_run(id: &str, req: &CtlReq, _ctx: &DispatchCtx) -> Dispatch
 
 fn dispatch_playbook_cancel(id: &str, args: &Value) -> Dispatched {
     let run_id = match args.get("runId").and_then(|v| v.as_str()) {
-        Some(r) if !r.is_empty() => r.to_string(),
+        Some(r) if is_hex_lower(r, 32) => r.to_string(),
         _ => return refused(id, "bad_args", None),
     };
     // `ctl.req.id` must equal `runId + ":cancel"` (contract §8.4).
@@ -537,7 +589,7 @@ mod tests {
         );
         // view => not_allowed
         let d = dispatch(&p, &ctx(AgentConsentLevel::View));
-        assert_eq!(d.response["error"], json!("not_allowed"));
+        assert_eq!(d.response["error"]["code"], json!("not_allowed"));
         assert!(d.refused);
         // control => an InjectPointer action and ok
         let d = dispatch(&p, &ctx(AgentConsentLevel::Control));
@@ -553,14 +605,14 @@ mod tests {
             json!({ "monitorId": 7, "kind": "move", "nx": 0.5, "ny": 0.5 }),
         );
         let d = dispatch(&p, &ctx(AgentConsentLevel::Control));
-        assert_eq!(d.response["error"], json!("no_such_monitor"));
+        assert_eq!(d.response["error"]["code"], json!("no_such_monitor"));
     }
 
     #[test]
     fn clipboard_set_gated_on_the_desk_switch() {
         let c = req("clipboard.set", "3", json!({ "text": "hi" }));
         let d = dispatch(&c, &ctx(AgentConsentLevel::Control));
-        assert_eq!(d.response["error"], json!("clipboard_off"));
+        assert_eq!(d.response["error"]["code"], json!("clipboard_off"));
         let mut cx = ctx(AgentConsentLevel::Control);
         cx.clipboard_enabled = true;
         let d = dispatch(&c, &cx);
@@ -577,7 +629,10 @@ mod tests {
             "9",
             json!({ "monitorId": 1, "kind": "click", "nx": 0.1, "ny": 0.1 }),
         );
-        assert_eq!(dispatch(&p, &cx).response["error"], json!("secure_desktop"));
+        assert_eq!(
+            dispatch(&p, &cx).response["error"]["code"],
+            json!("secure_desktop")
+        );
         // os.monitors is not an input op, so it still works.
         assert_eq!(
             dispatch(&req("os.monitors", "1", json!({})), &cx).response["ok"],
@@ -594,8 +649,8 @@ mod tests {
                     "modifiers": { "ctrl": true, "shift": false, "alt": true, "meta": false } }),
         );
         let d = dispatch(&k, &ctx(AgentConsentLevel::Control));
-        assert_eq!(d.response["error"], json!("not_supported"));
-        assert_eq!(d.response["message"], json!("sas"));
+        assert_eq!(d.response["error"]["code"], json!("not_supported"));
+        assert_eq!(d.response["error"]["message"], json!("sas"));
     }
 
     #[test]
@@ -603,8 +658,8 @@ mod tests {
         let mut cx = ctx(AgentConsentLevel::Elevated);
         cx.integrity = ElevationLevel::Admin;
         let d = dispatch(&req("os.input_lock", "l", json!({ "locked": true })), &cx);
-        assert_eq!(d.response["error"], json!("not_supported"));
-        assert_eq!(d.response["message"], json!("phase_d"));
+        assert_eq!(d.response["error"]["code"], json!("not_supported"));
+        assert_eq!(d.response["error"]["message"], json!("phase_d"));
     }
 
     #[test]
@@ -613,7 +668,7 @@ mod tests {
             &req("tab.list", "t", json!({})),
             &ctx(AgentConsentLevel::Control),
         );
-        assert_eq!(d.response["error"], json!("not_supported"));
+        assert_eq!(d.response["error"]["code"], json!("not_supported"));
         assert!(!d.refused);
     }
 
@@ -625,7 +680,7 @@ mod tests {
             json!({ "reason": "install a driver" }),
         );
         assert_eq!(
-            dispatch(&r, &ctx(AgentConsentLevel::View)).response["error"],
+            dispatch(&r, &ctx(AgentConsentLevel::View)).response["error"]["code"],
             json!("not_allowed")
         );
         let d = dispatch(&r, &ctx(AgentConsentLevel::Control));
@@ -636,10 +691,12 @@ mod tests {
     #[test]
     fn playbook_run_requires_elevated_when_flagged_and_id_must_equal_run_id() {
         let run_id = "ab".repeat(16);
+        let pb_id = "11111111-1111-1111-1111-111111111111";
+        let body_hash = "cd".repeat(32);
         let good = req(
             "playbook.run",
             &run_id,
-            json!({ "runId": run_id, "playbookId": "p", "bodyHash": "h", "body": "echo",
+            json!({ "runId": run_id, "playbookId": pb_id, "bodyHash": body_hash, "body": "echo",
                     "requiresElevation": false }),
         );
         let d = dispatch(&good, &ctx(AgentConsentLevel::Control));
@@ -649,11 +706,11 @@ mod tests {
         let needs = req(
             "playbook.run",
             &run_id,
-            json!({ "runId": run_id, "playbookId": "p", "bodyHash": "h", "body": "x",
+            json!({ "runId": run_id, "playbookId": pb_id, "bodyHash": body_hash, "body": "x",
                     "requiresElevation": true }),
         );
         assert_eq!(
-            dispatch(&needs, &ctx(AgentConsentLevel::Control)).response["error"],
+            dispatch(&needs, &ctx(AgentConsentLevel::Control)).response["error"]["code"],
             json!("elevation_required")
         );
 
@@ -661,13 +718,62 @@ mod tests {
         let mismatched = req(
             "playbook.run",
             "wrong",
-            json!({ "runId": run_id, "playbookId": "p", "bodyHash": "h", "body": "x",
+            json!({ "runId": run_id, "playbookId": pb_id, "bodyHash": body_hash, "body": "x",
                     "requiresElevation": false }),
         );
         assert_eq!(
-            dispatch(&mismatched, &ctx(AgentConsentLevel::Control)).response["error"],
+            dispatch(&mismatched, &ctx(AgentConsentLevel::Control)).response["error"]["code"],
             json!("bad_args")
         );
+
+        // A bad identifier shape (non-hex runId / non-UUID playbookId / short bodyHash) is
+        // refused with bad_args before anything runs (security C6).
+        let bad_shapes = [
+            json!({ "runId": run_id, "playbookId": "not-a-uuid", "bodyHash": body_hash, "body": "x", "requiresElevation": false }),
+            json!({ "runId": run_id, "playbookId": pb_id, "bodyHash": "short", "body": "x", "requiresElevation": false }),
+        ];
+        for args in bad_shapes {
+            let r = req("playbook.run", &run_id, args);
+            assert_eq!(
+                dispatch(&r, &ctx(AgentConsentLevel::Control)).response["error"]["code"],
+                json!("bad_args")
+            );
+        }
+        // A runId that is not 32 hex (so ctl.req.id matches but the shape is wrong) => bad_args.
+        let bad_run = req(
+            "playbook.run",
+            "zz",
+            json!({ "runId": "zz", "playbookId": pb_id, "bodyHash": body_hash, "body": "x", "requiresElevation": false }),
+        );
+        assert_eq!(
+            dispatch(&bad_run, &ctx(AgentConsentLevel::Control)).response["error"]["code"],
+            json!("bad_args")
+        );
+    }
+
+    #[test]
+    fn responses_match_the_shared_strict_ctl_res_shape() {
+        // controlResponseSchema (shared, strict): ok => { t, id, ok, result, ts };
+        // refused => { t, id, ok, error: { code, message }, ts }. Nothing else.
+        let ok = ok_response("7", json!({}));
+        let mut keys: Vec<&str> = ok.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["id", "ok", "result", "t", "ts"]);
+        let err = error_response("8", "not_allowed", None);
+        let mut keys: Vec<&str> = err
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["error", "id", "ok", "t", "ts"]);
+        assert_eq!(
+            err["error"],
+            json!({ "code": "not_allowed", "message": "" })
+        );
+        assert_eq!(error_code(&err), Some("not_allowed"));
+        assert!(err["ts"].as_u64().unwrap() > 0);
     }
 
     #[test]
@@ -676,8 +782,8 @@ mod tests {
             &req("os.nav", "n", json!({ "action": "back" })),
             &ctx(AgentConsentLevel::Control),
         );
-        assert_eq!(d.response["error"], json!("not_supported"));
-        assert_eq!(d.response["message"], json!("nav"));
+        assert_eq!(d.response["error"]["code"], json!("not_supported"));
+        assert_eq!(d.response["error"]["message"], json!("nav"));
     }
 
     #[test]
@@ -692,7 +798,7 @@ mod tests {
         );
         let bad = req("os.monitor.select", "m", json!({ "monitorIds": [1, 9] }));
         assert_eq!(
-            dispatch(&bad, &ctx(AgentConsentLevel::View)).response["error"],
+            dispatch(&bad, &ctx(AgentConsentLevel::View)).response["error"]["code"],
             json!("no_such_monitor")
         );
     }

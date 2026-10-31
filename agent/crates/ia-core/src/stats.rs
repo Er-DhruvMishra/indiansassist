@@ -156,6 +156,17 @@ impl ControlInputAggregate {
         self.count == 0
     }
 
+    /// Reset the counters for the next 10 s window, keeping the window length and the viewed
+    /// monitor (contract §3.8 aggregation).
+    pub fn reset(&mut self) {
+        self.last_pointer_monitor = None;
+        self.monitor_id = None;
+        self.count = 0;
+        self.kinds.clear();
+        self.text_chars = 0;
+        self.refused = 0;
+    }
+
     /// Whether the window crossed the `input.text_burst` threshold (contract §3.8: more than
     /// 200 characters of `os.text` within the window).
     pub fn text_burst(&self) -> bool {

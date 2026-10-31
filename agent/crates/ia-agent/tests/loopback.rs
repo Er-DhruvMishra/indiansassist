@@ -277,7 +277,7 @@ fn fake_assist_control_ops_are_gated_by_level() {
     let res_frame = desk.seal_text(&d.response.to_string()).unwrap();
     let res: serde_json::Value =
         serde_json::from_str(&desk_to_assist(&mut assist, &res_frame)).unwrap();
-    assert_eq!(res["error"], serde_json::json!("not_allowed"));
+    assert_eq!(res["error"]["code"], serde_json::json!("not_allowed"));
 }
 
 #[test]
@@ -419,8 +419,9 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
     let body = "Write-Output 'ok'";
     let body_hash = hex::encode(Sha256::digest(body.as_bytes()));
     let run_id = "ab".repeat(16);
+    let pb_id = "11111111-1111-1111-1111-111111111111";
     let manifest = vec![ManifestEntry {
-        id: "pb-1".into(),
+        id: pb_id.into(),
         body_hash: body_hash.clone(),
         requires_elevation: false,
         parameters: vec![],
@@ -430,7 +431,7 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
     // Assist -> Desk playbook.run on ia.control (ctl.req.id === runId, §8.4).
     let req = serde_json::json!({
         "t": "ctl.req", "id": run_id, "op": "playbook.run",
-        "args": { "runId": run_id, "playbookId": "pb-1", "bodyHash": body_hash,
+        "args": { "runId": run_id, "playbookId": pb_id, "bodyHash": body_hash,
                   "body": body, "interpreter": "powershell", "requiresElevation": false,
                   "timeoutSec": 120 }
     })
@@ -625,10 +626,10 @@ mod media_loopback {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn two_peers_handshake_and_a_vp8_keyframe_arrives() {
-        let desk = AgentPeer::new(PeerRole::Desk, &[1], false)
+        let desk = AgentPeer::new(PeerRole::Desk, &[1], false, Default::default())
             .await
             .expect("desk peer");
-        let assist = AgentPeer::new(PeerRole::Assist, &[], false)
+        let assist = AgentPeer::new(PeerRole::Assist, &[], false, Default::default())
             .await
             .expect("assist peer");
 
@@ -743,10 +744,10 @@ mod media_loopback {
             }
         }
 
-        let desk = AgentPeer::new(PeerRole::Desk, &[1], false)
+        let desk = AgentPeer::new(PeerRole::Desk, &[1], false, Default::default())
             .await
             .expect("desk");
-        let assist = AgentPeer::new(PeerRole::Assist, &[], false)
+        let assist = AgentPeer::new(PeerRole::Assist, &[], false, Default::default())
             .await
             .expect("assist");
         let offer = desk.offer().await.expect("offer");

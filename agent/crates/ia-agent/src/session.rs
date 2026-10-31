@@ -26,7 +26,25 @@ pub enum SignalOutcome {
     Closed,
 }
 
-const DEFAULT_SIGNAL_URL: &str = "ws://localhost:4000/signal";
+/// The default signalling URL when neither the dev `--signal-url` nor `--api-origin` is given.
+/// A **dev** build falls back to localhost for the e2e; a **release** build has no localhost
+/// fallback (security C10) — it uses the compiled region origin (`IA_API_ORIGIN`) and, absent
+/// one, returns an empty string so a release binary never silently dials localhost.
+#[cfg(feature = "dev")]
+fn compiled_default_signal_url() -> String {
+    "ws://localhost:4000/signal".to_string()
+}
+
+#[cfg(not(feature = "dev"))]
+fn compiled_default_signal_url() -> String {
+    match option_env!("IA_API_ORIGIN") {
+        Some(origin) => format!(
+            "{}/signal",
+            origin.replacen("http", "ws", 1).trim_end_matches('/')
+        ),
+        None => String::new(),
+    }
+}
 
 fn arch() -> &'static str {
     if cfg!(target_arch = "aarch64") {
@@ -46,7 +64,7 @@ pub fn resolve_signal_url(cli: &Cli) -> String {
         let ws = origin.replacen("http", "ws", 1);
         return format!("{}/signal", ws.trim_end_matches('/'));
     }
-    DEFAULT_SIGNAL_URL.to_string()
+    compiled_default_signal_url()
 }
 
 fn token_string(tok: &TokenInput) -> String {

@@ -18,6 +18,7 @@
 //! lower the level, toggle the clipboard, chat, revoke or Stop.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,8 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
+use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 use crate::capture::SyntheticCapturer;
@@ -52,7 +55,7 @@ use ia_core::stats::{AgentStats, StatMonitor};
 use ia_core::teardown::{deletes_on_exit, stop_order, teardown_order, ProcessRole};
 use ia_core::types::{
     op_id_for, AgentConsentLevel, CapturePath, ElevationLevel, MonitorInfo, PlaybookInterpreter,
-    VideoEncoder,
+    SecFailReason, VideoEncoder,
 };
 use ia_platform::traits::{Capturer, ClipboardBridge, InputSink};
 use ia_ui::bridge::{ConsentRequest, FilePrompt, UiCommand, UiEvent};
@@ -60,6 +63,15 @@ use ia_ui::model::ConsentPayload;
 
 type Chans = HashMap<String, Arc<RTCDataChannel>>;
 type Secs = HashMap<String, SecChannel>;
+
+mod link;
+mod meter;
+mod secfail;
+mod selfdel;
+use link::*;
+use meter::*;
+use secfail::*;
+use selfdel::*;
 
 /// How long the Desk has to answer a file offer or a level request (contract §3.4, §6.1 F4).
 const PROMPT_SECS: u64 = 60;
@@ -76,6 +88,10 @@ pub enum LiveOutcome {
     Revoked,
     /// The server (or Assist) ended the session first.
     EndedRemotely,
+    /// A frame failed to decrypt / replay / sequence, a channel was closed or a stray channel
+    /// opened, or the handshake/negotiation failed: the §1.3 step-9 teardown ran and the WS
+    /// `session.end` carried `note: 'sec:<reason>'`. The string is the `SecFailReason`.
+    SecFailed(String),
     /// Consent was declined (window, Escape, close, deadline) or setup failed.
     Failed(String),
 }
@@ -488,6 +504,7 @@ async fn connect_and_serve(
     let monitor_ids: Vec<u32> = monitors.iter().map(|m| m.id).collect();
 
     // Wait for consent.ok (carries the Desk ICE servers; localhost uses host candidates).
+    let ice_servers: Vec<RTCIceServer>;
     let consent_deadline = tokio::time::sleep(Duration::from_secs(15));
     tokio::pin!(consent_deadline);
     loop {
@@ -502,7 +519,13 @@ async fn connect_and_serve(
                     return Ok(LiveOutcome::EndedRemotely);
                 };
                 match v.get("t").and_then(|t| t.as_str()) {
-                    Some("consent.ok") => break,
+                    Some("consent.ok") => {
+                        // F5: parse the STUN/TURN servers into the PC configuration so a
+                        // non-LAN pair can form; localhost sends none and host candidates win.
+                        ice_servers = crate::peer::ice_servers_from_json(v.get("iceServers"));
+                        tracing::info!(ice_servers = ice_servers.len(), "consent.ok");
+                        break;
+                    }
                     Some("session.ended") => {
                         end_ui(ui, "The session ended.").await;
                         return Ok(LiveOutcome::EndedRemotely);
@@ -518,78 +541,85 @@ async fn connect_and_serve(
         }
     }
 
-    // 2) Build the peer, add a VP8 track per monitor, create the seven channels, offer (gen 0).
-    let peer = AgentPeer::new(PeerRole::Desk, &monitor_ids, false)
-        .await
-        .map_err(|e| format!("peer: {e}"))?;
-    let offer = peer.offer().await.map_err(|e| format!("offer: {e}"))?;
-    let offer_msg = json!({ "t": "webrtc.offer", "sessionId": session_id, "sdp": offer, "gen": 0 });
-    tracing::info!(sdp_len = offer.len(), "sending webrtc.offer (gen 0)");
-    ws.send(offer_msg.clone()).await?;
+    // The inbound-frame bus and the secure-channel failure bus are shared across key
+    // generations (a §3.7 rebuild re-wires fresh channels to the same buses).
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<Inbound>();
+    let (fail_tx, fail_rx) = mpsc::unbounded_channel::<(u16, SecFailReason)>();
 
-    // 3) Apply the answer and collect trickled ICE until the DTLS fingerprints are known. The
-    // offer is re-sent every 2.5 s until an answer arrives, in case the Assist console had not
-    // finished subscribing when the first one was relayed (the console rebuilds idempotently).
-    let hs_deadline = tokio::time::sleep(Duration::from_secs(25));
-    tokio::pin!(hs_deadline);
-    let mut resend = tokio::time::interval(Duration::from_millis(2500));
-    resend.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    resend.tick().await; // consume the immediate first tick (we just sent the offer)
-    let mut answered = false;
-    let fprs = loop {
-        if answered {
-            if let Some(f) = peer.fingerprints().await {
-                break f;
-            }
-        }
-        tokio::select! {
-            _ = &mut hs_deadline => {
-                end_ui(ui, "The technician's console did not answer.").await;
-                return Ok(LiveOutcome::Failed("no answer / fingerprints".into()));
-            }
-            _ = resend.tick(), if !answered => {
-                tracing::info!("re-sending webrtc.offer (no answer yet)");
-                let _ = ws.send(offer_msg.clone()).await;
-            }
-            _ = tokio::time::sleep(Duration::from_millis(50)), if answered => {}
-            msg = ws_rx.recv() => {
-                let Some(v) = msg else {
-                    tracing::warn!("signalling socket closed while waiting for the answer");
-                    end_ui(ui, "The session ended.").await;
-                    return Ok(LiveOutcome::EndedRemotely);
-                };
-                match v.get("t").and_then(|t| t.as_str()) {
-                    Some("webrtc.answer") if !answered => {
-                        tracing::info!("webrtc.answer received; applying");
-                        if let Some(sdp) = v.get("sdp").and_then(|s| s.as_str()) {
-                            peer.pc
-                                .set_remote_description(RTCSessionDescription::answer(sdp.to_string()).map_err(|e| e.to_string())?)
-                                .await
-                                .map_err(|e| format!("set answer: {e}"))?;
-                            answered = true;
-                        }
-                    }
-                    Some("webrtc.answer") => {}
-                    Some("webrtc.ice") => add_remote_ice(&peer, &v).await,
-                    Some("ping") => { let _ = ws.send(json!({ "t": "pong" })).await; }
-                    Some("session.ended") => {
-                        end_ui(ui, "The session ended.").await;
-                        return Ok(LiveOutcome::EndedRemotely);
-                    }
-                    other => tracing::info!(t = ?other, "ws frame while awaiting answer"),
-                }
-            }
+    // 2) Build the peer (gen 0), wire the six encrypted channels and the stray-channel guard
+    // BEFORE the handshake (F7), then offer.
+    let peer = AgentPeer::new(
+        PeerRole::Desk,
+        &monitor_ids,
+        false,
+        crate::peer::configuration(ice_servers.clone()),
+    )
+    .await
+    .map_err(|e| format!("peer: {e}"))?;
+    let chans = match wire_channels(&peer, 0, &in_tx, &fail_tx).await {
+        Ok(c) => c,
+        Err(e) => {
+            end_ui(ui, "The connection could not be set up.").await;
+            return Err(e);
         }
     };
-    let (own_fpr, remote_fpr) = fprs;
+
+    // 3) Offer (gen 0), apply the answer, read the fingerprints.
+    let (own_fpr, remote_fpr) = match negotiate(&peer, ws, ws_rx, session_id, 0, false).await {
+        NegotiateOutcome::Fingerprints(f) => f,
+        NegotiateOutcome::Ended => {
+            end_ui(ui, "The session ended.").await;
+            return Ok(LiveOutcome::EndedRemotely);
+        }
+        NegotiateOutcome::NoAnswer => {
+            // A negotiation that never completes is a §1.3 step-9 failure (`timeout`), not a
+            // silent exit (F8): the console and the chain both learn the session ended on error.
+            end_ui(ui, "The technician's console did not answer.").await;
+            return Ok(teardown_sec_fail(
+                ws,
+                session_id,
+                SecFailReason::Timeout,
+                None,
+                None,
+                &peer,
+            )
+            .await);
+        }
+    };
 
     // 4) Run the §1.3 handshake over ia.sec and log the security code the harness reads.
-    let sec_dc = await_channel(&peer, "ia.sec")
-        .await
-        .ok_or("ia.sec never opened")?;
-    let (keys, sas) = run_handshake(sec_dc, Side::Desk, session_id, 0, &own_fpr, &remote_fpr)
-        .await
-        .map_err(|r| format!("ia.sec handshake failed: {r:?}"))?;
+    let sec_dc = match await_channel(&peer, "ia.sec").await {
+        Some(dc) => dc,
+        None => {
+            end_ui(ui, "The secure connection could not be established.").await;
+            return Ok(teardown_sec_fail(
+                ws,
+                session_id,
+                SecFailReason::Timeout,
+                None,
+                None,
+                &peer,
+            )
+            .await);
+        }
+    };
+    let (keys, sas) = match run_handshake(
+        sec_dc.clone(),
+        Side::Desk,
+        session_id,
+        0,
+        &own_fpr,
+        &remote_fpr,
+    )
+    .await
+    {
+        Ok(k) => k,
+        Err(reason) => {
+            // Timeout / fingerprint / received sec.fail / mac: emit the step-9 teardown (F8).
+            end_ui(ui, "The security code could not be verified.").await;
+            return Ok(teardown_sec_fail(ws, session_id, reason, None, Some(&sec_dc), &peer).await);
+        }
+    };
     if sas.len() == 6 {
         tracing::info!("security code {} {}", &sas[0..3], &sas[3..6]);
     } else {
@@ -603,7 +633,6 @@ async fn connect_and_serve(
         cli,
         session_id,
         info,
-        peer: &peer,
         keys,
         monitors,
         payload,
@@ -612,7 +641,18 @@ async fn connect_and_serve(
         joined_by_code,
         sas,
     };
-    serve(ws, ws_rx, params, ui, ui_rx).await
+    let io = ServeIo {
+        peer,
+        chans,
+        sec_dc,
+        in_rx,
+        fail_rx,
+        in_tx,
+        fail_tx,
+        ice_servers,
+        monitor_ids,
+    };
+    serve(ws, ws_rx, params, io, ui, ui_rx).await
 }
 
 async fn add_remote_ice(peer: &AgentPeer, v: &Value) {
@@ -727,6 +767,10 @@ struct Live<'a> {
     pending_level: Option<PendingLevel>,
     receipt: Receipt,
     started: Instant,
+    /// Set when a §1.3 step-9 failure is detected, so the teardown emits the right note.
+    sec_fail: Option<(SecFailReason, Option<String>)>,
+    /// A pending `os.quality` preset the serve loop applies to the ABR controller (§4.3).
+    pending_quality: Option<ia_core::types::QualityPreset>,
 }
 
 impl Live<'_> {
@@ -808,6 +852,7 @@ impl Live<'_> {
             return;
         };
         self.ui(UiCommand::LevelPromptClosed);
+        self.emit_prompt("level", &p.req_id, "answered").await;
         let from = level_wire(self.control.consent.level);
         if allow {
             self.control.consent.grant_level(AgentConsentLevel::Control);
@@ -815,13 +860,13 @@ impl Live<'_> {
                 .ws
                 .send(json!({ "t": "desk.consent_level", "sessionId": self.session_id, "level": "control", "requested": true, "opId": p.op_id }))
                 .await;
-            let res = json!({ "t": "ctl.res", "id": p.req_id, "ok": true, "result": { "level": "control" } });
+            let res = ia_core::ctl::ok_response(&p.req_id, json!({ "level": "control" }));
             self.seal("ia.control", &res.to_string()).await;
             self.send_level_event().await;
             tracing::info!("level.request allowed");
         } else {
             let code = if timeout { "timeout" } else { "refused" };
-            let res = json!({ "t": "ctl.res", "id": p.req_id, "ok": false, "error": code });
+            let res = ia_core::ctl::error_response(&p.req_id, code, None);
             self.seal("ia.control", &res.to_string()).await;
             let _ = self
                 .ws
@@ -896,6 +941,8 @@ impl Live<'_> {
                         timeout_secs: PROMPT_SECS,
                     }));
                     tracing::info!(file_id = offer.file_id, "file offer prompted");
+                    self.emit_prompt("file", &format!("file:{}", offer.file_id), "shown")
+                        .await;
                     self.pending_file = Some(PendingFile {
                         offer,
                         recv,
@@ -946,6 +993,9 @@ impl Live<'_> {
             self.pending_file = Some(p);
             return;
         }
+        let state = "answered"; // shared prompt states: shown | answered
+        self.emit_prompt("file", &format!("file:{file_id}"), state)
+            .await;
         if accept {
             tracing::info!(file_id, "file offer accepted by the Desk");
             self.start_incoming(p.offer, p.recv, p.accepted).await;
@@ -1010,6 +1060,20 @@ impl Live<'_> {
                 tracing::info!("file saved {}", path.display());
                 self.receipt.files.push(path.display().to_string());
                 self.file_msg("file.ack", fid, json!({ "ok": true, "sha256": inc.sha }))
+                    .await;
+                // §3.8 / correctness F14: the Desk reporter half — the audit records the file
+                // landed on disk, with its size and hash (the content never does).
+                let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| final_name.clone());
+                let _ = self
+                    .ws
+                    .send(json!({
+                        "t": "desk.event", "sessionId": self.session_id, "action": "file.received",
+                        "data": { "fileId": fid, "direction": "to_desk", "name": name, "bytes": bytes, "sha256": inc.sha },
+                    }))
                     .await;
                 self.ui(UiCommand::FileClosed {
                     file_id: fid,
@@ -1125,20 +1189,28 @@ impl Live<'_> {
 
     // ---- inbound frames ------------------------------------------------------------------------
 
-    async fn on_inbound(&mut self, inb: Inbound) {
+    /// Open one inbound frame. A frame that fails decrypt / replay / sequence returns the
+    /// `(reason, channel)` for the §1.3 step-9 teardown (contract correctness F7 / security C1);
+    /// otherwise it is routed and `Ok(())` is returned.
+    async fn on_inbound(&mut self, inb: Inbound) -> Result<(), (SecFailReason, String)> {
         let opened = {
             let Some(sc) = self.sec.get_mut(&inb.label) else {
-                return;
+                return Ok(());
             };
             match sc.open(&inb.data) {
                 Ok(o) => o,
                 Err(r) => {
-                    tracing::warn!(label = %inb.label, reason = ?r, "frame failed to open");
-                    return;
+                    tracing::warn!(label = %inb.label, reason = ?r, "frame failed to open -> sec.fail");
+                    return Err((r, inb.label.clone()));
                 }
             }
         };
-        match inb.label.as_str() {
+        self.route_inbound(&inb.label, opened).await;
+        Ok(())
+    }
+
+    async fn route_inbound(&mut self, label: &str, opened: ia_core::secchan::OpenedFrame) {
+        match label {
             "ia.control" => {
                 let Some(text) = opened.as_text() else { return };
                 let text = text.to_string();
@@ -1308,11 +1380,33 @@ impl Live<'_> {
                     .as_ref()
                     .map(|r| op_id_for(&self.session_id, &r.id))
                     .unwrap_or_default();
-                tracing::info!(%reason, %op_id, "elevation.request; minting hand-over");
-                let _ = self
-                    .ws
-                    .send(json!({ "t": "desk.elevation", "sessionId": self.session_id, "opId": op_id }))
-                    .await;
+                if self.headless() {
+                    // Dev / e2e path: the hand-over mint is exercised end to end (the console
+                    // asserts `elevation.handover_minted`). A real interactive build does NOT
+                    // mint (F11 / C-03): the runas relaunch + named pipe + elevated child are
+                    // not wired, so minting only burns the budget and chains `handover_expired`.
+                    tracing::info!(%reason, %op_id, "elevation.request; minting hand-over (headless)");
+                    let _ = self
+                        .ws
+                        .send(json!({ "t": "desk.elevation", "sessionId": self.session_id, "opId": op_id }))
+                        .await;
+                } else {
+                    // Stop the chain accumulating un-completable hand-overs: tell the console the
+                    // request failed (policy / UAC unavailable) instead of minting (F11 / C-03).
+                    tracing::warn!(%reason, %op_id, "elevation.request refused: hand-over not wired (uac_unavailable)");
+                    let ev = json!({
+                        "t": "ctl.event", "kind": "elevation",
+                        "opId": op_id, "state": "failed", "cause": "policy", "ts": now_ms(),
+                    });
+                    self.seal("ia.control", &ev.to_string()).await;
+                    let _ = self
+                        .ws
+                        .send(json!({
+                            "t": "desk.event", "sessionId": self.session_id, "action": "elevation.failed",
+                            "data": { "opId": op_id, "error": "uac_unavailable" },
+                        }))
+                        .await;
+                }
             }
             SessionEffect::LevelRequest { reason } => {
                 let op_id = req
@@ -1321,8 +1415,10 @@ impl Live<'_> {
                     .unwrap_or_default();
                 if deferred {
                     tracing::info!("level.request; prompting the Desk");
+                    let req_id = req.map(|r| r.id).unwrap_or_default();
+                    self.emit_prompt("level", &req_id, "shown").await;
                     self.pending_level = Some(PendingLevel {
-                        req_id: req.map(|r| r.id).unwrap_or_default(),
+                        req_id,
                         op_id,
                         deadline: Instant::now() + Duration::from_secs(PROMPT_SECS),
                     });
@@ -1367,7 +1463,11 @@ impl Live<'_> {
                     r.handle.cancel();
                 }
             }
-            SessionEffect::Quality(_) | SessionEffect::None => {}
+            SessionEffect::Quality(preset) => {
+                // Honour os.quality (§4.3): the serve loop applies it to the ABR controller.
+                self.pending_quality = Some(preset);
+            }
+            SessionEffect::None => {}
         }
     }
 
@@ -1468,6 +1568,45 @@ impl Live<'_> {
         self.seal("ia.chat", &msg.to_string()).await;
     }
 
+    /// Flush the §3.8 `control.input` (mode `os`) aggregate and the `input.text_burst`
+    /// threshold to the WS as `desk.event`s and reset the window (correctness F14: the Desk
+    /// reporter half of the two-reporter rule; flushed on the 10 s ticker and before
+    /// `session.end`). Nothing is sent when the window is empty.
+    async fn flush_input_report(&mut self) {
+        if self.control.input.is_empty() {
+            return;
+        }
+        let data = self.control.input.to_chain();
+        let burst = self.control.input.text_burst_chain();
+        let _ = self
+            .ws
+            .send(json!({
+                "t": "desk.event", "sessionId": self.session_id, "action": "control.input", "data": data,
+            }))
+            .await;
+        if let Some(burst) = burst {
+            let _ = self
+                .ws
+                .send(json!({
+                    "t": "desk.event", "sessionId": self.session_id, "action": "input.text_burst", "data": burst,
+                }))
+                .await;
+        }
+        self.control.input.reset();
+    }
+
+    /// Emit a §5.1 `prompt` `ctl.event` for a Desk prompt card (file / level / elevation), the
+    /// event the console draws its prompt state from (correctness F14 "ctl.event prompt events
+    /// the UI agent left stubbed").
+    async fn emit_prompt(&mut self, prompt_kind: &str, id: &str, state: &str) {
+        let op_id = op_id_for(&self.session_id, id);
+        let ev = json!({
+            "t": "ctl.event", "kind": "prompt",
+            "id": id, "promptKind": prompt_kind, "state": state, "opId": op_id, "ts": now_ms(),
+        });
+        self.seal("ia.control", &ev.to_string()).await;
+    }
+
     fn receipt_lines(&self, outcome: &LiveOutcome, sas: &str) -> Vec<String> {
         let elapsed = self.started.elapsed().as_secs();
         let mut lines = vec![
@@ -1519,15 +1658,15 @@ fn ctl_code(e: PlaybookError) -> &'static str {
 }
 
 fn refused_res(req: Option<&CtlReq>, code: &str) -> Value {
-    json!({ "t": "ctl.res", "id": req.map(|r| r.id.as_str()).unwrap_or(""), "ok": false, "error": code })
+    ia_core::ctl::error_response(req.map(|r| r.id.as_str()).unwrap_or(""), code, None)
 }
 
-/// The fixed inputs of a live serve run.
+/// The fixed inputs of a live serve run (identity/policy facts; the per-generation peer,
+/// channels and buses are in [`ServeIo`]).
 struct ServeParams<'a> {
     cli: &'a Cli,
     session_id: &'a str,
     info: &'a CreatedInfo,
-    peer: &'a AgentPeer,
     keys: SessionKeys,
     monitors: Vec<MonitorInfo>,
     payload: ConsentPayload,
@@ -1537,10 +1676,48 @@ struct ServeParams<'a> {
     sas: String,
 }
 
+/// The webrtc peer, its channels and the inbound/failure buses for the current key generation,
+/// plus the inputs a §3.7 rebuild needs (the ICE servers, the monitors, and the bus senders).
+struct ServeIo {
+    peer: AgentPeer,
+    chans: Chans,
+    sec_dc: Arc<RTCDataChannel>,
+    in_rx: mpsc::UnboundedReceiver<Inbound>,
+    fail_rx: mpsc::UnboundedReceiver<(u16, SecFailReason)>,
+    in_tx: mpsc::UnboundedSender<Inbound>,
+    fail_tx: mpsc::UnboundedSender<(u16, SecFailReason)>,
+    ice_servers: Vec<RTCIceServer>,
+    monitor_ids: Vec<u32>,
+}
+
+/// Spawn the one-monitor VP8 pump, returning its join handle (None if the track is missing).
+fn spawn_video(
+    peer: &AgentPeer,
+    viewed: u32,
+    monitors: &[MonitorInfo],
+    synthetic: bool,
+    stop: Arc<tokio::sync::Notify>,
+    path: Arc<std::sync::atomic::AtomicU8>,
+    meter: Arc<VideoMeter>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    peer.video_track(viewed).map(|track| {
+        let (w, h) = monitors
+            .iter()
+            .find(|m| m.id == viewed)
+            .map(|m| (m.width.max(2) & !1, m.height.max(2) & !1))
+            .unwrap_or((1280, 720));
+        tokio::spawn(
+            async move { pump_video(track, w, h, viewed, synthetic, stop, path, meter).await },
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn serve(
     ws: &mut SignalWriter,
     ws_rx: &mut mpsc::UnboundedReceiver<Value>,
     p: ServeParams<'_>,
+    io: ServeIo,
     ui: Option<DeskUi>,
     ui_rx: &mut Option<mpsc::UnboundedReceiver<UiEvent>>,
 ) -> Result<LiveOutcome, String> {
@@ -1548,47 +1725,35 @@ async fn serve(
         cli,
         session_id,
         info,
-        peer,
         keys,
         monitors,
         payload,
         manifest,
         budget,
         joined_by_code,
-        sas,
+        mut sas,
     } = p;
-    let monitor_ids: Vec<u32> = monitors.iter().map(|m| m.id).collect();
+    let ServeIo {
+        mut peer,
+        chans,
+        mut sec_dc,
+        mut in_rx,
+        mut fail_rx,
+        in_tx,
+        fail_tx,
+        ice_servers,
+        monitor_ids,
+    } = io;
     let viewed = monitors
         .iter()
         .find(|m| m.primary)
         .map(|m| m.id)
         .unwrap_or(monitor_ids.first().copied().unwrap_or(1));
+    let synthetic = cli.synthetic_capture;
+    let mut gen: u16 = 0;
 
-    // Open the encrypted channels (Desk operator, gen 0) and wire inbound forwarders.
-    let mut set = SecChannelSet::new();
-    let labels = [
-        "ia.control",
-        "ia.chat",
-        "ia.file",
-        "ia.playbook",
-        "ia.ctrl",
-        "ia.annot",
-    ];
-    let mut sec: Secs = HashMap::new();
-    let mut chans: Chans = HashMap::new();
-    let (in_tx, mut in_rx) = mpsc::unbounded_channel::<Inbound>();
-    for label in labels {
-        let dc = await_channel(peer, label)
-            .await
-            .ok_or_else(|| format!("{label} never opened"))?;
-        forward(&dc, label, in_tx.clone());
-        chans.insert(label.to_string(), dc);
-        sec.insert(
-            label.to_string(),
-            set.open(Operator::Desk, session_id, label, 0, keys.k_d2a, keys.k_a2d)
-                .map_err(|e| format!("secchan {label}: {e}"))?,
-        );
-    }
+    // Secure channels for gen 0 over the channels wired in `connect_and_serve`.
+    let sec = open_sec_set(&chans, session_id, 0, &keys)?;
 
     // Control server: gates every op by the live consent and applies OS input.
     let consent = LiveConsent::new(payload.level, payload.clipboard, monitor_ids.clone());
@@ -1619,6 +1784,8 @@ async fn serve(
         pending_level: None,
         receipt: Receipt::default(),
         started: Instant::now(),
+        sec_fail: None,
+        pending_quality: None,
     };
 
     // Announce the monitor list so the console's picker populates (§3.6 M3), then the level.
@@ -1629,24 +1796,46 @@ async fn serve(
     live.seal("ia.control", &monitors_event.to_string()).await;
     live.send_level_event().await;
 
-    // Video pump: synthetic (e2e) or GDI, one monitor, continuous VP8 with periodic keyframes.
-    let stop = Arc::new(tokio::sync::Notify::new());
+    // Video pump + throughput meter + ABR controller fed by REMB/loss (contract §4.3, §4.4).
+    let mut stop = Arc::new(tokio::sync::Notify::new());
     let capture_path = Arc::new(std::sync::atomic::AtomicU8::new(CapturePath::Gdi as u8));
-    let video_handle = peer.video_track(viewed).map(|track| {
-        let stop = stop.clone();
-        let (w, h) = monitors
-            .iter()
-            .find(|m| m.id == viewed)
-            .map(|m| (m.width.max(2) & !1, m.height.max(2) & !1))
-            .unwrap_or((1280, 720));
-        let synthetic = cli.synthetic_capture;
-        let path = capture_path.clone();
-        tokio::spawn(async move { pump_video(track, w, h, viewed, synthetic, stop, path).await })
-    });
+    let meter = Arc::new(VideoMeter::default());
+    let remb_kbps = Arc::new(AtomicU64::new(0));
+    let loss_permille = Arc::new(AtomicU64::new(0));
+    let mut video_handle = spawn_video(
+        &peer,
+        viewed,
+        &monitors,
+        synthetic,
+        stop.clone(),
+        capture_path.clone(),
+        meter.clone(),
+    );
+    let mut remb_handle = spawn_remb_reader(
+        &peer,
+        remb_kbps.clone(),
+        loss_permille.clone(),
+        stop.clone(),
+    );
+    let mut abr = ia_core::abr::AbrController::default();
+    let mut last_meter = MeterSnapshot::take(&meter);
+    let mut last_rung = abr.rung();
+
+    // PeerConnection connectivity (contract correctness F13): restart ICE on a sustained
+    // `disconnected`, tear down with a sec note on `failed`.
+    let (pc_state_tx, mut pc_state_rx) = mpsc::unbounded_channel::<RTCPeerConnectionState>();
+    wire_pc_state(&peer, pc_state_tx);
+    let mut disconnected_since: Option<Instant> = None;
+    let mut ice_restarted = false;
+    let mut want_rebuild: Option<&'static str> = None;
 
     // Timers + Stop triggers.
-    let mut stats_iv = tokio::time::interval(Duration::from_secs(5));
+    let mut stats_iv = tokio::time::interval(Duration::from_millis(
+        ia_core::types::limits::AGENT_STATS_INTERVAL_MS,
+    ));
     let mut prompt_iv = tokio::time::interval(Duration::from_secs(1));
+    let mut report_iv = tokio::time::interval(Duration::from_secs(10)); // §3.8 control.input flush
+    report_iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clip_iv = tokio::time::interval(Duration::from_millis(400));
     clip_iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stop_after = cli.stop_after.map(Duration::from_secs);
@@ -1677,13 +1866,47 @@ async fn serve(
             _ = tokio::signal::ctrl_c() => { tracing::info!("stop: ctrl-c"); break; }
             stop_line = next_stop_line(&mut stdin) => { if stop_line { tracing::info!("stop: dev stop line"); break; } }
             _ = stats_iv.tick() => {
-                let s = build_stats(&monitors, viewed, path_from_u8(capture_path.load(std::sync::atomic::Ordering::Relaxed)));
+                if let Some(preset) = live.pending_quality.take() {
+                    abr.set_preset(preset);
+                }
+                let now = MeterSnapshot::take(&meter);
+                let interval = now.diff(&last_meter, ia_core::types::limits::AGENT_STATS_INTERVAL_MS);
+                last_meter = now;
+                let remb = remb_kbps.load(Ordering::Relaxed);
+                let decision = abr.step(ia_core::abr::AbrSample {
+                    now_ms: now_ms() as u64,
+                    remb_kbps: abr_estimate_kbps(remb, interval.sent_kbps, loss_permille.load(Ordering::Relaxed)),
+                    twcc_kbps: None,
+                    fraction_lost: loss_permille.load(Ordering::Relaxed) as f32 / 1000.0,
+                });
+                if decision.rung != last_rung {
+                    tracing::info!(from = last_rung.as_str(), to = decision.rung.as_str(), remb_kbps = remb, loss_permille = loss_permille.load(Ordering::Relaxed), target_kbps = decision.target_kbps, sent_kbps = interval.sent_kbps, "abr rung change");
+                    last_rung = decision.rung;
+                }
+                let s = build_stats(&monitors, viewed, path_from_u8(capture_path.load(Ordering::Relaxed)), &interval, &decision);
                 live.seal("ia.ctrl", &s.to_wire().to_string()).await;
             }
             _ = prompt_iv.tick() => live.expire_prompts().await,
+            _ = report_iv.tick() => live.flush_input_report().await,
             _ = clip_iv.tick() => live.poll_clipboard().await,
             pb = pb_rx.recv() => {
                 if let Some(pb) = pb { live.on_pb(pb).await; }
+            }
+            st = pc_state_rx.recv() => {
+                match st {
+                    Some(RTCPeerConnectionState::Connected) => { disconnected_since = None; ice_restarted = false; }
+                    Some(RTCPeerConnectionState::Disconnected) => {
+                        tracing::warn!("peer connection disconnected");
+                        disconnected_since = Some(Instant::now());
+                    }
+                    Some(RTCPeerConnectionState::Failed) => {
+                        tracing::warn!("peer connection failed: tearing down (sec:timeout)");
+                        live.sec_fail = Some((SecFailReason::Timeout, None));
+                        outcome = LiveOutcome::SecFailed("timeout".into());
+                        break;
+                    }
+                    _ => {}
+                }
             }
             ev = next_ui(ui_rx) => {
                 match ev {
@@ -1707,7 +1930,7 @@ async fn serve(
             msg = ws_rx.recv() => {
                 let Some(v) = msg else { outcome = LiveOutcome::EndedRemotely; break; };
                 match v.get("t").and_then(|t| t.as_str()) {
-                    Some("webrtc.ice") => add_remote_ice(peer, &v).await,
+                    Some("webrtc.ice") => add_remote_ice(&peer, &v).await,
                     Some("ping") => { let _ = live.ws.send(json!({ "t": "pong" })).await; }
                     Some("session.ended") => { outcome = LiveOutcome::EndedRemotely; break; }
                     Some("session.handed_over") => { tracing::info!("handed over to the elevated instance"); outcome = LiveOutcome::EndedRemotely; break; }
@@ -1716,34 +1939,163 @@ async fn serve(
                         live.ui(UiCommand::Recording { on, server: true });
                     }
                     Some("consent.level_ok") => tracing::info!("consent.level_ok"),
+                    // §3.7 resume / ICE refresh: the agent never reuses a PC — close it, build a
+                    // fresh one, re-offer { restart: true, gen+1 } and re-run the §1.3 handshake.
+                    Some("assist.reconnected") | Some("ice.refresh") => {
+                        let t = v.get("t").and_then(|t| t.as_str()).unwrap_or("");
+                        if t == "assist.reconnected"
+                            && v.get("state").and_then(|s| s.as_str()) != Some("active")
+                        {
+                            continue;
+                        }
+                        want_rebuild = Some(if t == "ice.refresh" { "ice.refresh" } else { "assist.reconnected" });
+                    }
                     _ => {}
                 }
             }
             inb = in_rx.recv() => {
                 let Some(inb) = inb else { continue };
-                live.on_inbound(inb).await;
+                if let Err((reason, channel)) = live.on_inbound(inb).await {
+                    live.sec_fail = Some((reason, Some(channel)));
+                    outcome = LiveOutcome::SecFailed(sec_reason_str(reason));
+                    break;
+                }
+            }
+            f = fail_rx.recv() => {
+                // A channel closed while the PC was alive, or the remote opened a stray channel
+                // (contract §1.3 "Channel lifetime rule"). Ignore fails from an older generation.
+                if let Some((g, reason)) = f {
+                    if g == gen {
+                        tracing::warn!(reason = ?reason, "secure channel lifetime violation");
+                        live.sec_fail = Some((reason, None));
+                        outcome = LiveOutcome::SecFailed(sec_reason_str(reason));
+                        break;
+                    }
+                }
+            }
+        }
+        // A sustained disconnect (> 8 s) is recovered once with a full gen+1 rebuild (contract
+        // correctness F13 / §3.7). A same-PC `restart_ice` re-offer is not used: the console
+        // accepts a restart offer only when `gen === lastGen + 1`, so recovery is a rebuild.
+        if want_rebuild.is_none() && !ice_restarted {
+            if let Some(since) = disconnected_since {
+                if since.elapsed() >= Duration::from_secs(8) {
+                    ice_restarted = true;
+                    want_rebuild = Some("disconnected");
+                }
+            }
+        }
+        if let Some(trigger) = want_rebuild.take() {
+            tracing::info!(trigger, "rebuilding the peer connection (gen+1)");
+            gen = gen.wrapping_add(1);
+            // Tear the current generation down before building the new one.
+            stop.notify_waiters();
+            if let Some(h) = video_handle.take() {
+                h.abort();
+            }
+            remb_handle.abort();
+            let _ = peer.pc.close().await;
+            while in_rx.try_recv().is_ok() {} // drop stale (old-gen) frames
+            match rebuild_generation(
+                live.ws,
+                ws_rx,
+                session_id,
+                gen,
+                &ice_servers,
+                &monitor_ids,
+                &in_tx,
+                &fail_tx,
+            )
+            .await
+            {
+                Ok(g) => {
+                    peer = g.peer;
+                    live.chans = g.chans;
+                    live.sec = g.sec;
+                    sec_dc = g.sec_dc;
+                    sas = g.sas;
+                    stop = Arc::new(tokio::sync::Notify::new());
+                    remb_kbps.store(0, Ordering::Relaxed);
+                    loss_permille.store(0, Ordering::Relaxed);
+                    last_meter = MeterSnapshot::take(&meter);
+                    video_handle = spawn_video(
+                        &peer,
+                        viewed,
+                        &monitors,
+                        synthetic,
+                        stop.clone(),
+                        capture_path.clone(),
+                        meter.clone(),
+                    );
+                    remb_handle = spawn_remb_reader(
+                        &peer,
+                        remb_kbps.clone(),
+                        loss_permille.clone(),
+                        stop.clone(),
+                    );
+                    let (pc_tx, pc_rx) = mpsc::unbounded_channel();
+                    wire_pc_state(&peer, pc_tx);
+                    pc_state_rx = pc_rx;
+                    disconnected_since = None;
+                    live.seal("ia.control", &monitors_event.to_string()).await;
+                    live.send_level_event().await;
+                    if let Some(ui) = &live.ui {
+                        ui.send(UiCommand::Sas(sas.clone()));
+                    }
+                    tracing::info!(gen, "rebuild complete");
+                }
+                Err(RebuildErr::Ended) => {
+                    outcome = LiveOutcome::EndedRemotely;
+                    break;
+                }
+                Err(RebuildErr::SecFail(reason)) => {
+                    live.sec_fail = Some((reason, None));
+                    outcome = LiveOutcome::SecFailed(sec_reason_str(reason));
+                    break;
+                }
             }
         }
     }
 
-    // Stop (§3.5 / hard rule 2): `stop.sharing` (or `consent.revoked`) on ia.ctrl first (while
-    // the channel is still open), then the teardown in contract order (input stops, capture /
-    // encode stop, a running playbook is killed, the peer and its channels close, keys are
-    // dropped), then WS `session.end` / `desk.consent revoked` last.
+    // Flush the §3.8 aggregates before the end (attestation outbox rule, two-reporter audit).
+    live.flush_input_report().await;
+
+    // Stop / teardown (§3.5 / hard rule 2): the channel "last word" first (while the channel is
+    // open), then the §1.3 step-9 / hard-rule-2 teardown in order, then the WS last word.
     tracing::info!(order = ?stop_order(), "stop message order");
-    let last_word = match outcome {
-        LiveOutcome::Stopped => Some("stop.sharing"),
-        LiveOutcome::Revoked => Some("consent.revoked"),
-        _ => None,
-    };
-    if let Some(t) = last_word {
-        live.seal("ia.ctrl", &json!({ "t": t, "ts": now_ms() }).to_string())
+    match &outcome {
+        LiveOutcome::Stopped => {
+            live.seal(
+                "ia.ctrl",
+                &json!({ "t": "stop.sharing", "ts": now_ms() }).to_string(),
+            )
             .await;
-        tokio::time::sleep(Duration::from_millis(200)).await; // let SCTP flush it
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        LiveOutcome::Revoked => {
+            live.seal(
+                "ia.ctrl",
+                &json!({ "t": "consent.revoked", "ts": now_ms() }).to_string(),
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        LiveOutcome::SecFailed(_) => {
+            // §1.3 step 9: sec.fail on ia.sec (plaintext) and desk.event sec.failed, before the
+            // teardown and the WS session.end { note }.
+            if let Some((reason, channel)) = live.sec_fail.take() {
+                let (fail, event, _end) = sec_fail_messages(session_id, reason, channel.as_deref());
+                let _ = sec_dc.send_text(fail.to_string()).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let _ = live.ws.send(event).await;
+            }
+        }
+        _ => {}
     }
     tracing::info!(order = ?teardown_order(), "teardown order");
     live.control.consent.lower_level(AgentConsentLevel::View); // stop honouring input
     stop.notify_waiters();
+    remb_handle.abort();
     if let Some(h) = video_handle {
         h.abort();
     }
@@ -1755,7 +2107,7 @@ async fn serve(
     }
     live.sec.clear(); // SecChannel keys are dropped with the peer (zeroise step)
     let _ = peer.pc.close().await;
-    match outcome {
+    match &outcome {
         LiveOutcome::Stopped => {
             let _ = live
                 .ws
@@ -1769,6 +2121,13 @@ async fn serve(
                 .send(json!({ "t": "desk.consent", "state": "revoked" }))
                 .await;
             tracing::info!("desk.consent revoked sent");
+        }
+        LiveOutcome::SecFailed(reason) => {
+            let _ = live
+                .ws
+                .send(json!({ "t": "session.end", "sessionId": session_id, "note": format!("sec:{reason}") }))
+                .await;
+            tracing::info!(%reason, "session.end (sec) sent");
         }
         _ => {}
     }
@@ -1794,34 +2153,6 @@ async fn seal_send(chans: &Chans, sc: &mut SecChannel, label: &str, text: &str) 
         if let Some(dc) = chans.get(label) {
             let _ = dc.send(&Bytes::from(frame)).await;
         }
-    }
-}
-
-fn build_stats(monitors: &[MonitorInfo], viewed: u32, capture_path: CapturePath) -> AgentStats {
-    let stat_monitors = monitors
-        .iter()
-        .map(|m| StatMonitor {
-            id: m.id,
-            width: m.width,
-            height: m.height,
-            fps: if m.id == viewed { 15 } else { 0 },
-        })
-        .collect();
-    AgentStats {
-        encoder: VideoEncoder::Vp8,
-        hw_encoder: false,
-        capture_path,
-        rung: Some(ia_core::abr::Rung::High),
-        floor_mode: false,
-        target_kbps: 1200,
-        sent_kbps: 1100,
-        recorder_kbps: None,
-        capture_fps: 15.0,
-        sent_fps: 15.0,
-        encode_ms: Some(6.0),
-        monitors: stat_monitors,
-        cpu_percent: Some(4.0),
-        ts: now_ms(),
     }
 }
 
@@ -1853,6 +2184,7 @@ fn emit_pb_error(pb_tx: &mpsc::UnboundedSender<PbMsg>, run: &RunRequest, err: Pl
 }
 
 /// Continuous VP8 pump for one monitor (synthetic or GDI), keyframe every second.
+#[allow(clippy::too_many_arguments)]
 async fn pump_video(
     track: Arc<webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
     w: u32,
@@ -1861,6 +2193,7 @@ async fn pump_video(
     synthetic: bool,
     stop: Arc<tokio::sync::Notify>,
     path: Arc<std::sync::atomic::AtomicU8>,
+    meter: Arc<VideoMeter>,
 ) {
     use webrtc::media::Sample;
     let fps = 15u32;
@@ -1888,9 +2221,20 @@ async fn pump_video(
             continue;
         };
         let force_kf = i.is_multiple_of(fps as usize);
-        match encoder.encode(&frame, force_kf) {
+        let t0 = Instant::now();
+        let encoded = encoder.encode(&frame, force_kf);
+        let encode_ns = t0.elapsed().as_nanos() as u64;
+        match encoded {
             Ok(pkts) => {
+                // Measured throughput for agent.stats (contract §4.4 / F13): bytes and frames
+                // actually sent, and the capture-to-encoded latency.
+                meter.encode_ns.fetch_add(encode_ns, Ordering::Relaxed);
+                meter.encode_frames.fetch_add(1, Ordering::Relaxed);
+                meter.sent_frames.fetch_add(1, Ordering::Relaxed);
                 for pkt in pkts {
+                    meter
+                        .sent_bytes
+                        .fetch_add(pkt.data.len() as u64, Ordering::Relaxed);
                     let _ = track
                         .write_sample(&Sample {
                             data: Bytes::from(pkt.data),
@@ -1947,30 +2291,6 @@ fn path_from_u8(v: u8) -> CapturePath {
         x if x == CapturePath::Dda as u8 => CapturePath::Dda,
         x if x == CapturePath::Projection as u8 => CapturePath::Projection,
         _ => CapturePath::Gdi,
-    }
-}
-
-/// §10 D2 user-instance self-delete: generate the cleanup stub. Best effort; failures are
-/// logged (the exe simply remains).
-fn perform_self_delete() {
-    #[cfg(windows)]
-    {
-        let Ok(exe) = std::env::current_exe() else {
-            return;
-        };
-        let exe = exe.to_string_lossy().to_string();
-        let pid = std::process::id();
-        let stub = std::env::temp_dir().join(format!("ia-cleanup-{pid}.cmd"));
-        match ia_platform::selfdelete::generate_cleanup_stub(&stub.to_string_lossy(), pid, &exe) {
-            Ok(cs) => {
-                if std::fs::write(&stub, cs.script_text).is_ok() {
-                    tracing::info!("self-delete: cleanup stub at {}", stub.display());
-                }
-            }
-            Err(bad) => {
-                tracing::warn!("self-delete: path failed the allow-list; delete by hand: {bad}")
-            }
-        }
     }
 }
 
@@ -2083,12 +2403,28 @@ mod tests {
                 mid: None,
             },
         ];
-        let wire = build_stats(&monitors, 1, CapturePath::Gdi).to_wire();
+        // Measured interval + an ABR decision drive the stats (no invented constants, F13).
+        let interval = MeterInterval {
+            sent_kbps: 1100,
+            sent_fps: 15.0,
+            encode_ms: Some(6.0),
+        };
+        let decision = ia_core::abr::AbrDecision {
+            target_kbps: 1500,
+            rung: ia_core::abr::Rung::High,
+            floor_mode: false,
+            force_keyframe: false,
+        };
+        let wire = build_stats(&monitors, 1, CapturePath::Gdi, &interval, &decision).to_wire();
         assert_eq!(wire["t"], json!("agent.stats"));
         assert_eq!(wire["encoder"], json!("vp8"));
         assert_eq!(wire["capturePath"], json!("gdi"));
-        assert!(wire["sentKbps"].as_u64().unwrap() > 0);
+        assert_eq!(wire["sentKbps"], json!(1100));
+        assert_eq!(wire["rung"], json!("high"));
         assert!(wire["sentFps"].as_f64().unwrap() > 0.0);
+        // cpuPercent/recorderKbps are not measured here: null, not invented.
+        assert_eq!(wire["cpuPercent"], Value::Null);
+        assert_eq!(wire["recorderKbps"], Value::Null);
         // The viewed monitor streams; the other is paused (fps 0).
         let mons = wire["monitors"].as_array().unwrap();
         assert_eq!(mons[0]["fps"].as_u64().unwrap(), 15);
@@ -2106,6 +2442,47 @@ mod tests {
     }
 
     #[test]
+    fn injected_bad_frame_opens_as_decrypt_and_yields_session_end_note_sec_decrypt() {
+        // Loopback (§1.3 step 9): a tampered ia.control frame fails `SecChannel::open` with
+        // `decrypt`, which the serve loop turns into `session.end { note: 'sec:decrypt' }`.
+        let mut desk_set = SecChannelSet::new();
+        let mut assist_set = SecChannelSet::new();
+        let k_d2a = [3u8; 32];
+        let k_a2d = [4u8; 32];
+        let mut desk = desk_set
+            .open(Operator::Desk, "sess-1", "ia.control", 0, k_d2a, k_a2d)
+            .unwrap();
+        let mut assist = assist_set
+            .open(Operator::Assist, "sess-1", "ia.control", 0, k_d2a, k_a2d)
+            .unwrap();
+        let mut frame = desk.seal_text(r#"{"t":"ctl.req"}"#).unwrap();
+        *frame.last_mut().unwrap() ^= 0xFF; // tamper the tag
+        let reason = assist.open(&frame).unwrap_err();
+        assert_eq!(reason, SecFailReason::Decrypt);
+        let (_fail, _ev, end) = sec_fail_messages("sess-1", reason, Some("ia.control"));
+        assert_eq!(end["note"], json!("sec:decrypt"));
+    }
+
+    #[test]
+    fn sec_fail_messages_carry_the_contract_note_and_reason() {
+        use ia_core::types::SecFailReason;
+        // A bad frame that fails to decrypt (contract §1.3 step 9): the loopback assertion.
+        let (fail, ev, end) =
+            sec_fail_messages("sess-1", SecFailReason::Decrypt, Some("ia.control"));
+        assert_eq!(fail["t"], json!("sec.fail"));
+        assert_eq!(fail["reason"], json!("decrypt"));
+        assert_eq!(ev["action"], json!("sec.failed"));
+        assert_eq!(ev["data"]["reason"], json!("decrypt"));
+        assert_eq!(ev["data"]["channel"], json!("ia.control"));
+        assert_eq!(end["t"], json!("session.end"));
+        assert_eq!(end["note"], json!("sec:decrypt"));
+        // A channel-close failure with no specific inbound channel.
+        let (_f, ev2, end2) = sec_fail_messages("sess-1", SecFailReason::Channel, None);
+        assert_eq!(end2["note"], json!("sec:channel"));
+        assert!(ev2["data"].get("channel").is_none());
+    }
+
+    #[test]
     fn ctl_codes_for_playbook_refusals() {
         assert_eq!(ctl_code(PlaybookError::HashMismatch), "hash_mismatch");
         assert_eq!(
@@ -2116,6 +2493,7 @@ mod tests {
         assert_eq!(ctl_code(PlaybookError::NotAllowed), "not_allowed");
         let r = refused_res(None, "refused");
         assert_eq!(r["ok"], json!(false));
-        assert_eq!(r["error"], json!("refused"));
+        assert_eq!(r["error"]["code"], json!("refused"));
+        assert!(r["ts"].as_u64().is_some());
     }
 }

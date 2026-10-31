@@ -310,7 +310,7 @@ mod tests {
                 &mut clip,
             )
             .unwrap();
-        assert_eq!(res["error"], serde_json::json!("not_allowed"));
+        assert_eq!(res["error"]["code"], serde_json::json!("not_allowed"));
         assert!(sink.pointers.is_empty());
         // The refusal is counted in the aggregate.
         assert_eq!(s.input.to_chain()["refused"], serde_json::json!(1));
@@ -388,7 +388,7 @@ mod tests {
                 &mut clip,
             )
             .unwrap();
-        assert_eq!(res["error"], serde_json::json!("clipboard_off"));
+        assert_eq!(res["error"]["code"], serde_json::json!("clipboard_off"));
         assert!(clip.set.is_empty());
         // turn it on => applied
         s.consent.toggle_clipboard(true);

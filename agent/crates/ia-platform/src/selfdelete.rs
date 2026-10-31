@@ -2,7 +2,20 @@
 //! calls, so the "no injectable command line" test runs on any target.
 
 use regex::Regex;
+use std::path::Path;
 use std::sync::OnceLock;
+
+/// Whether `child` is `ancestor` or lies under it (contract §10 D2: the cleanup stub is only
+/// written when `%TEMP%` resolves under `%USERPROFILE%`). Pure path-prefix logic; the caller
+/// canonicalises both paths first.
+pub fn is_under(child: &Path, ancestor: &Path) -> bool {
+    child == ancestor || child.starts_with(ancestor)
+}
+
+/// The fixed cleanup-stub file name for a 32-hex token (`ia-cleanup-<32 hex>.cmd`, §10 D2).
+pub fn cleanup_stub_name(hex32: &str) -> String {
+    format!("ia-cleanup-{hex32}.cmd")
+}
 
 /// Allow-list for the exe path placed on the stub's command line (§10 D2):
 /// a drive-letter path with none of the shell metacharacters `& | < > ^ % ! "`.
@@ -120,5 +133,26 @@ mod tests {
         assert!(generate_cleanup_stub("s", 1, r"C:\a%b\x.exe").is_err());
         // A relative path (no drive) is refused too.
         assert!(generate_cleanup_stub("s", 1, r"..\x.exe").is_err());
+    }
+
+    #[test]
+    fn temp_must_be_under_user_profile() {
+        let profile = Path::new(r"C:\Users\x");
+        assert!(is_under(
+            Path::new(r"C:\Users\x\AppData\Local\Temp"),
+            profile
+        ));
+        assert!(is_under(profile, profile));
+        // A %TEMP% outside the profile (e.g. a redirected C:\Temp) is refused.
+        assert!(!is_under(Path::new(r"C:\Temp"), profile));
+        assert!(!is_under(Path::new(r"D:\Users\x\Temp"), profile));
+    }
+
+    #[test]
+    fn cleanup_stub_name_is_hex_scoped() {
+        assert_eq!(
+            cleanup_stub_name(&"ab".repeat(16)),
+            format!("ia-cleanup-{}.cmd", "ab".repeat(16))
+        );
     }
 }

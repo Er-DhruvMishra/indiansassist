@@ -186,7 +186,11 @@ pub fn run_collect(spec: RunSpec) -> (Vec<RunEvent>, RunEnd) {
 }
 
 fn is_run_id(s: &str) -> bool {
-    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())
+    // `^[0-9a-f]{32}$` (contract §8.4 / security C6): lower-case hex only, so the `runId` is
+    // safe as a `<runId>.cmd` path component and pairs with the console's opId.
+    s.len() == 32
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 enum ReaderMsg {

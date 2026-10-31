@@ -6,8 +6,11 @@
 //! to put on the `ia.sec` channel and consumes the peer's, yielding the [`SessionKeys`] and
 //! the SAS once `established`. No webrtc or OS calls, so it is tested without a peer.
 
+use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
+
 use ia_core::sec::{
-    commit_hash, transcript_hash, verify_hello, EphemeralKey, SecCommit, SecConfirm, SecFail,
+    commit_hash, transcript_hash, verify_commit, EphemeralKey, SecCommit, SecConfirm, SecFail,
     SecHello, SessionKeys, Side, SideInfo, SEC_SUITE,
 };
 use ia_core::types::SecFailReason;
@@ -124,17 +127,22 @@ impl SecHandshake {
     /// Process one `ia.sec` message. Returns the JSON frames to send next (possibly empty),
     /// or the [`SecFailReason`] to put on `sec.fail` and tear down (step 9).
     pub fn on_message(&mut self, json: &str) -> Result<Vec<String>, SecFailReason> {
+        // `ia.sec` carries plaintext JSON; any shape or protocol-order violation is `commit`
+        // (contract §1.3 step 2a: "every protocol-order or shape violation ... uses commit").
         let value: serde_json::Value =
-            serde_json::from_str(json).map_err(|_| SecFailReason::Decrypt)?;
+            serde_json::from_str(json).map_err(|_| SecFailReason::Commit)?;
         match value.get("t").and_then(|t| t.as_str()) {
             Some("sec.commit") => self.on_commit(json),
             Some("sec.hello") => self.on_hello(json),
             Some("sec.confirm") => self.on_confirm(json),
             Some("sec.fail") => {
-                let f: SecFail = serde_json::from_str(json).map_err(|_| SecFailReason::Decrypt)?;
+                // A received `sec.fail` ends the handshake with its reason; a `sec.fail` whose
+                // reason is not in `SEC_FAIL_REASONS` (and so will not deserialise) is treated
+                // as `commit` (contract §1.3 step 2b).
+                let f: SecFail = serde_json::from_str(json).map_err(|_| SecFailReason::Commit)?;
                 Err(f.reason)
             }
-            _ => Err(SecFailReason::Decrypt),
+            _ => Err(SecFailReason::Commit),
         }
     }
 
@@ -160,20 +168,32 @@ impl SecHandshake {
     }
 
     fn on_hello(&mut self, json: &str) -> Result<Vec<String>, SecFailReason> {
-        let hello: SecHello = serde_json::from_str(json).map_err(|_| SecFailReason::Suite)?;
-        // `gen` is not carried on hello; only sessionId/side are checked here (step 2b).
-        if hello.session_id != self.session_id || hello.side != self.side.peer() {
+        // A malformed hello is a shape violation (`commit`); an unknown `suite`/`v` is `suite`,
+        // checked first on receipt; a wrong sessionId/side, a second hello, or a hello before
+        // its sender's commit is `commit` (contract §1.3 step 2b).
+        let hello: SecHello = serde_json::from_str(json).map_err(|_| SecFailReason::Commit)?;
+        if hello.suite != SEC_SUITE || hello.v != 1 {
             return Err(SecFailReason::Suite);
         }
+        // `gen` is not carried on hello; only sessionId/side are checked here (step 2b).
+        if hello.session_id != self.session_id || hello.side != self.side.peer() {
+            return Err(SecFailReason::Commit);
+        }
         if self.peer_hello.is_some() {
-            return Err(SecFailReason::Suite); // a second hello from the same side
+            return Err(SecFailReason::Commit); // a second hello from the same side
         }
         // Hello received before its sender's commit is held (step 2b).
         let committed = self.peer_commit_h.clone().ok_or(SecFailReason::Commit)?;
         // Step 3a: the revealed {side,suite,epk,fpr} must hash to the commit (constant time).
-        verify_hello(&hello, &committed)?;
-        // Step 3b: the fingerprint must equal the one observed on the DTLS transport.
-        if hello.fpr != self.observed_remote_fpr {
+        verify_commit(hello.side, &hello.suite, &hello.epk, &hello.fpr, &committed)?;
+        // Step 3b: the fingerprint must equal the one observed on the DTLS transport
+        // (constant time, contract §1.3 step 3b).
+        if !bool::from(
+            hello
+                .fpr
+                .as_bytes()
+                .ct_eq(self.observed_remote_fpr.as_bytes()),
+        ) {
             return Err(SecFailReason::Fingerprint);
         }
         let peer = SideInfo {
@@ -181,11 +201,12 @@ impl SecHandshake {
             epk: hello.epk,
             fpr: hello.fpr,
         };
-        // Step 4: X25519 agreement (all-zero => key).
-        let ss = self
-            .key
-            .diffie_hellman(&peer.epk)
-            .map_err(|_| SecFailReason::Key)?;
+        // Step 4: X25519 agreement (all-zero => key). The shared secret is zeroised on drop.
+        let ss = Zeroizing::new(
+            self.key
+                .diffie_hellman(&peer.epk)
+                .map_err(|_| SecFailReason::Key)?,
+        );
         let (desk, assist) = match self.side {
             Side::Desk => (&self.own, &peer),
             Side::Assist => (&peer, &self.own),
@@ -294,5 +315,58 @@ mod tests {
         })
         .to_string();
         assert_eq!(desk.on_message(&stray_hello), Err(SecFailReason::Commit));
+    }
+
+    /// Drive the desk until it holds the assist's commit (so it would process a hello next).
+    fn desk_holding_assist_commit() -> SecHandshake {
+        let (mut desk, _dc) =
+            SecHandshake::start(Side::Desk, "s", 0, &"11".repeat(32), &"22".repeat(32));
+        let (_assist, ac) =
+            SecHandshake::start(Side::Assist, "s", 0, &"22".repeat(32), &"11".repeat(32));
+        // Desk receives the assist commit and emits its hello; its peer commit is now held.
+        desk.on_message(&ac).unwrap();
+        desk
+    }
+
+    #[test]
+    fn unknown_suite_is_suite_checked_first() {
+        let mut desk = desk_holding_assist_commit();
+        // Wrong suite AND wrong sessionId: suite is checked first (contract §1.3 step 2b).
+        let hello = serde_json::json!({
+            "t":"sec.hello","v":1,"sessionId":"WRONG","side":"assist",
+            "suite":"aes-gcm","epk":"AAAA","fpr":"22".repeat(32),"ts":0
+        })
+        .to_string();
+        assert_eq!(desk.on_message(&hello), Err(SecFailReason::Suite));
+    }
+
+    #[test]
+    fn wrong_session_id_on_hello_is_commit_not_suite() {
+        let mut desk = desk_holding_assist_commit();
+        let hello = serde_json::json!({
+            "t":"sec.hello","v":1,"sessionId":"WRONG","side":"assist",
+            "suite":SEC_SUITE,"epk":"AAAA","fpr":"22".repeat(32),"ts":0
+        })
+        .to_string();
+        assert_eq!(desk.on_message(&hello), Err(SecFailReason::Commit));
+    }
+
+    #[test]
+    fn unknown_sec_fail_reason_is_commit() {
+        let mut desk = desk_holding_assist_commit();
+        // A `sec.fail` with a reason outside SEC_FAIL_REASONS is logged/handled as `commit`.
+        let fail = r#"{"t":"sec.fail","reason":"banana","ts":0}"#;
+        assert_eq!(desk.on_message(fail), Err(SecFailReason::Commit));
+        // A well-formed `sec.fail` ends the handshake with its own reason.
+        let fail2 = r#"{"t":"sec.fail","reason":"timeout","ts":0}"#;
+        assert_eq!(desk.on_message(fail2), Err(SecFailReason::Timeout));
+    }
+
+    #[test]
+    fn malformed_frame_on_ia_sec_is_commit_not_decrypt() {
+        let mut desk = desk_holding_assist_commit();
+        assert_eq!(desk.on_message("not json"), Err(SecFailReason::Commit));
+        let unknown_t = r#"{"t":"sec.bogus"}"#;
+        assert_eq!(desk.on_message(unknown_t), Err(SecFailReason::Commit));
     }
 }

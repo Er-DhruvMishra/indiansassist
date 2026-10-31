@@ -18,6 +18,7 @@ use webrtc::api::setting_engine::{SctpMaxMessageSize, SettingEngine};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::RTCDataChannel;
+use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -65,14 +66,17 @@ fn build_api(has_recorder: bool) -> Result<webrtc::api::API, webrtc::Error> {
 
 impl AgentPeer {
     /// Build the peer. The Desk adds a VP8 track per `monitor_ids` and creates the seven
-    /// channels; the Assist collects channels the Desk opens.
+    /// channels; the Assist collects channels the Desk opens. `config` carries the ICE servers
+    /// parsed from `consent.ok` (contract §3.4 / F5); on localhost it is empty and only host
+    /// candidates are used.
     pub async fn new(
         role: PeerRole,
         monitor_ids: &[u32],
         has_recorder: bool,
+        config: RTCConfiguration,
     ) -> Result<Self, webrtc::Error> {
         let api = build_api(has_recorder)?;
-        let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+        let pc = Arc::new(api.new_peer_connection(config).await?);
         let channels: Arc<Mutex<HashMap<String, Arc<RTCDataChannel>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
@@ -182,4 +186,76 @@ impl AgentPeer {
 /// The track codec a Desk monitor stream uses (VP8 software default, §4.2).
 pub fn default_video_codec() -> codecs::VideoCodec {
     VP8
+}
+
+/// Parse `consent.ok.iceServers` (`[{ urls, username, credential }]`, contract §3.4) into the
+/// webrtc-rs [`RTCIceServer`] list. `urls` may be a string or an array of strings. Entries with
+/// no usable `urls` are dropped; the result (possibly empty, e.g. on localhost) becomes the
+/// peer's ICE configuration (F5).
+pub fn ice_servers_from_json(ice: Option<&serde_json::Value>) -> Vec<RTCIceServer> {
+    let Some(arr) = ice.and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|s| {
+            let urls = match s.get("urls") {
+                Some(serde_json::Value::String(u)) => vec![u.clone()],
+                Some(serde_json::Value::Array(a)) => a
+                    .iter()
+                    .filter_map(|u| u.as_str().map(str::to_string))
+                    .collect(),
+                _ => return None,
+            };
+            if urls.is_empty() {
+                return None;
+            }
+            Some(RTCIceServer {
+                urls,
+                username: s
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                credential: s
+                    .get("credential")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            })
+        })
+        .collect()
+}
+
+/// An [`RTCConfiguration`] carrying `ice_servers` (everything else default).
+pub fn configuration(ice_servers: Vec<RTCIceServer>) -> RTCConfiguration {
+    RTCConfiguration {
+        ice_servers,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ice_servers_parse_urls_string_or_array() {
+        let v = json!([
+            { "urls": "stun:stun.l.google.com:19302" },
+            { "urls": ["turns:turn.example.com:443?transport=tcp"], "username": "u", "credential": "c" },
+            { "nonsense": true }
+        ]);
+        let servers = ice_servers_from_json(Some(&v));
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].urls, vec!["stun:stun.l.google.com:19302"]);
+        assert_eq!(servers[1].username, "u");
+        assert_eq!(servers[1].credential, "c");
+    }
+
+    #[test]
+    fn ice_servers_empty_when_absent() {
+        assert!(ice_servers_from_json(None).is_empty());
+        assert!(ice_servers_from_json(Some(&json!([]))).is_empty());
+    }
 }

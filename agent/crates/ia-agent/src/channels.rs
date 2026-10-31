@@ -5,7 +5,7 @@
 //! loopback test and the live session share one path.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use tokio::sync::mpsc;
@@ -40,6 +40,12 @@ pub async fn run_handshake(
         Box::pin(async {})
     }));
 
+    // The handshake has a single 10 s budget measured from `ia.sec` open — not a fresh
+    // timeout per message (contract §1.3 step 8: "10 s from ia.sec open without established").
+    let deadline =
+        Instant::now() + Duration::from_millis(ia_core::types::limits::SEC_HANDSHAKE_TIMEOUT_MS);
+    let remaining = |d: Instant| d.saturating_duration_since(Instant::now());
+
     // Wait for the channel to open (on_open fires immediately if it already is).
     let (open_tx, open_rx) = tokio::sync::oneshot::channel::<()>();
     let open_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(open_tx)));
@@ -49,8 +55,10 @@ pub async fn run_handshake(
         }
         Box::pin(async {})
     }));
-    let open_deadline = Duration::from_millis(ia_core::types::limits::SEC_HANDSHAKE_TIMEOUT_MS);
-    if tokio::time::timeout(open_deadline, open_rx).await.is_err() {
+    if tokio::time::timeout(remaining(deadline), open_rx)
+        .await
+        .is_err()
+    {
         return Err(SecFailReason::Timeout);
     }
 
@@ -59,9 +67,8 @@ pub async fn run_handshake(
         .await
         .map_err(|_| SecFailReason::Decrypt)?;
 
-    let deadline = Duration::from_millis(ia_core::types::limits::SEC_HANDSHAKE_TIMEOUT_MS);
     loop {
-        let frame = match tokio::time::timeout(deadline, rx.recv()).await {
+        let frame = match tokio::time::timeout(remaining(deadline), rx.recv()).await {
             Ok(Some(f)) => f,
             _ => return Err(SecFailReason::Timeout),
         };
