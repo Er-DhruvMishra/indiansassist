@@ -484,17 +484,18 @@ async function runFlow(driver) {
       return `${verify.checked} entries, ${verify.segments} segment(s): ${actions.join(', ')}`;
     });
 
-    // The Desk's Stop must end the session as desk_stopped. Contract hard rule 2 (A section 7.4) makes the Desk
-    // close every data channel and the peer connection BEFORE it sends WS session.end; the console's SecureHub
-    // (apps/web/src/lib/secureHub.ts) treats any encrypted-channel close as sec.fail 'channel' and races its own
-    // `session.end { note: 'sec:channel' }` (endReason error). That console defect is reported, not hidden: it
-    // shows here as KNOWN when, and only when, the audit proves that exact path.
+    // The Desk's Stop ends the session as desk_stopped. Hard rule 2 (A section 7.4) makes the Desk close every
+    // data channel and the peer connection as it sends stop.sharing / consent.revoked and its WS session.end; the
+    // console's SecureHub (apps/web/src/lib/secureHub.ts) now treats that teardown as an orderly end rather than
+    // sec.fail 'channel' (fixed in secureHub.ts and the agent controllers, commit 70ad1c0), so the Desk's
+    // session.end wins and the end reason is desk_stopped. A console-written sec.failed { reason: 'channel' } for
+    // an orderly Stop would be a regression of that fix and fails this assertion.
     const items = st.audit ?? [];
-    const secFail = items.find((x) => x.action === 'sec.failed' && x.actor?.type === 'user' && x.data?.reason === 'channel');
-    const stopSharingFirst = watch.grep(/IA_E2E.*step=ended/).length > 0;
-    if (st.endReason === 'desk_stopped') record('Stop ends the session as desk_stopped', true, 'endReason desk_stopped');
-    else if (st.endReason === 'error' && secFail && stopSharingFirst)
-      record('Stop ends the session as desk_stopped', true, `KNOWN console defect: endReason error after the console's sec.failed { reason: 'channel' } at seq ${secFail.seq} (the Desk's hard rule 2 channel close raced its session.end)`, true);
+    const spuriousSecFail = items.find((x) => x.action === 'sec.failed' && x.actor?.type === 'user' && x.data?.reason === 'channel');
+    if (st.endReason === 'desk_stopped' && !spuriousSecFail)
+      record('Stop ends the session as desk_stopped', true, 'endReason desk_stopped (console treated the Desk teardown as an orderly end)');
+    else if (spuriousSecFail)
+      record('Stop ends the session as desk_stopped', false, `regression: console wrote sec.failed { reason: 'channel' } at seq ${spuriousSecFail.seq} for an orderly Stop; endReason ${st.endReason}`);
     else record('Stop ends the session as desk_stopped', false, `endReason ${st.endReason}`);
   } finally {
     if (!instrumentDone) {

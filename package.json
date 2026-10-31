@@ -27,6 +27,8 @@
     "agent:build:dev": "cargo build --manifest-path agent/Cargo.toml --release -p ia-agent --features dev",
     "agent:fixtures": "node scripts/gen-agent-fixtures.mjs --check",
     "validate:infra": "node scripts/validate-infra.mjs",
+    "license:check": "node scripts/license-check.mjs",
+    "agent:manifest": "node scripts/agent-manifest.mjs",
     "test:scripts": "vitest run --config scripts/vitest.config.mjs",
     "e2e": "pnpm --filter @indiansassist/web e2e",
     "e2e:p3": "pnpm agent:build:dev && node apps/web/e2e/run-p3.mjs",

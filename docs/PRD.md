@@ -109,21 +109,21 @@ A single downloadable executable. It runs without admin rights and delivers the 
 - Session recording.
 - Pre approved scripts that do not need elevation.
 
-**What unlocks with admin (elevation)**
-- Capture across the secure desktop (UAC prompts, lock screen) on Windows.
-- Service grade input so control survives UAC dialogs.
-- Install as a persistent agent (this is the doorway to Package 4).
-- Privileged scripts and system diagnostics.
+**What unlocks with admin (elevation)** *(amended 31 Oct 2026, Phase C: see contract section 7.4 and section 16 W9)*
+- Privileged scripts and system diagnostics, and control of windows running as administrator (UIPI is lifted for the elevated instance). **Phase C.**
+- Capture across the secure desktop (UAC prompts, lock screen) on Windows. **Deferred to Phase D** (a user- or admin-context process cannot read the secure desktop; it needs the Phase D service).
+- Service grade input so control survives UAC dialogs. **Deferred to Phase D.**
+- Install as a persistent agent (this is the doorway to Package 4). **Deferred to Phase D.**
 
 **Self delete on exit**
 - Portable mode leaves no installed footprint. On session end it wipes its working directory and the binary (Windows: a small relaunch-and-delete stub; macOS and Linux: unlink on quit).
 
 **Technology**
 - Language: **Rust**. Memory safe, single binary, cross platform, and the same choice RustDesk made for good reasons. We can study RustDesk's architecture (AGPL) for the hard parts but keep our own codebase and licensing clean.
-- Encryption: end to end with `libsodium` / NaCl, per session keys, relay stays blind.
-- Codecs: VP8, VP9, AV1 where hardware allows, H.264 fallback, via `rav1e` / `openh264` / platform encoders.
+- Encryption: end to end with per session keys, relay stays blind, over an X25519 / HKDF-SHA256 / XChaCha20-Poly1305 handshake. *(amended 31 Oct 2026, Phase C: the `libsodium` / NaCl C library is replaced by the same NaCl primitives from audited pure-Rust RustCrypto crates on the agent and Google Tink on Android; the console uses `@noble/*`. Section 16 W7)*
+- Codecs: hardware H.264 preferred where present, then VP9, VP8, via platform encoders and libvpx; AV1 (`rav1e`) and software H.264 (`openh264`) compiled off by default. *(amended 31 Oct 2026, Phase C, section 16 W22)*
 - Capture and input per platform, see section 5.
-- Transport: QUIC or TLS over our relay, P2P first via `coturn`.
+- Transport: **WebRTC with DTLS-SRTP, P2P first via `coturn`, TURN relay fallback (the relay forwards ciphertext only)**. *(amended 31 Oct 2026, Phase C: QUIC / TLS over our own relay is replaced by a native WebRTC peer that reuses the Package 1 / 2 media stack, signaling, TURN and the server recorder unchanged. Section 16 W6)*
 
 ### Package 4, Full install, unattended access, remote wake and power on
 
@@ -385,10 +385,10 @@ Auth, org and user model, token creation, download page with clipboard copy, sig
 MV3 extension, rrweb capture and replay, side panel chat/voice/files, tab and tab group control from Assist, field masking, browser backstage.
 
 **Phase C, Package 3**
-Rust portable agent, DXGI capture and SendInput on Windows first, E2EE, user context features, admin elevation unlock, self delete, playbook runner, recording with hash into the audit chain.
+Rust portable agent, DXGI capture and SendInput on Windows first, E2EE, user context features, admin elevation unlock, self delete, playbook runner, recording with hash into the audit chain. *(amended 31 Oct 2026: "admin elevation unlock" here means UIPI is lifted so administrator windows can be controlled and `requiresElevation` playbooks run; capture of the secure desktop / lock screen, service-grade input, persistent install, input lock and privacy screen are **Phase D**, section 16 W9.)*
 
 **Phase D, Package 4**
-Service install, unattended enrollment and device identity, Wake on LAN, LAN waker mesh, AMT path, MSI/GPO deployment, fleet groups and policy.
+Service install, unattended enrollment and device identity, Wake on LAN, LAN waker mesh, AMT path, MSI/GPO deployment, fleet groups and policy. *(31 Oct 2026: also the capabilities a portable user- or admin-context process cannot provide, now owned by the Phase D service: secure-desktop and lock-screen capture, service-grade input that survives UAC dialogs, input lock and privacy screen.)*
 
 **Phase E, cross platform + enterprise**
 macOS and Linux agents, Android host, iOS share and controller, SSO/SAML, PSA integrations, credential vault, data residency reporting, AI summaries.
@@ -407,6 +407,7 @@ These were the open questions. They are now locked and the rest of the document 
 4. **Hosting.** Multi region from the start. India is the default region; add at least one EU and one US/Middle East region for export clients. Region is chosen per org at signup and pinned; session data, recordings and audit logs never leave the org's region. The data residency report in section 12 lists the region.
 5. **Licensing of our code.** Source available. The code is published and readable, self hosting is permitted under our terms, commercial redistribution and offering it as a competing service are not. Because we are source available and not AGPL, AGPL projects (RustDesk, MinIO) are reference reading only and must not be copied into our codebase. Use `pion`, `rrweb`, `coturn`, `Keycloak`, PostgreSQL and Redis freely; for object storage prefer an S3 compatible store with a permissive licence (SeaweedFS, Garage, or a managed S3 per region) over MinIO to avoid AGPL friction. Keep a licence register in the repo.
 6. **Mobile scope for v1.** Android host ships in v1 (MediaProjection for screen, Accessibility Service for control, foreground service for persistence), alongside the Android and iOS controller apps and iOS share only. Phase E's mobile line moves up: Android host is part of Phase C deliverables.
+7. **Phase C technology substitutions and the Phase C / D capability split (settled 31 Oct 2026).** Decided while writing the binding Phase C contract (`docs/specs/phase-c-contracts.md`, section 16). (a) **Transport (W6):** the portable agent is a WebRTC / DTLS-SRTP peer over `coturn`, not the "QUIC or TLS over our relay" of section 3; it reuses the Package 1 / 2 media stack, signaling, TURN and the server recorder unchanged, so there is one media stack across P1/P2/P3 and the relay only ever forwards ciphertext. (b) **Encryption (W7):** end-to-end encryption uses the NaCl primitives (X25519, XChaCha20-Poly1305, HKDF-SHA256) from audited pure-Rust RustCrypto crates on the agent and Google Tink on Android (the console uses `@noble/*`), not the `libsodium` / NaCl C library named in sections 3 and 7; the security property is met by primitive, not by library. (c) **One-time deep link (W17):** "one time" is a property of the token (`one_time`), not of the `indiansassist://join` deep link, which stays reusable until the token is spent. (d) **Phase C / D split (W9):** admin elevation in Phase C lifts UIPI so administrator windows can be controlled and `requiresElevation` playbooks run, but capture of the secure desktop (UAC prompts, lock screen), service-grade input, persistent install, input lock and privacy screen move to **Phase D**, because a user- or admin-context process cannot read the secure desktop or survive logoff without the Phase D service. Sections 3 (Package 3) and 14 (Phase C and D) are amended accordingly; the full deviation table is contract section 16.
 
 ### Knock on changes to earlier sections
 

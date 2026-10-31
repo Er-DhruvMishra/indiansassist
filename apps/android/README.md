@@ -81,7 +81,7 @@ Playwright Chromium (`pnpm --filter @indiansassist/web e2e:install`). It:
 4. runs `AssistE2ETest` with `am instrument` and drives the Assist half against its `IA_E2E` logcat progress lines;
    the driver signals the device by creating files in `/data/local/tmp/ia-e2e` (read through the instrumentation
    shell, because the app cannot read that directory);
-5. prints PASS / FAIL / KNOWN per assertion and stops the api, Vite, the logcat reader and (if it booted it) the
+5. prints PASS / FAIL per assertion and stops the api, Vite, the logcat reader and (if it booted it) the
    emulator; logcat, instrumentation output, the audit JSON and a console screenshot stay in `data/e2e-android/run-*`.
 
 All assertions passed twice in a row on 31 Oct 2026 (`Pixel7_API35`, API 35, x86_64; about 100 to 120 s per run
@@ -102,18 +102,17 @@ with a warm Gradle, about 62 s of it on the device):
 | file Assist -> Android | 40 KiB through the console's file panel, **Save file** tapped in the prompt, `adb shell md5sum /sdcard/Download/IndiansAssist/<name>` equals the sent bytes |
 | Stop from the app | **Stop sharing** -> device `ended`, sharing notification gone, console "Session ended", REST `state: ended` |
 | audit chain | `GET /sessions/:id/audit` verified client-side with the shared hashing (`scripts/smoke/audit.mjs`), server integrity ok; `consent_granted { level: control, monitors: 1 }`, `sec.verified` for the confirmed code, `a11y.state` at start and end, desk and console `control.input` (mode `os`, `monitorId` 1), desk `file.received` |
-| end reason `desk_stopped` | **KNOWN, not an Android defect**, below |
+| end reason `desk_stopped` | a Desk **Stop** ends the session as `desk_stopped` (the console treats the teardown as an orderly end, below) |
 
-**Known console defect (apps/web; reported, not fixed here).** Contract hard rule 2 (A section 7.4) makes the Desk
-close every data channel and its peer connection *before* it sends WS `session.end`. The console's `SecureHub`
-(`apps/web/src/lib/secureHub.ts`, the channel `close` listener) treats any encrypted-channel close as `sec.fail
-{ reason: 'channel' }`; `AgentControllerCore.onSecFailed` then posts `sec.failed` and sends `session.end { note:
-'sec:channel' }`, which reaches the server first. A Desk **Stop** (and a Desk **Revoke consent**) is therefore chained
-as `sec.failed` plus `session.ended { endReason: 'error' }` by the user instead of `desk_stopped`, and the console
-says "Session ended: error". The `stop.sharing` / `consent.revoked` frame on `ia.ctrl` arrives just before the closes,
-but the console only shows a notice for it. The e2e prints KNOWN only when the audit proves exactly that path
-(`sec.failed { reason: 'channel' }` by the user after the device reached `ended`); any other end reason fails. The
-Windows agent will meet the same race.
+**Orderly Desk stop (console fix, commit 70ad1c0).** Contract hard rule 2 (A section 7.4) makes the Desk close every
+data channel and its peer connection as it sends `stop.sharing` / `consent.revoked` and its WS `session.end`. The
+console's `SecureHub` (`apps/web/src/lib/secureHub.ts`) now recognises that teardown as an **orderly end** rather than a
+`sec.fail { reason: 'channel' }` channel violation: once a stop message has been seen on a channel, or the owner reports
+an orderly end, or the peer connection is no longer alive, a later channel close is ignored (the decision is deferred one
+macrotask so a same-tick stop message is seen first). So the Desk's `session.end` wins and the session ends as
+`desk_stopped` (a Desk **Revoke consent** ends as `consent_revoked`), not `error`. The e2e asserts `desk_stopped` as the
+normal case; a console-written `sec.failed { reason: 'channel' }` for an orderly Stop now **fails** the assertion as a
+regression. The Windows agent relies on the same console behaviour.
 
 ### Bugs the live e2e found (fixed)
 

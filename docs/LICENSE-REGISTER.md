@@ -13,7 +13,9 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | @noble/ed25519, @noble/hashes | MIT | token signing, hashing | in use |
 | @noble/curves 1.9.7, @noble/ciphers 1.3.0 | MIT | Phase C §1.3 `ia.sec` handshake (X25519) and XChaCha20-Poly1305 frames in `@indiansassist/shared` `agent/sec.ts` (console side) | in use (Phase C) |
 | argon2 | MIT | password hashing | in use |
-| React, Vite, Tailwind CSS | MIT | Assist console, Desk web room | in use |
+| React, react-dom, react-router, Vite, Tailwind CSS | MIT | Assist console (incl. client-side routing), Desk web room | in use |
+| dotenv | BSD-2-Clause | loads `.env` into the API process in dev/self-host | in use (Phase A) |
+| qrcode | MIT | renders the join-link QR on the P3 join page (§2.7) and the dashboard | in use (Phase C, web) |
 | Playwright (@playwright/test) and the Chromium build it downloads | Apache-2.0 (Chromium: BSD-3-Clause) | Package 1 two-browser e2e (`apps/web/e2e`) and the Package 2 extension e2e (`apps/extension/test/e2e`, unpacked extension in a persistent Chromium context); dev only, not shipped | in use (dev) |
 | coturn | BSD-3-Clause | STUN/TURN | self-hosted service |
 | PostgreSQL | PostgreSQL Licence | database | self-hosted service |
@@ -51,10 +53,11 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | icu_normalizer 2.4 (+ icu_normalizer_data, icu_provider, icu_collections, zerovec; already pulled in by url -> idna) | Unicode-3.0 | NFC in the A F5 `sanitiseFileName` port (`ia_core::files`) | in use (Phase C) |
 | thiserror | MIT OR Apache-2.0 | error types | in use (Phase C) |
 | tracing, tracing-subscriber | MIT | structured logs (redacted per A §6) | in use (Phase C) |
-| windows (windows-rs) | MIT OR Apache-2.0 | DXGI/GDI, SendInput, registry, known folders, WinVerifyTrust | in use (Phase C, `winapi` feature) |
+| windows, windows-sys (windows-rs) | MIT OR Apache-2.0 | DXGI/GDI, SendInput, registry, known folders, WinVerifyTrust (`windows-sys` is the raw-FFI companion crate) | in use (Phase C, `winapi` feature) |
 | libloading | ISC | §14 late binding of non-KnownDLL system libraries | in use (Phase C, `winapi` feature) |
 | egui, eframe | MIT OR Apache-2.0 | consent/pill/panel UI | in use (Phase C, `gui` feature) |
 | tray-icon | MIT OR Apache-2.0 | tray icon | in use (Phase C, `gui` feature) |
+| winit | Apache-2.0 | the windowing event loop eframe builds on; used for `EventLoopBuilderExtWindows::with_any_thread` on the pill/consent windows | in use (Phase C, `gui` feature) |
 | tokio, tokio-tungstenite, futures-util | MIT (futures-util MIT OR Apache-2.0) | async runtime + `/signal` WS client | in use (Phase C, `media` feature) |
 | bytes, async-trait | MIT (async-trait MIT OR Apache-2.0) | data-channel buffers and webrtc-rs async callback traits | in use (Phase C, `media` feature) |
 | webrtc (webrtc-rs, pinned =0.17.1, with its ice/dtls/srtp/sctp/sdp/interceptor/rtp/rtcp/stun/turn/util/mdns/data/media crates and ring) | MIT OR Apache-2.0 (ring: ISC AND MIT AND OpenSSL) | native WebRTC peer (last release with the classic MediaEngine/interceptor API) | in use (Phase C, `media` feature) |
