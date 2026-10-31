@@ -70,7 +70,6 @@ export class AgentProcess {
       for (const line of buf.toString('utf8').split(/\r?\n/)) {
         if (!line) continue;
         this.lines.push(line);
-        // eslint-disable-next-line no-console
         console.log(`[agent] ${line}`);
         for (let i = this.waiters.length - 1; i >= 0; i--) {
           const m = line.match(this.waiters[i]!.re);
@@ -127,9 +126,18 @@ export class AgentProcess {
     });
   }
 
-  /** Send SIGINT (the dev console build handles Ctrl-C as Stop). */
+  /**
+   * Ask the agent to Stop. The dev console build treats a `stop` line on stdin as a graceful
+   * Stop. (On Windows `child.kill('SIGINT')` unconditionally terminates the process, so it
+   * would skip the agent's teardown and self-delete log; stdin is the portable trigger.)
+   */
   interrupt(): void {
-    this.proc.kill('SIGINT');
+    if (this.proc.exitCode !== null) return;
+    try {
+      this.proc.stdin.write('stop\n');
+    } catch {
+      /* stdin may be closed */
+    }
   }
 
   /** Hard-kill the process tree by PID (only this process, which we started). */

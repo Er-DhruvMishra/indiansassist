@@ -607,4 +607,155 @@ mod media_loopback {
         let kf = sender.await.unwrap().expect("send_frames");
         assert!(kf >= 1, "the Desk must have sent at least one keyframe");
     }
+
+    /// The serve seam over real webrtc-rs data channels: a fake Assist seals an `os.monitors`
+    /// `ctl.req` on `ia.control`, the Desk's `ControlServer` opens it, dispatches, fills the
+    /// consented monitor list and seals the `ctl.res`, and the Assist opens the reply — the
+    /// §5.1 encrypted-control path the serve loop runs, proven end to end with no OS input.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn encrypted_control_round_trip_over_real_peers() {
+        use ia_agent::live::ControlServer;
+        use ia_core::consent::LiveConsent;
+        use ia_core::secchan::{Operator, SecChannelSet};
+        use ia_core::types::{AgentConsentLevel, Modifiers, MonitorInfo};
+        use ia_platform::traits::{ClipboardBridge, InputSink, KeyAction, PointerAction};
+        use webrtc::data_channel::data_channel_message::DataChannelMessage;
+
+        #[derive(Default)]
+        struct NoSink;
+        impl InputSink for NoSink {
+            fn pointer(&mut self, _m: &MonitorInfo, _nx: f32, _ny: f32, _a: PointerAction) {}
+            fn scroll(&mut self, _m: &MonitorInfo, _nx: f32, _ny: f32, _dx: i32, _dy: i32) {}
+            fn key(&mut self, _c: &str, _a: KeyAction, _m: Modifiers) {}
+            fn text(&mut self, _t: &str) {}
+        }
+        #[derive(Default)]
+        struct NoClip;
+        impl ClipboardBridge for NoClip {
+            fn set_text(&mut self, _t: &str) {}
+            fn take_update(&mut self) -> Option<String> {
+                None
+            }
+        }
+
+        let desk = AgentPeer::new(PeerRole::Desk, &[1], false)
+            .await
+            .expect("desk");
+        let assist = AgentPeer::new(PeerRole::Assist, &[], false)
+            .await
+            .expect("assist");
+        let offer = desk.offer().await.expect("offer");
+        let answer = assist.accept_offer(offer).await.expect("answer");
+        desk.accept_answer(answer).await.expect("accept answer");
+
+        let (desk_own, desk_remote) = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(f) = desk.fingerprints().await {
+                    return f;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("desk fingerprints");
+        let (assist_own, assist_remote) = assist.fingerprints().await.expect("assist fingerprints");
+
+        let desk_sec = await_channel(&desk, "ia.sec").await;
+        let assist_sec = await_channel(&assist, "ia.sec").await;
+        let d = tokio::spawn(async move {
+            run_handshake(desk_sec, Side::Desk, "live", 0, &desk_own, &desk_remote).await
+        });
+        let a = tokio::spawn(async move {
+            run_handshake(
+                assist_sec,
+                Side::Assist,
+                "live",
+                0,
+                &assist_own,
+                &assist_remote,
+            )
+            .await
+        });
+        let (kd, _) = d.await.unwrap().expect("desk handshake");
+        let (ka, _) = a.await.unwrap().expect("assist handshake");
+
+        let desk_ctl = await_channel(&desk, "ia.control").await;
+        let assist_ctl = await_channel(&assist, "ia.control").await;
+
+        // The Desk serves ia.control: open -> ControlServer -> seal response back.
+        let (reply_tx, reply_rx) = oneshot::channel::<Vec<u8>>();
+        {
+            let desk_ctl2 = Arc::clone(&desk_ctl);
+            let mut set = SecChannelSet::new();
+            let chan = set
+                .open(Operator::Desk, "live", "ia.control", 0, kd.k_d2a, kd.k_a2d)
+                .unwrap();
+            let consent = LiveConsent::new(AgentConsentLevel::Control, false, vec![1]);
+            let mon = MonitorInfo {
+                id: 1,
+                name: "SYNTHETIC1".into(),
+                primary: true,
+                x: 0,
+                y: 0,
+                width: 1280,
+                height: 720,
+                scale: 1.0,
+                mid: None,
+            };
+            let server = Arc::new(tokio::sync::Mutex::new((
+                ControlServer::new(consent, vec![mon], 1),
+                chan,
+                NoSink,
+                NoClip,
+            )));
+            let reply_tx = Arc::new(std::sync::Mutex::new(Some(reply_tx)));
+            desk_ctl.on_message(Box::new(move |msg: DataChannelMessage| {
+                let server = Arc::clone(&server);
+                let reply_tx = Arc::clone(&reply_tx);
+                let dc = Arc::clone(&desk_ctl2);
+                Box::pin(async move {
+                    let mut guard = server.lock().await;
+                    let (ctl, chan, sink, clip) = &mut *guard;
+                    let opened = chan.open(&msg.data).expect("desk opens control frame");
+                    let text = opened.as_text().expect("text").to_string();
+                    if let Some((res, _effect)) = ctl.handle_text(&text, sink, clip) {
+                        let frame = chan.seal_text(&res.to_string()).unwrap();
+                        let _ = dc.send(&bytes::Bytes::from(frame.clone())).await;
+                        if let Some(tx) = reply_tx.lock().unwrap().take() {
+                            let _ = tx.send(frame);
+                        }
+                    }
+                })
+            }));
+        }
+
+        // The fake Assist seals os.monitors and sends it; then reads the reply.
+        let mut assist_set = SecChannelSet::new();
+        let mut assist_chan = assist_set
+            .open(
+                Operator::Assist,
+                "live",
+                "ia.control",
+                0,
+                ka.k_d2a,
+                ka.k_a2d,
+            )
+            .unwrap();
+        let req = r#"{"t":"ctl.req","id":"m1","op":"os.monitors","args":{}}"#;
+        assist_ctl
+            .send(&bytes::Bytes::from(assist_chan.seal_text(req).unwrap()))
+            .await
+            .unwrap();
+
+        let reply = tokio::time::timeout(Duration::from_secs(5), reply_rx)
+            .await
+            .expect("reply within 5s")
+            .expect("reply bytes");
+        let opened = assist_chan.open(&reply).expect("assist opens reply");
+        let res: serde_json::Value = serde_json::from_str(opened.as_text().unwrap()).unwrap();
+        assert_eq!(res["ok"], serde_json::json!(true));
+        let monitors = res["result"]["monitors"].as_array().expect("monitors");
+        assert_eq!(monitors.len(), 1);
+        assert_eq!(monitors[0]["name"], serde_json::json!("SYNTHETIC1"));
+    }
 }

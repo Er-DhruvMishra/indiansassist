@@ -18,6 +18,8 @@ pub mod channels;
 #[cfg(feature = "media")]
 pub mod peer;
 #[cfg(feature = "media")]
+pub mod serve;
+#[cfg(feature = "media")]
 pub mod session;
 #[cfg(feature = "media")]
 pub mod signal;

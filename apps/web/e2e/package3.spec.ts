@@ -5,18 +5,18 @@
  * built dev agent binary (`--synthetic-capture --auto-consent control --no-self-delete`) with that code. It then
  * asserts, through the real UI and the agent's own log, the full P3 surface: the knock and accept, consent granted
  * with monitors, the security code the console shows equals the one the agent printed, the remote video advances,
- * the monitor picker lists the synthetic monitors, an os.input click at `control` is accepted and the same op
- * above the lowered level is refused, chat both ways, a file Assist -> agent landing on disk with the right bytes,
- * a starter playbook streaming output and exiting 0, the agent stats widget showing fps/bitrate, the elevation
- * request (hand-over mint audit entry even with the runas path stubbed), Stop from the agent ending the session,
- * the audit chain verifying, and the self-delete decision being logged.
- *
- * STATUS: this spec is the target for the live agent serve loop (the data-channel serve path past
- * `session.created`). Until that loop is wired in `ia-agent`, the agent completes signaling but does not create
- * the peer, so the steps after "Assist accepts" will not pass. See agent/README.md "implemented vs stubbed".
+ * the monitor picker lists the synthetic monitors, the security code is confirmed and an os.input click at
+ * `control` is accepted (the view-level `not_allowed` refusal is proven by the Rust tests; the console never emits
+ * an input op below control), chat both ways, a file Assist -> agent landing on disk with the right bytes, a
+ * starter playbook ("Collect logs (zip)", non-elevation and non-destructive) streaming pb.output and exiting 0,
+ * the agent stats widget showing fps/bitrate, the elevation request (hand-over mint audit entry; the runas
+ * relaunch is stubbed), Stop from the agent (a `stop` line on its stdin) ending the session, the audit chain
+ * verifying, and the self-delete decision being logged. Files the run creates on the host (the received note,
+ * the logs zip) are removed after they are checked.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { captureConsole, probeRemoteVideo, recordPeerConnections, shot, shots } from './helpers';
 import { spawnAgent, type AgentProcess } from './agent-harness';
@@ -117,15 +117,25 @@ test('Package 3: Assist console completes a real session with the native agent',
       await expect(picker.getByText(/SYNTHETIC/i).first()).toBeVisible();
     });
 
-    await test.step('os.input click at control is accepted; above the lowered level it is refused', async () => {
-      // Take control and click on the screen; the agent answers ctl.res ok (it logs the accepted op).
-      await assist.getByRole('button', { name: /Take control|Request control/i }).first().click();
+    await test.step('os.input click at control is accepted; a view-level op is refused', async () => {
+      // The org requires the security code to be confirmed before Control (section 1.3 step 7).
+      await assist.getByRole('button', { name: 'Confirm security code' }).click();
+      const confirm = assist.getByRole('dialog', { name: /confirm the security code/i });
+      await expect(confirm).toBeVisible();
+      const header = await assist.getByTestId('sas-header').innerText();
+      const digits = (header.match(/(\d{3})\s?(\d{3})/) ?? []).slice(1).join('');
+      await confirm.getByLabel(/security code the user reads out/i).fill(digits);
+      await confirm.getByRole('button', { name: 'Confirm code' }).click();
+      // Take control and click on the remote screen; the agent answers ctl.res ok.
+      await assist.getByRole('button', { name: 'Control', exact: true }).click();
       const screen = assist.locator('canvas[role="img"]').first();
       const box = (await screen.boundingBox())!;
       await assist.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
-      await agent!.waitForLine(/ctl\.res.*ok|os\.pointer.*ok/i, 15_000);
-      // Agent lowers to view (the agent drops the level after a window, logged); the same op is refused.
-      await agent!.waitForLine(/ctl\.res.*not_allowed|not_allowed/i, 20_000).catch(() => undefined);
+      await agent!.waitForLine(/ctl\.res ok|op=os\.pointer/i, 15_000);
+      // The agent-side view-level refusal (not_allowed) is proven by the Rust unit/loopback
+      // tests; the console will not emit an input op once it is below control, so this is a
+      // best-effort probe only.
+      await agent!.waitForLine(/not_allowed/i, 2_000).catch(() => undefined);
     });
 
     await test.step('Chat both ways', async () => {
@@ -141,13 +151,25 @@ test('Package 3: Assist console completes a real session with the native agent',
       const path = saved[1]!.trim();
       const bytes = readFileSync(path);
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(FILE_SHA);
+      rmSync(path); // the test file landed in the real Downloads/IndiansAssist folder
     });
 
     await test.step('A starter playbook runs: output panel shows pb.output and exit 0', async () => {
+      // "Collect logs (zip)" is the non-elevation, non-destructive starter playbook: it reads the
+      // event logs and writes a zip into the agent's own %LOCALAPPDATA%\IndiansAssist folder.
+      // (The agent is not elevated in this build and on recent Windows `ipconfig /flushdns` needs
+      // admin; "Clear temp files" would delete files from the developer's real temp folders.)
       const panel = assist.getByRole('region', { name: /playbook/i }).first();
-      await panel.getByRole('button', { name: /Flush DNS cache/i }).first().click();
-      await panel.getByRole('button', { name: /^Run/i }).first().click();
-      await expect(panel.getByText(/exit 0|succeeded|done/i).first()).toBeVisible({ timeout: 30_000 });
+      const item = panel.locator('li', { hasText: 'Collect logs (zip)' });
+      await item.getByRole('button', { name: 'Run...' }).click();
+      await panel.getByRole('button', { name: 'Run Collect logs (zip)' }).click();
+      await expect(panel.getByText(/exit 0|succeeded|done/i).first()).toBeVisible({ timeout: 120_000 });
+      // pb.output reached the panel: the playbook's stdout names the zip it produced.
+      const out = panel.getByText(/IA_FILE_OFFER .+\.zip/).first();
+      await expect(out).toBeVisible();
+      const zip = /IA_FILE_OFFER (.+\.zip)/.exec(await out.innerText())?.[1]?.trim();
+      const ownDir = resolve(process.env.LOCALAPPDATA ?? '', 'IndiansAssist').toLowerCase();
+      if (zip && resolve(zip).toLowerCase().startsWith(ownDir) && existsSync(zip)) rmSync(zip);
       await shot(assist, 'assist-playbook');
     });
 
@@ -158,11 +180,11 @@ test('Package 3: Assist console completes a real session with the native agent',
     });
 
     await test.step('Elevation request shows the reason dialog; the hand-over mint is audited', async () => {
-      await assist.getByRole('button', { name: /Request admin|Elevate/i }).first().click();
-      const dialog = assist.getByRole('dialog', { name: /admin|elevat/i });
+      await assist.getByRole('button', { name: 'Elevated', exact: true }).click();
+      const dialog = assist.getByRole('dialog', { name: /administrator rights/i });
       await expect(dialog).toBeVisible();
-      await dialog.getByLabel(/reason/i).fill('install the printer driver');
-      await dialog.getByRole('button', { name: /Request|Ask/i }).first().click();
+      await dialog.getByLabel(/why do you need/i).fill('install the printer driver');
+      await dialog.getByRole('button', { name: 'Request elevation' }).click();
       // The runas path may be stubbed; the mint is audited server-side regardless.
       await expect
         .poll(async () => {

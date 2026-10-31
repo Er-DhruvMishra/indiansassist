@@ -18,6 +18,22 @@ use ia_core::types::{
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// The write half of a split signalling socket (the serve loop sends through this while a
+/// spawned reader task forwards inbound frames to an [`mpsc`] receiver).
+pub struct SignalWriter {
+    sink: futures_util::stream::SplitSink<Ws, Message>,
+}
+
+impl SignalWriter {
+    /// Send a JSON message.
+    pub async fn send(&mut self, v: Value) -> Result<(), String> {
+        self.sink
+            .send(Message::Text(v.to_string()))
+            .await
+            .map_err(|e| format!("send: {e}"))
+    }
+}
+
 /// The agent's build/platform identity, carried in the User-Agent and `desk.hello.client`.
 #[derive(Debug, Clone)]
 pub struct AgentIdentity {
@@ -137,5 +153,30 @@ impl SignalClient {
     /// `desk.poll`.
     pub async fn poll(&mut self) -> Result<(), String> {
         self.send(json!({ "t": "desk.poll" })).await
+    }
+
+    /// Split into a write half and a spawned reader that forwards inbound JSON frames. Used
+    /// by the serve loop so sends and receives no longer both borrow one `&mut SignalClient`
+    /// (which `tokio::select!` cannot allow). App-level `ping` is forwarded for the loop to
+    /// `pong`; protocol-level frames are handled or dropped here.
+    pub fn split(self) -> (SignalWriter, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (sink, mut stream) = self.ws.split();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        tokio::spawn(async move {
+            while let Some(msg) = stream.next().await {
+                match msg {
+                    Ok(Message::Text(t)) => {
+                        if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                            if tx.send(v).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Message::Close(_)) | Err(_) => break,
+                    _ => {}
+                }
+            }
+        });
+        (SignalWriter { sink }, rx)
     }
 }

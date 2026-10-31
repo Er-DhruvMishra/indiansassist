@@ -114,8 +114,10 @@ The dev build adds, beyond `--api-origin` / `--signal-url` / `--auto-consent <vi
   automated run). It also sizes the signaling wait budget so the run is not cut short before the technician accepts.
 
 These feed the repo-root `pnpm e2e:p3` harness (`apps/web/e2e/package3.spec.ts` + `agent-harness.ts`), which signs
-up a p3_portable org in a browser, mints a token and spawns this binary as the Desk. The harness is in place; the
-assertions after the knock wait on the live serve loop below.
+up a p3_portable org in a browser, mints a token and spawns this binary as the Desk, then drives the full live
+surface (knock, consent, SAS, video, monitor picker, input, chat, file, playbook, stats, elevation, Stop) against
+the serve loop below. A dev `stop` line on stdin (what `agent-harness.interrupt()` writes) is a deterministic Stop
+trigger alongside SIGINT and `--stop-after`.
 
 Against a local API (`pnpm --filter @indiansassist/api dev`, signaling at
 `ws://localhost:4000/signal`):
@@ -125,13 +127,15 @@ Against a local API (`pnpm --filter @indiansassist/api dev`, signaling at
 ```
 
 The agent resolves the token source (§2.1), opens the `/signal` socket as a native
-Origin-less Desk, sends `desk.hello`, and knocks/polls. **The dev API has no P3 signaling
-path yet**, so a `p3_portable` session cannot complete end to end: an unknown code returns
-`token_not_found` and the agent reports the outcome and exits — the hello/knock/poll
-exchange is what is exercised live. The consent window, the `ia.sec` handshake over the data
-channel, the encrypted `ia.control` ops and the video tracks attach once a real
-`session.created` arrives, and the two-peer media + crypto path is covered by the in-process
-loopback test (below).
+Origin-less Desk, sends `desk.hello`, knocks/polls, and — once a `session.created` arrives —
+runs the **live serve loop** (`ia_agent::serve`): auto-consent (dev), the webrtc-rs peer and
+offer, the `ia.sec` handshake over the real data channel (it logs `security code NNN NNN`),
+then the encrypted `ia.control` / `ia.chat` / `ia.file` / `ia.playbook` channels, the VP8
+frame pump and `agent.stats`, the elevation hand-over mint, and teardown + the §10 self-delete
+decision on Stop. On this host the dev API's P3 path (`smoke:p3`) mints real `p3_portable`
+sessions; the headless `--synthetic-capture` path is what `e2e:p3` drives. The two-peer media +
+crypto path (and the encrypted-control serve seam) are also covered by the in-process loopback
+test (below).
 
 The default release build (no `dev`) is a GUI-subsystem exe with no console and no local
 override switches; it is the shape CI signs and serves.
@@ -144,8 +148,10 @@ configuration rides on the **filename desk code** (§2.3) or the signed `.iaconf
 itself on a clean exit: the user instance via a fixed-text `%TEMP%` cmd stub whose arguments
 are allow-listed (`ia-platform::selfdelete`), the elevated child via
 `MOVEFILE_DELAY_UNTIL_REBOOT` with no user-writable script (§10 D2/D3). The decision logic is
-implemented and tested (`ia_agent::elevate`, `ia_platform::selfdelete`); the actual process
-spawn / `MoveFileEx` wiring is the remaining self-delete work.
+implemented and tested (`ia_agent::elevate`, `ia_platform::selfdelete`); the serve loop now
+computes and logs the decision on Stop and, for a user standalone instance that is not keeping
+the binary, generates and spawns the cmd stub (`serve::perform_self_delete`). The elevated
+child's `MoveFileEx` path and the full working-dir/registry sweep remain Phase-D-adjacent work.
 
 ## What is implemented and what is still stubbed
 
@@ -169,9 +175,26 @@ spawn / `MoveFileEx` wiring is the remaining self-delete work.
   capture source (`capture`), the webrtc-rs peer with per-monitor VP8 tracks + the seven data
   channels + `a=max-message-size:131072` (`peer`), the data-channel handshake + sample pump
   (`channels`), the rustls `/signal` client with `desk.hello`/knock/poll (`signal`), the
-  session orchestration (`session`), and the **control-serving seam** (`live::ControlServer`)
+  session orchestration (`session`), the **control-serving seam** (`live::ControlServer`)
   that turns a decrypted `ia.control` frame into a `ctl.res` and drives the `InputSink` /
-  `ClipboardBridge` traits, unit-tested with a mock sink.
+  `ClipboardBridge` traits (unit-tested with a mock sink), and the **live serve loop**
+  (`serve`) that stitches them together past `session.created`: auto-consent, peer + offer,
+  the `ia.sec` handshake over the real channel (logs the SAS), the six encrypted channels off a
+  `SecChannelSet`, `ctl.event monitors`/`agent_level`, the VP8 frame pump, `agent.stats` every
+  5 s, `ia.chat` + `chat.ack`, `ia.file` receive-to-disk (`file saved <path>`), `playbook.run`
+  spawning PowerShell / cmd by full System32 path with a Windows `PATH` (the PowerShell body goes
+  to stdin and runs as one script block, `& ([scriptblock]::Create([Console]::In.ReadToEnd()))`,
+  because plain `-Command -` runs stdin line by line and drops output after a multi-line block;
+  cmd uses a `%LOCALAPPDATA%\IndiansAssist\run\<runId>.cmd` file deleted on exit) with
+  `pb.output`/`pb.end` + the `desk.event playbook.run` audit, the `elevation.request` ->
+  `desk.elevation` mint, and Stop in contract order: `stop.sharing` on `ia.ctrl`, then teardown
+  (capture/encode stop, keys dropped, peer + channels closed), then WS `session.end`, then the
+  self-delete decision. A dev `stop` line on stdin, SIGINT and `--stop-after` are the Stop
+  triggers. The agent waits 1.5 s before auto-consent and re-sends the offer every 2.5 s until
+  answered, so a freshly navigated console that has not subscribed yet does not miss
+  `consent.changed` / `webrtc.offer` (neither is buffered by the server).
+* **`pnpm e2e:p3` passes** (16/16 steps, two consecutive runs, `E2E_API_PORT=4100`) against the
+  real browser console with `--synthetic-capture --auto-consent control --no-self-delete`.
 * The `winapi` layer (DXGI/GDI capture scaffolding, monitor enumeration, `SendInput`
   injection + scancodes, registry protocol handler, known folders, `sys_lib`).
 * The `gui` view-model and its egui rendering (consent window, pill, panel).
@@ -183,29 +206,53 @@ spawn / `MoveFileEx` wiring is the remaining self-delete work.
   trips a chat message and its ack, offers a small file and asserts the saved name and bytes,
   runs a `playbook.run` against a pinned manifest entry and asserts `pb.output` / `pb.end`
   exit 0, and triggers Stop asserting the teardown order and the (dry-run) self-delete
-  decision; Windows-only, skip-if-no-monitor tests for monitor enumeration and `SendInput`.
+  decision; the **encrypted-control serve seam over two real peers** (`media_loopback`,
+  `encrypted_control_round_trip_over_real_peers`) sends a sealed `os.monitors` on `ia.control`
+  and asserts the Desk's `ControlServer` reply decrypts with the consented monitor list; serve
+  unit tests for `parse_manifest`, `build_stats`, `level_wire`, `parse_interpreter`; and
+  Windows-only, skip-if-no-monitor tests for monitor enumeration and `SendInput`.
+* The **real Windows I/O ends** wired behind the traits: `SendInput` pointer/scroll/key/text
+  (`ia-input-win::inject::WinInput`) and `CF_UNICODETEXT` clipboard set/sequence-poll
+  (`ia-input-win::clipboard::WinClipboard`), selected by `serve` on the MSVC host. Under
+  `--synthetic-capture` (and on other targets) a no-op sink is used instead, because the
+  synthetic monitors are not real displays and injected clicks must not land on the host's
+  desktop; so the e2e asserts `ctl.res ok`, not on-screen effects, and real `SendInput` /
+  clipboard are compiled and wired but not exercised end to end in this run.
 
-**Stubbed / not yet wired (needs the P3 API path, a display, or Phase D):**
-* **The live I/O glue past `session.created`.** The decision logic above is implemented and
-  tested; what still waits on the dev API's P3 signaling is the stitching: the egui consent-
-  window / pill / panel **event loop**, the async webrtc data-channel **serve loop** that
-  reads frames, opens them with the `SecChannel`, calls `live::ControlServer` per frame and
-  the stats timer, and the real-OS ends of each action (`SendInput`, clipboard set/listen,
-  monitor select, `agent.stats` emission). The handshake over the real `ia.sec` channel in a
-  live session reuses `channels::run_handshake` (proven by the loopback).
-* **Elevation**: the payload codec, the order of operations, the hand-over claim check and the
-  self-delete decision are tested; the real `ShellExecuteExW(runas)`, the named-pipe transport
-  and the `MOVEFILE_DELAY_UNTIL_REBOOT` / cmd-stub spawn stay behind `cfg(windows)` and are
-  driven once the live session exists.
+**Stubbed / not yet wired (needs a display or Phase D):**
+* **The egui consent-window / pill / panel event loop.** The serve loop grants consent only
+  through the dev `--auto-consent` switch; without it (every release build) it sends
+  `desk.consent { state: 'revoked' }` and ends, so a release agent never shares without a
+  consent UI. The interactive native windows (consent, pill with Stop + security code, panel,
+  tray) are not yet driven from the serve loop, so the release binary cannot run a session yet.
+* **DXGI capture.** The serve loop pumps VP8 from the synthetic capturer (`--synthetic-capture`)
+  or GDI; the DXGI Desktop Duplication primary path is still to come.
+* **Elevation**: the serve loop handles the `elevation.request` op and sends `desk.elevation`
+  so the server mints and audits the hand-over (`elevation.handover_minted`); the payload codec,
+  the order of operations and the hand-over claim check are tested. The real
+  `ShellExecuteExW(runas)` relaunch, the named-pipe parent->child transport and the elevated
+  child's rejoin stay stubbed (the user instance keeps the session), so elevation is audited but
+  the integrity level does not actually change in this build.
 * **Voice**: the Opus encoder (`audiopus`) links and the capability flag is wired (off when no
   device), but the cpal duplex capture/render loop and the audio RTP track are not wired.
 * **Capture**: the GDI fallback + enumeration are real and the DDA->GDI fallback *decision* is
   tested (`capture_decision`); the DXGI Desktop Duplication primary path and the SIMD
   `yuvutils-rs`/`fast_image_resize` conversion are still to come (the self-contained BT.601
   converter in `ia-capture-win::convert` is the oracle).
-* **Playbooks / files**: the arg validation, hash re-check, launch plan, receiver and chunk
-  codec are tested; the actual process spawn (stdin/cmd/job object) and the `.iapart`
-  streaming-to-disk + Mark-of-the-Web wiring are the remaining platform work.
+* **Playbooks / files**: the process spawn works (see above), but without a job object
+  (no kill-on-close tree), no `timeoutSec` enforcement, no `playbook.cancel`, output sent once at
+  exit rather than streamed/coalesced, no 1 MiB cap / `truncated`, no `IA_PARAM_*` environment,
+  no owner-only DACL on the cmd run file, and no limited-token / admin-instance paths (the agent
+  never runs elevated here). On recent Windows `ipconfig /flushdns` itself needs admin, so the
+  "Flush DNS cache" starter exits 1 from this non-elevated agent; the e2e runs "Collect logs
+  (zip)". Received files are held in memory and written whole (no `.iapart` streaming,
+  no Mark-of-the-Web, and no Desk accept prompt: the serve loop accepts every offer that passes
+  the name/size/type checks).
+* **Level lowering**: the agent never lowers itself (`desk.consent_level view`) during a session;
+  the view-level `not_allowed` refusal is covered by the Rust tests only, since the console stops
+  sending input once it is below control.
+* **Clipboard watcher**: `WinClipboard::take_update` exists, but the serve loop does not poll it
+  or emit `ctl.event clipboard` yet; `clipboard.set` from the console is applied.
 * H.264 (Media Foundation) and AV1 (`rav1e`, feature `av1`) encoders are not built in the
   default set; VP8/VP9 via libvpx are.
 

@@ -93,10 +93,27 @@ pub async fn run_signaling(
         .desk_hello(&token_string(token), None, &id, source_wire(source), &caps)
         .await?;
 
-    drive(&mut client, budget).await
+    // Knock / poll until a `session.created` arrives; then split the socket and run the live
+    // serve loop (consent, peer, handshake, channels, media, teardown).
+    let created = match drive_until_created(&mut client, budget).await? {
+        Drive::Created(v) => v,
+        Drive::Outcome(o) => return Ok(o),
+    };
+    let (mut writer, mut ws_rx) = client.split();
+    let out = crate::serve::run_live_session(&mut writer, &mut ws_rx, cli, &created, budget).await;
+    tracing::info!(outcome = ?out, "live serve loop returned");
+    match out {
+        Ok(_) => Ok(SignalOutcome::SessionCreated),
+        Err(e) => Err(e),
+    }
 }
 
-async fn drive(client: &mut SignalClient, budget: Duration) -> Result<SignalOutcome, String> {
+enum Drive {
+    Created(Value),
+    Outcome(SignalOutcome),
+}
+
+async fn drive_until_created(client: &mut SignalClient, budget: Duration) -> Result<Drive, String> {
     let mut poll = tokio::time::interval(Duration::from_secs(3));
     let deadline = tokio::time::sleep(budget);
     tokio::pin!(deadline);
@@ -104,11 +121,11 @@ async fn drive(client: &mut SignalClient, budget: Duration) -> Result<SignalOutc
     loop {
         tokio::select! {
             _ = &mut deadline => {
-                return Ok(if waiting { SignalOutcome::Waiting } else { SignalOutcome::Closed });
+                return Ok(Drive::Outcome(if waiting { SignalOutcome::Waiting } else { SignalOutcome::Closed }));
             }
             _ = poll.tick(), if waiting => { let _ = client.poll().await; }
             msg = client.recv() => {
-                let Some(v): Option<Value> = msg else { return Ok(SignalOutcome::Closed) };
+                let Some(v): Option<Value> = msg else { return Ok(Drive::Outcome(SignalOutcome::Closed)) };
                 match v.get("t").and_then(|t| t.as_str()) {
                     Some("desk.hello.ok") => {
                         tracing::info!("desk.hello.ok; knocking and polling");
@@ -118,12 +135,12 @@ async fn drive(client: &mut SignalClient, budget: Duration) -> Result<SignalOutc
                     Some("poll.status") | Some("knock.ok") | Some("knock.held") | Some("token.presence") => {
                         tracing::debug!(msg = %v, "waiting update");
                     }
-                    Some("session.created") => return Ok(SignalOutcome::SessionCreated),
+                    Some("session.created") => return Ok(Drive::Created(v)),
                     Some("error") => {
-                        return Ok(SignalOutcome::Rejected {
+                        return Ok(Drive::Outcome(SignalOutcome::Rejected {
                             code: v.get("code").and_then(|c| c.as_str()).unwrap_or("error").to_string(),
                             message: v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string(),
-                        })
+                        }))
                     }
                     _ => {}
                 }
