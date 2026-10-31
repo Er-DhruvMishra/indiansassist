@@ -8,7 +8,7 @@ import { sha256Hex } from '@indiansassist/shared';
 import { getSession, listAuditBySession, updateSession } from '@indiansassist/db';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { call, listen, type Account, type TestApp } from './helpers.js';
-import { ADMIN_CLIENT, makeP3App, NATIVE, OP, P3Kit, p3Admin, p3Token } from './p3-kit.js';
+import { ADMIN_CLIENT, makeP3App, NATIVE, OP, P3Kit, p3Admin, p3Token, RECORDER_ADMIN_CLIENT, RECORDER_NATIVE } from './p3-kit.js';
 import { Sweeper } from '../src/sweeper.js';
 
 const RTOKEN = 'recorder-test-token-0123456789abcdef';
@@ -193,20 +193,78 @@ describe('sweeper and recorder', () => {
     expect(await t.ctx.presence.getKey(`ia:ho:${sha256Hex(h)}`)).toBeNull();
   });
 
-  it('a recorder is assigned to a p3 session and is paused / re-assigned across the hand-over', async () => {
-    kit = new P3Kit(t, url);
-    const res = await call(t.app, '/api/v1/orgs/current/policy/recording', { method: 'PATCH', cookie: admin.cookie, body: { recordingMode: 'server' } });
+  const recordingMode = async (recordingMode: string) => {
+    const res = await call(t.app, '/api/v1/orgs/current/policy/recording', { method: 'PATCH', cookie: admin.cookie, body: { recordingMode } });
     expect(res.statusCode).toBe(200);
+  };
+  const recorder = async (recorderId: string) => {
     const rec = await kit.socket();
-    await rec.request({ t: 'recorder.hello', token: RTOKEN, recorderId: 'rec-p3', version: '0.1.0', region: 'in-mum' }, 'recorder.hello.ok');
-    const a = await kit.active(admin);
-    const assign = await rec.next('recorder.assign', (m) => m.sessionId === a.sessionId);
-    expect(assign.tier).toBe('p3_portable');
-    await rec.request({ t: 'recorder.join', sessionId: a.sessionId }, 'recorder.joined');
-    const h = await mint(a);
-    await adminHello(a.compact, h);
-    expect((await rec.next('recorder.pause', (m) => m.sessionId === a.sessionId)).reason).toBe('consent_pending');
-    expect((await rec.next('recorder.assign', (m) => m.sessionId === a.sessionId)).resume).toBe(true);
-    await call(t.app, '/api/v1/orgs/current/policy/recording', { method: 'PATCH', cookie: admin.cookie, body: { recordingMode: 'assist_only' } });
+    await rec.request({ t: 'recorder.hello', token: RTOKEN, recorderId, version: '0.1.0', region: 'in-mum' }, 'recorder.hello.ok');
+    return rec;
+  };
+
+  it('a recorder is assigned to a p3 session and is paused / re-assigned across the hand-over', async () => {
+    kit = new P3Kit(t, url, RECORDER_NATIVE);
+    await recordingMode('server');
+    try {
+      const rec = await recorder('rec-p3');
+      const a = await kit.active(admin);
+      const assign = await rec.next('recorder.assign', (m) => m.sessionId === a.sessionId);
+      expect(assign.tier).toBe('p3_portable');
+      await rec.request({ t: 'recorder.join', sessionId: a.sessionId }, 'recorder.joined');
+      const h = await mint(a);
+      await adminHello(a.compact, h, RECORDER_ADMIN_CLIENT);
+      expect((await rec.next('recorder.pause', (m) => m.sessionId === a.sessionId)).reason).toBe('consent_pending');
+      expect((await rec.next('recorder.assign', (m) => m.sessionId === a.sessionId)).resume).toBe(true);
+    } finally {
+      await recordingMode('assist_only');
+    }
+  });
+
+  it('a p3 Desk without the recorder feature is never assigned a recorder (section 9 R2 amendment)', async () => {
+    kit = new P3Kit(t, url);
+    await recordingMode('server');
+    try {
+      const rec = await recorder('rec-p3-none');
+      const a = await kit.active(admin);
+      expect(await rec.quiet('recorder.assign', 400)).toBe(true);
+      // An unasked join is refused, so nothing can chain recording.server_started.
+      expect((await rec.request({ t: 'recorder.join', sessionId: a.sessionId }, 'error')).code).toBe('forbidden');
+      // A recorder connecting later does not pick the session up either.
+      const rec2 = await recorder('rec-p3-none-2');
+      expect(await rec2.quiet('recorder.assign', 300)).toBe(true);
+      expect(await a.desk.quiet('session.recording', 0)).toBe(true);
+      expect(await a.assist.quiet('session.recording', 0)).toBe(true);
+      expect((await getSession(t.db, a.sessionId))!.serverRecording).toBe(false);
+      expect(await actions(a.sessionId)).not.toContain('recording.server_started');
+    } finally {
+      await recordingMode('assist_only');
+    }
+  });
+
+  it('a hand-over re-evaluates the recorder against the new Desk capabilities', async () => {
+    await recordingMode('server');
+    try {
+      // A recorder Desk handed over to a Desk without the feature: paused, not re-assigned.
+      kit = new P3Kit(t, url, RECORDER_NATIVE);
+      const rec = await recorder('rec-p3-ho');
+      const a = await kit.active(admin);
+      await rec.next('recorder.assign', (m) => m.sessionId === a.sessionId);
+      await rec.request({ t: 'recorder.join', sessionId: a.sessionId }, 'recorder.joined');
+      expect((await adminHello(a.compact, await mint(a), ADMIN_CLIENT)).reply).not.toBeNull();
+      expect((await rec.next('recorder.pause', (m) => m.sessionId === a.sessionId)).reason).toBe('consent_pending');
+      expect(await rec.quiet('recorder.assign', 400)).toBe(true);
+      kit.closeAll();
+      // A Desk without the feature handed over to a recorder Desk: the session gets its first assignment.
+      kit = new P3Kit(t, url);
+      const rec2 = await recorder('rec-p3-ho-2');
+      const b = await kit.active(admin);
+      expect(await rec2.quiet('recorder.assign', 300)).toBe(true);
+      expect((await adminHello(b.compact, await mint(b), RECORDER_ADMIN_CLIENT)).reply).not.toBeNull();
+      const assign = await rec2.next('recorder.assign', (m) => m.sessionId === b.sessionId);
+      expect(assign.resume).toBe(false);
+    } finally {
+      await recordingMode('assist_only');
+    }
   });
 });

@@ -63,12 +63,23 @@ export function recordedTier(tier: Live['tier']): boolean {
   return tier === 'p1_browser' || tier === 'p3_portable';
 }
 
-/** An `active` P1 / P3 session whose policy asks for the server recorder and that has none (section 6 A1). */
+/**
+ * Whether the server recorder can capture this session: every P1 session (the browser Desk answers the offer), and a
+ * P3 session only when its native Desk advertises the `recorder` feature (Phase C section 9 R2 amendment). Without
+ * it the Windows agent would leave `webrtc.offer { peer: 'recorder' }` unanswered while `recording.server_started`
+ * and `session.recording { recording: true }` claimed a recording that never happens.
+ */
+export function recordableSession(live: Live): boolean {
+  if (!recordedTier(live.tier)) return false;
+  return live.tier !== 'p3_portable' || live.deskRecorder;
+}
+
+/** An `active` recordable session whose policy asks for the server recorder and that has none (section 6 A1). */
 export function needsRecorder(live: Live): boolean {
   const r = live.recorder;
   return (
     live.state === 'active' &&
-    recordedTier(live.tier) &&
+    recordableSession(live) &&
     serverRecords(live.recordingMode) &&
     !r.started &&
     r.connId === null &&
@@ -115,7 +126,7 @@ export async function assignRecorder(hub: SignalHub, live: Live, resume = false)
     return false;
   }
   const s = await getSession(ctx.db, live.id);
-  if (!s || s.state !== 'active' || !serverRecords(live.recordingMode)) return false;
+  if (!s || s.state !== 'active' || !serverRecords(live.recordingMode) || !recordableSession(live)) return false;
   const timeout = ctx.timing.recorderJoinTimeoutMs;
   r.assignedConnId = target.id;
   r.assignedUntil = Date.now() + timeout;
@@ -148,7 +159,7 @@ export async function assignRecorder(hub: SignalHub, live: Live, resume = false)
 /** `desk.consent granted`: first activation assigns a recorder, a re-consent resumes the paused one (A1 / A3). */
 export async function onSessionActive(hub: SignalHub, live: Live): Promise<void> {
   const r = live.recorder;
-  if (!recordedTier(live.tier) || !serverRecords(live.recordingMode)) return;
+  if (!recordableSession(live) || !serverRecords(live.recordingMode)) return;
   if (r.connId !== null && !r.joined && !r.stopped) {
     await assignRecorder(hub, live, true);
     return;
@@ -171,6 +182,11 @@ export async function handleRecorderJoin(hub: SignalHub, conn: Conn, msg: Signal
   if (!live || !r || r.assignedConnId !== conn.id) return refuse(hub, conn, msg.sessionId, msg.t, msg.id);
   if (Date.now() > r.assignedUntil) return conn.error('bad_state', 'the assignment expired', msg.id);
   if (live.state !== 'active') return conn.error('consent_required', 'the session is not active', msg.id);
+  if (!recordableSession(live)) {
+    clearTimer(live, 'recorder-assign');
+    r.assignedConnId = null;
+    return conn.error('bad_state', 'the Desk cannot answer a recorder offer', msg.id);
+  }
   const recorderId = conn.recorder!.recorderId;
   const org = await orgOf(hub, live.orgId);
   const wasCounted = r.connId !== null;
@@ -209,6 +225,30 @@ export function pauseRecorder(hub: SignalHub, live: Live): void {
   if (r.connId === null || !r.joined) return;
   r.joined = false;
   hub.conn(r.connId)?.send({ t: 'recorder.pause', sessionId: live.id, reason: 'consent_pending' });
+}
+
+/**
+ * A hand-over put a new Desk process on the session (Phase C section 3.7): the recorder PC died with the old one.
+ * Re-evaluated against the new Desk's capabilities: a joined recorder is paused and re-assigned (resume) only when the
+ * new Desk answers recorder offers (otherwise it stays paused until the session ends and finalises then); an open
+ * assignment is withdrawn when it does not; a session that never had a recorder is assigned one when it now can.
+ */
+export async function onDeskHandedOver(hub: SignalHub, live: Live): Promise<void> {
+  const r = live.recorder;
+  if (r.joined) pauseRecorder(hub, live);
+  if (r.connId !== null && !r.stopped) {
+    if (recordableSession(live)) await assignRecorder(hub, live, true);
+    return;
+  }
+  if (r.assignedConnId !== null && !recordableSession(live)) {
+    clearTimer(live, 'recorder-assign');
+    r.assignedConnId = null;
+    return;
+  }
+  if (needsRecorder(live)) {
+    r.tried.clear();
+    await assignRecorder(hub, live);
+  }
 }
 
 export async function handleRecorderLeave(hub: SignalHub, conn: Conn, msg: SignalOf<'recorder.leave'>): Promise<void> {

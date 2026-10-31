@@ -214,6 +214,11 @@ export type Live = {
   /** Phase A.2 M1 snapshot (null = before A.2). */
   recordingMode: RecordingMode | null;
   recorder: LiveRecorder;
+  /**
+   * The session's native Desk advertises `capabilities.features` `recorder` (it answers the A.2 recorder offer). Read
+   * from the stored `desk.hello.client`, so a hand-over re-evaluates it against the new Desk (Phase C section 9 R2).
+   */
+  deskRecorder: boolean;
   /** Sliding window of relayed `data` lengths (`[atMs, chars]`) for the per-session mirror budget. */
   relayWindow: [number, number][];
   /** `control.relay` per direction, 10 / s (Phase B 4.6). */
@@ -250,7 +255,16 @@ type LiveSource = {
   elevation?: ElevationLevel | null;
   recordingMode?: RecordingMode | null;
   serverRecording?: boolean;
+  deskClient?: unknown;
 };
+
+/** Whether a stored `desk.hello.client` is a native Desk advertising the `recorder` feature (Phase C section 9 R2). */
+export function deskAnswersRecorder(client: unknown): boolean {
+  if (!client || typeof client !== 'object') return false;
+  const c = client as { kind?: unknown; capabilities?: { features?: unknown } };
+  const features = c.capabilities?.features;
+  return c.kind === 'native' && Array.isArray(features) && features.includes('recorder');
+}
 
 /** The P2 consent triple of a session row, or null when it has none (P1 / P3, or not yet granted). */
 export function consentOfRow(s: LiveSource): LiveConsent | null {
@@ -294,6 +308,7 @@ export function newLive(s: LiveSource): Live {
       started: s.serverRecording === true,
       stopped: false,
     },
+    deskRecorder: deskAnswersRecorder(s.deskClient),
     relayWindow: [],
     controlBuckets: {
       assist: new TokenBucket(LIMITS.controlRelayPerSec, LIMITS.controlRelayPerSec),

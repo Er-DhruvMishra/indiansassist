@@ -31,7 +31,7 @@ import { handoverKey, type HandoverEntry } from './handover.js';
 import type { SignalHub } from './hub.js';
 import { cancelGrace, startDeskGrace } from './lifecycle.js';
 import { deskIce, ensureLive, scheduleIceRefresh, sessionCreatedMsg } from './messages.js';
-import { assignRecorder, pauseRecorder } from './recorder.js';
+import { onDeskHandedOver } from './recorder.js';
 
 const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
@@ -193,9 +193,7 @@ export async function completeHandover(
   }
   hub.conn(live.assistConnId)?.send({ t: 'desk.reconnected', sessionId: s.id, state: 'active', consentState: 'granted' });
   if (live.agent) pushAgentConsent(hub, live, live.agent);
-  // Section 3.7: the recorder PC died with the old process; pause, then re-assign the same recorder to re-offer.
-  if (live.recorder.joined) {
-    pauseRecorder(hub, live);
-    await assignRecorder(hub, live, true);
-  }
+  // Section 3.7: the recorder PC died with the old process; pause, then re-assign the same recorder to re-offer
+  // (only when the new Desk advertises `recorder`, section 9 R2 amendment).
+  await onDeskHandedOver(hub, live);
 }

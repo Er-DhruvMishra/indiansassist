@@ -20,6 +20,12 @@ export const NATIVE = {
   },
 } as const;
 export const ADMIN_CLIENT = { ...NATIVE, capabilities: { ...NATIVE.capabilities, elevation: 'admin' } };
+/** A native Desk that answers the server recorder's offer (`features` has `recorder`, section 9 R2 amendment). */
+export const RECORDER_NATIVE = {
+  ...NATIVE,
+  capabilities: { ...NATIVE.capabilities, features: [...NATIVE.capabilities.features, 'recorder'] },
+};
+export const RECORDER_ADMIN_CLIENT = { ...RECORDER_NATIVE, capabilities: { ...RECORDER_NATIVE.capabilities, elevation: 'admin' } };
 
 /** An app whose signups get a P3 plan. */
 export function makeP3App(env: Record<string, string> = {}, timing: Parameters<typeof makeApp>[1] = {}): Promise<TestApp> {
@@ -51,6 +57,8 @@ export class P3Kit {
   constructor(
     readonly t: TestApp,
     readonly url: string,
+    /** The `desk.hello.client` of `nativeDesk` (and so of `pending` / `active`). */
+    readonly client: Record<string, unknown> = NATIVE,
   ) {}
 
   async assist(acc: Account): Promise<SignalClient> {
@@ -69,7 +77,7 @@ export class P3Kit {
 
   async nativeDesk(token: string, extra: Record<string, unknown> = {}): Promise<SignalClient> {
     const d = await this.socket();
-    await d.request({ t: 'desk.hello', token, client: NATIVE, ...extra }, 'desk.hello.ok');
+    await d.request({ t: 'desk.hello', token, client: this.client, ...extra }, 'desk.hello.ok');
     return d;
   }
 

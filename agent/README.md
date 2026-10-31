@@ -325,7 +325,10 @@ rendered pixels, physical clicks, dragging the pill, the tray icon and menu, and
 
 **Stubbed / not yet wired:**
 * **Server recorder (F12 / C-05)**: the agent does not answer `webrtc.offer { peer: 'recorder' }`; no second
-  PeerConnection was wired this pass. The API side should exclude `p3_portable` from `needsRecorder` until it is.
+  PeerConnection was wired this pass. So `WINDOWS_FEATURES` omits the `recorder` capability, and the API assigns
+  the P3 server recorder only to a Desk that advertises it (contract §9 R6): an org with `recording_mode`
+  `server`/`both` gets no `recording.server_started` and no `session.recording { recording: true }` for a Windows
+  P3 session. Add `recorder` to `WINDOWS_FEATURES` once the agent answers the recorder offer.
 * **ABR -> encoder**: the rung is computed and reported but not applied back to libvpx (the wrapper has no runtime
   bitrate / fps / size setter; the pump stays at 1200 kbps / 15 fps at native size). No TWCC estimator input.
 * **C10 rest**: the late-bound system libraries are not all routed through `ia_platform::sys_lib`, there is no local

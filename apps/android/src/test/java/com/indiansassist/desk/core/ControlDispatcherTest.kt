@@ -51,7 +51,7 @@ class ControlDispatcherTest {
         val c = AgentCapabilities()
         assertEquals(1, c.monitors)
         assertEquals("user", c.elevation)
-        assertEquals(listOf("screen", "input", "input_text", "nav", "files", "chat", "voice"), c.features)
+        assertEquals(listOf("screen", "input", "input_text", "nav", "files", "chat", "voice", "recorder"), c.features)
         assertEquals(listOf("vp8", "h264"), c.encoders)
         assertEquals(emptyList<String>(), c.interpreters)
         for (absent in listOf("multi_monitor", "clipboard", "elevation", "playbooks", "input_lock", "privacy_screen")) assertTrue(absent !in c.features)

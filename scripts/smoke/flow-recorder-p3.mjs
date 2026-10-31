@@ -1,7 +1,8 @@
 // Phase C cases of `pnpm smoke:recorder` (docs/specs/phase-c-contracts.md sections 3.7, 9 R2, 15.4): the server
 // recorder is assigned to a p3_portable session, a native fake Desk (Origin-less socket) answers its offer, the
 // elevation hand-over pauses the recorder and re-assigns it (`resume: true`), the elevated Desk answers the re-offer,
-// and the server recording of the whole session (before and after the hand-over) is uploaded and chained.
+// and the server recording of the whole session (before and after the hand-over) is uploaded and chained; a native
+// Desk without the `recorder` feature (today's Windows agent) is never assigned the recorder.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { check } from './runner.mjs';
@@ -15,9 +16,14 @@ const NATIVE = {
   os: 'windows',
   platform: { osVersion: '10.0.26100', arch: 'x64' },
   tokenSource: 'filename',
-  capabilities: { monitors: 1, elevation: 'user', features: ['screen', 'input', 'elevation'], encoders: ['vp8'], hwEncoder: false, interpreters: ['powershell', 'cmd'] },
+  // `recorder`: this fake Desk answers the recorder offer, so the API assigns one (section 9 R2 amendment).
+  capabilities: { monitors: 1, elevation: 'user', features: ['screen', 'input', 'elevation', 'recorder'], encoders: ['vp8'], hwEncoder: false, interpreters: ['powershell', 'cmd'] },
 };
 const ADMIN = { ...NATIVE, capabilities: { ...NATIVE.capabilities, elevation: 'admin' } };
+/** A native Desk that does not advertise `recorder` (today's Windows agent). */
+const NO_RECORDER = { ...NATIVE, capabilities: { ...NATIVE.capabilities, features: ['screen', 'input', 'elevation'] } };
+/** True when nothing matching `pred` arrives on `ws` within `ms`. */
+const absent = (ws, pred, ms) => ws.next(pred, ms).then(() => false, () => true);
 const OP = 'abcabcabcabcabca';
 
 /**
@@ -102,6 +108,28 @@ export async function recorderP3Steps(run, { api, apiUrl, st, open, tmo, token, 
     check(i('recording.stored') > i('session.ended'), 'recording.stored');
     eq(a.integrity.ok, true, 'session audit integrity (p3)');
     return `${names.length} entries`;
+  });
+
+  await run.step('P3: a native Desk without the recorder feature is never assigned the server recorder', async () => {
+    const created = await api.expect('POST', '/api/v1/tokens', { tier: 'p3_portable', typ: 'one_time', label: 'recorder smoke p3 no-flag' }, [201]);
+    const desk = await native('p3-desk-norec');
+    desk.send({ t: 'desk.hello', token: created.compact, client: NO_RECORDER });
+    await desk.reply('desk.hello.ok', tmo);
+    desk.send({ t: 'desk.knock' });
+    const sessionId = (await desk.reply('knock.ok', tmo)).sessionId;
+    await st.assist.next((m) => m.t === 'assist.knock' && m.sessionId === sessionId, tmo, 'assist.knock (p3 no-flag)');
+    st.assist.send({ t: 'assist.accept', sessionId });
+    await st.assist.reply('session.created', tmo);
+    await desk.next('session.created', tmo);
+    desk.send({ t: 'desk.consent', state: 'granted', surface: 'monitor', native: { level: 'control', monitors: [1], clipboard: false } });
+    eq((await desk.reply('consent.ok', tmo)).state, 'active', 'consent.ok (no-flag)');
+    check(await absent(st.rec, (m) => m.t === 'recorder.assign' && m.sessionId === sessionId, 800), 'no recorder.assign for a Desk without recorder');
+    check(await absent(desk, (m) => m.t === 'session.recording' && m.recording === true, 50), 'no session.recording true on the Desk');
+    desk.send({ t: 'session.end', sessionId });
+    await st.assist.next((m) => m.t === 'session.ended' && m.sessionId === sessionId, tmo, 'session.ended (p3 no-flag)');
+    const names = (await api.expect('GET', `/api/v1/sessions/${sessionId}/audit`)).items.map((e) => e.action);
+    check(!names.includes('recording.server_started'), 'no recording.server_started');
+    return `session ${sessionId}`;
   });
   return true;
 }

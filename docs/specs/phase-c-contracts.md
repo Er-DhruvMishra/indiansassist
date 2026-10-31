@@ -203,7 +203,7 @@ Replaces A §6.13 step 5 for this tier; steps 1, 2, 4, 6 unchanged.
 |---|---|
 | `monitors` | int `1..16`; the Android host sends `1` |
 | `elevation` | `'user' \| 'admin'` (`ELEVATION_LEVELS`): the process token's integrity level at hello (`admin` for the hand-over instance of §7 and for a user who ran the exe "as administrator" explicitly) |
-| `features` | unique values of `AGENT_FEATURES = ['screen', 'multi_monitor', 'input', 'input_text', 'clipboard', 'files', 'chat', 'voice', 'elevation', 'playbooks', 'input_lock', 'privacy_screen']`; the console greys every control whose feature is absent (§13.4); `input_lock` and `privacy_screen` are never sent in Phase C |
+| `features` | unique values of `AGENT_FEATURES = ['screen', 'multi_monitor', 'input', 'input_text', 'clipboard', 'files', 'chat', 'voice', 'elevation', 'playbooks', 'input_lock', 'privacy_screen', 'recorder']`; the console greys every control whose feature is absent (§13.4); `input_lock` and `privacy_screen` are never sent in Phase C; `recorder` (Phase C amendment) = answers the server recorder's offer and gates its assignment (§9 R6) |
 | `encoders` | ordered preference from `VIDEO_ENCODERS = ['vp8', 'vp9', 'h264', 'av1']` (§4.3); informational for the console (the SDP is authoritative) |
 | `hwEncoder` | whether a Media Foundation (or Android MediaCodec) encoder was found |
 | `interpreters` | subset of `PLAYBOOK_INTERPRETERS` the agent can run (`powershell`, `cmd` on Windows; `[]` on Android) |
@@ -575,6 +575,7 @@ Bodies live in `scripts/playbooks/*.ps1` / `*.cmd`; the seed inserts them with t
 | R3 | **The server recorder is the durable path.** The agent does **not** hash or persist its own outgoing stream; it only reflects recording state on its indicator (the red dot from `recording.state` / `session.recording`, §3.5) and in the receipt. One durable, signed copy (A.2 §1), and no second recording made by the very process whose honesty is in question |
 | R4 | `recordingMode` snapshot, consent text (A.2 U1), badge (A.2 U4) and one-recording-per-source (A.2 Z1) apply; the P3 consent window shows the A.2 U1 paragraph (§3.3) |
 | R5 | Voice is in the server recording as in A.2 (the agent adds the mic track to the recorder PC when unmuted; `sender.replaceTrack` when the mic turns on later, A.2 N3) |
+| R6 | (Phase C amendment) **Capability gate:** R2 applies only to a native Desk whose `desk.hello.client.capabilities.features` contains `recorder` (`AGENT_FEATURES`, §3.1), meaning it answers `webrtc.offer { peer: 'recorder' }`. A `p3_portable` session whose Desk does not advertise it gets no `recorder.assign` (a `recorder.join` for it is refused), so no `recording.server_started` is chained and `session.recording { source: 'server' }` stays false; `p1_browser` is unchanged. After a hand-over (§3.7) the gate is re-evaluated against the new Desk: a joined recorder is re-assigned (`resume: true`) only if the new Desk advertises `recorder`, otherwise it stays paused until the session ends; a session that had no recorder is assigned one when the new Desk advertises it. The Android host sends `recorder` (RecorderPeer); the Windows agent omits it until it answers the recorder offer |
 
 ---
 

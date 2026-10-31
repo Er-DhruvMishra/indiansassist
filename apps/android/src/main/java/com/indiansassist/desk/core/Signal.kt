@@ -19,13 +19,16 @@ data class AgentCapabilities(
     val interpreters: List<String> = emptyList(),
 ) {
     companion object {
-        /** Section 12.4: `multi_monitor`, `clipboard`, `elevation`, `playbooks` are absent so the console greys them. */
-        val ANDROID_FEATURES = listOf("screen", "input", "input_text", "nav", "files", "chat", "voice")
+        /**
+         * Section 12.4: `multi_monitor`, `clipboard`, `elevation`, `playbooks` are absent so the console greys them.
+         * `recorder`: the host answers the A.2 server recorder's offer (RecorderPeer), so the API may assign one.
+         */
+        val ANDROID_FEATURES = listOf("screen", "input", "input_text", "nav", "files", "chat", "voice", "recorder")
 
         /** `AGENT_FEATURES` (+ `nav`). */
         val AGENT_FEATURES = setOf(
             "screen", "multi_monitor", "input", "input_text", "clipboard", "files", "chat", "voice", "elevation", "playbooks",
-            "input_lock", "privacy_screen", "nav",
+            "input_lock", "privacy_screen", "nav", "recorder",
         )
     }
 }

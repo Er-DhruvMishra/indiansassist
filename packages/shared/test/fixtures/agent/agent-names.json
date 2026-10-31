@@ -23,7 +23,8 @@
     "playbooks",
     "nav",
     "input_lock",
-    "privacy_screen"
+    "privacy_screen",
+    "recorder"
   ],
   "videoEncoders": [
     "vp8",
@@ -185,7 +186,8 @@
       "nav",
       "files",
       "chat",
-      "voice"
+      "voice",
+      "recorder"
     ],
     "encoders": [
       "vp8",

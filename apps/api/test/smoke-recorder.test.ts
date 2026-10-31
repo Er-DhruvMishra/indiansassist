@@ -1,6 +1,6 @@
 /**
  * Runs scripts/smoke-recorder.mjs (`pnpm smoke:recorder`) against this api in-process with a P3 signup plan, so the
- * A.2 steps and the Phase C recorder cases (native Desk, hand-over pause / re-assign) are tested on the real server.
+ * A.2 steps and the Phase C recorder cases (native Desk, hand-over pause / re-assign, no assignment without the `recorder` feature) are tested on the real server.
  */
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,6 +31,6 @@ describe('pnpm smoke:recorder against the real api (P3 plan)', () => {
     const signalUrl = `${apiUrl.replace(/^http/, 'ws')}/signal`;
     const run = await runSmokeRecorder({ apiUrl, signalUrl, webOrigin: 'http://localhost:5173', recorderToken: TOKEN, timeoutMs: 5000, log: (l: string) => lines.push(l) });
     expect(run.results.filter((r) => r.status !== 'PASS'), lines.join('\n')).toEqual([]);
-    expect(run.results.length).toBe(16);
+    expect(run.results.length).toBe(17);
   });
 });

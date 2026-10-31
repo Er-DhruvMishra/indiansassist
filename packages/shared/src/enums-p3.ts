@@ -77,6 +77,8 @@ export const AGENT_FEATURES = [
   'nav',
   'input_lock',
   'privacy_screen',
+  /** Answers the A.2 server recorder's `webrtc.offer { peer: 'recorder' }`; the P3 recorder is only assigned to a Desk advertising it. */
+  'recorder',
 ] as const;
 export type AgentFeature = (typeof AGENT_FEATURES)[number];
 export const VIDEO_ENCODERS = ['vp8', 'vp9', 'h264', 'av1'] as const;

@@ -14,11 +14,11 @@ export const agentCapabilitiesSchema = z.strictObject({
 });
 export type AgentCapabilities = z.infer<typeof agentCapabilitiesSchema>;
 
-/** Section 12.4: what the Android host sends (no multi_monitor, clipboard, elevation, playbooks). */
+/** Section 12.4: what the Android host sends (no multi_monitor, clipboard, elevation, playbooks; `recorder` as it wires RecorderPeer). */
 export const ANDROID_CAPABILITIES: AgentCapabilities = {
   monitors: 1,
   elevation: 'user',
-  features: ['screen', 'input', 'input_text', 'nav', 'files', 'chat', 'voice'],
+  features: ['screen', 'input', 'input_text', 'nav', 'files', 'chat', 'voice', 'recorder'],
   encoders: ['vp8', 'h264'],
   hwEncoder: true,
   interpreters: [],

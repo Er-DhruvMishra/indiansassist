@@ -6,7 +6,7 @@ import { brandingPublic, type UserRef } from '../lib/mappers.js';
 import { endSessionQuietly } from '../services/session-end.js';
 import { systemActor } from '../lib/audit.js';
 import { iso } from '../lib/time.js';
-import { agentOfRow, clearTimer, consentOfRow, newLive, setTimer, type Live } from './conn.js';
+import { agentOfRow, clearTimer, consentOfRow, deskAnswersRecorder, newLive, setTimer, type Live } from './conn.js';
 import type { SignalHub } from './hub.js';
 
 export function ensureLive(hub: SignalHub, s: SessionRow): Live {
@@ -21,6 +21,7 @@ export function ensureLive(hub: SignalHub, s: SessionRow): Live {
   live.consent = consentOfRow(s);
   live.agent = agentOfRow(s);
   live.recordingMode = s.recordingMode ?? null;
+  live.deskRecorder = deskAnswersRecorder(s.deskClient);
   return live;
 }
 
