@@ -36,6 +36,7 @@ pub mod secchan;
 pub mod state;
 pub mod stats;
 pub mod teardown;
+pub mod token;
 pub mod types;
 
 /// Protocol-wide error for parsing / validation failures surfaced to the agent.

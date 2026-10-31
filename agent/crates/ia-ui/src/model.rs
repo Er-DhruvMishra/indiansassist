@@ -208,6 +208,25 @@ pub enum PromptDirection {
 }
 
 /// Whether a clicked prompt control may act.
+/// The pill microphone button (contract §6.3): its label, or `None` when no voice device exists.
+pub fn mic_label(available: bool, muted: bool) -> Option<&'static str> {
+    match (available, muted) {
+        (false, _) => None,
+        (true, true) => Some("Mic off"),
+        (true, false) => Some("Mic on"),
+    }
+}
+
+/// Which way a mic click goes: unmuting shares the room's audio (grant, physical press only);
+/// muting is always allowed.
+pub fn mic_direction(currently_muted: bool) -> PromptDirection {
+    if currently_muted {
+        PromptDirection::Grant
+    } else {
+        PromptDirection::Safe
+    }
+}
+
 pub fn prompt_allowed(direction: PromptDirection, physical_press_recent: bool) -> bool {
     match direction {
         PromptDirection::Safe => true,
@@ -338,6 +357,12 @@ mod tests {
         assert!(!prompt_allowed(PromptDirection::Grant, false));
         assert!(prompt_allowed(PromptDirection::Grant, true));
         assert!(prompt_allowed(PromptDirection::Safe, false));
+        // The mic: unmuting is a grant (physical only), muting is safe.
+        assert_eq!(mic_direction(true), PromptDirection::Grant);
+        assert_eq!(mic_direction(false), PromptDirection::Safe);
+        assert_eq!(mic_label(false, true), None);
+        assert_eq!(mic_label(true, true), Some("Mic off"));
+        assert_eq!(mic_label(true, false), Some("Mic on"));
         // Tagged keys are dropped only while an agent window is foreground.
         assert!(key_hook_drops(tag, true));
         assert!(!key_hook_drops(tag, false));

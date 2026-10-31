@@ -56,6 +56,22 @@ impl Rung {
         }
     }
 
+    /// A compact index (floor 0 .. full 4) for sharing the rung through an atomic.
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+
+    /// The inverse of [`Rung::index`]; out-of-range values clamp to `full`.
+    pub fn from_index(i: u8) -> Rung {
+        match i {
+            0 => Rung::Floor,
+            1 => Rung::Low,
+            2 => Rung::Medium,
+            3 => Rung::High,
+            _ => Rung::Full,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Rung::Full => "full",
@@ -84,6 +100,137 @@ pub fn rung_for_target(target_kbps: u32) -> Rung {
 
 /// `floor` session budget: 250 kbps per leg, one monitor (contract §4.3, W24).
 pub const FLOOR_BUDGET_KBPS: u32 = 250;
+
+/// The whole Desk uplink cap across the selected monitors **and** the recorder stream
+/// (contract §4.3 "8000 total including the recorder stream", §9 R2).
+pub const TOTAL_MAX_KBPS: u32 = 8000;
+
+/// The top of the `medium` band: the most the recorder stream is given when the Assist runs
+/// above `medium` (contract §4.3 "the recorder stream follows `min(assistRung, medium)`").
+pub const MEDIUM_MAX_KBPS: u32 = 1500;
+
+/// The encoder settings one stream runs at (contract §4.3 ladder applied to libvpx).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncodeParams {
+    /// Encoded size (even, aspect kept, never above the source).
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    /// CBR target.
+    pub kbps: u32,
+    /// libvpx `rc_min_quantizer` ("min quantiser raised" on `low` / `floor`).
+    pub min_q: u32,
+    /// Bounded keyframe interval (15 s in floor, else 10 s, §4.1 / §4.3).
+    pub keyframe_secs: u32,
+    /// The `screen-content` tuning column of the ladder (medium, low, floor).
+    pub screen_content: bool,
+}
+
+impl EncodeParams {
+    /// True when a change from `self` to `next` needs a fresh encoder (size, fps or a
+    /// create-time tuning changed); a bitrate-only change is a runtime reconfigure.
+    pub fn needs_new_encoder(&self, next: &EncodeParams) -> bool {
+        self.width != next.width
+            || self.height != next.height
+            || self.fps != next.fps
+            || self.min_q != next.min_q
+            || self.keyframe_secs != next.keyframe_secs
+            || self.screen_content != next.screen_content
+    }
+
+    /// True when the bitrate moved enough (> 10 %) to be worth a libvpx reconfigure.
+    pub fn bitrate_moved(&self, next: &EncodeParams) -> bool {
+        let (a, b) = (self.kbps as f32, next.kbps as f32);
+        (a - b).abs() > a.max(1.0) * 0.10
+    }
+}
+
+/// Fit `w`x`h` inside `long_edge` on its long side, keeping the aspect ratio, **never
+/// upscaling**, with even dimensions (I420 needs even planes).
+pub fn fit_no_upscale(w: u32, h: u32, long_edge: u32) -> (u32, u32) {
+    let (w, h) = (w.max(2), h.max(2));
+    let long = w.max(h);
+    let (fw, fh) = if long <= long_edge {
+        (w, h)
+    } else {
+        let s = long_edge as f64 / long as f64;
+        ((w as f64 * s).round() as u32, (h as f64 * s).round() as u32)
+    };
+    ((fw & !1).max(2), (fh & !1).max(2))
+}
+
+/// The libvpx settings for the Assist stream at `rung` under `preset` (contract §4.3):
+/// `auto` follows the ladder; `sharp` pins the long edge to native (capped at the `full`
+/// 2560 px) and lets fps drop with the rung; `smooth` pins 30 fps and lets the resolution drop
+/// with the rung; `floor` forces the floor rung (the controller already reports it).
+pub fn encode_params(
+    rung: Rung,
+    preset: QualityPreset,
+    native_w: u32,
+    native_h: u32,
+    target_kbps: u32,
+) -> EncodeParams {
+    let rung = if preset == QualityPreset::Floor {
+        Rung::Floor
+    } else {
+        rung
+    };
+    let spec = rung.spec();
+    let long_edge = match preset {
+        QualityPreset::Sharp => Rung::Full.spec().long_edge_max,
+        _ => spec.long_edge_max,
+    };
+    let fps = match preset {
+        QualityPreset::Smooth => Rung::Full.spec().fps_max,
+        _ => spec.fps_max,
+    };
+    let (width, height) = fit_no_upscale(native_w, native_h, long_edge);
+    let kbps = if rung == Rung::Floor {
+        target_kbps.min(FLOOR_BUDGET_KBPS)
+    } else {
+        target_kbps
+    }
+    .clamp(50, limits::AGENT_MAX_KBPS);
+    EncodeParams {
+        width,
+        height,
+        fps,
+        kbps,
+        min_q: match rung {
+            Rung::Low => 10,
+            Rung::Floor => 16,
+            _ => 2,
+        },
+        keyframe_secs: if rung == Rung::Floor { 15 } else { 10 },
+        screen_content: rung <= Rung::Medium,
+    }
+}
+
+/// The recorder stream's settings (contract §4.3 W24, §9 R2): the ladder at
+/// `min(assistRung, medium)` (always `auto`, VP8), so in floor it is also 250 kbps / 5 fps; its
+/// bitrate is the Assist target while the Assist is at or below `medium`, else the top of the
+/// `medium` band, and never more than what is left of the 8000 kbps uplink cap.
+pub fn recorder_params(
+    assist_rung: Rung,
+    native_w: u32,
+    native_h: u32,
+    assist_target_kbps: u32,
+) -> EncodeParams {
+    let rung = assist_rung.min(Rung::Medium);
+    let kbps = if assist_rung <= Rung::Medium {
+        assist_target_kbps
+    } else {
+        MEDIUM_MAX_KBPS
+    };
+    let kbps = kbps.min(TOTAL_MAX_KBPS.saturating_sub(assist_target_kbps).max(50));
+    encode_params(rung, QualityPreset::Auto, native_w, native_h, kbps)
+}
+
+/// Whether the Assist and recorder streams can share one encoder (contract §4.2: "one encode,
+/// two receivers" when the settings match; otherwise a second libvpx VP8 instance).
+pub fn can_share_encoder(assist: &EncodeParams, recorder: &EncodeParams) -> bool {
+    assist == recorder
+}
 
 /// One controller tick input.
 #[derive(Debug, Clone, Copy, Default)]
@@ -331,6 +478,83 @@ mod tests {
         assert_eq!(last.rung, Rung::Floor);
         assert!(last.floor_mode);
         assert!(last.target_kbps <= FLOOR_BUDGET_KBPS);
+    }
+
+    #[test]
+    fn ladder_maps_rungs_to_size_fps_and_bitrate() {
+        // 1080p source on each rung (auto).
+        let p = encode_params(Rung::Full, QualityPreset::Auto, 1920, 1080, 4000);
+        assert_eq!((p.width, p.height, p.fps, p.kbps), (1920, 1080, 30, 4000));
+        assert!(!p.screen_content);
+        let p = encode_params(Rung::High, QualityPreset::Auto, 2560, 1440, 2000);
+        assert_eq!((p.width, p.height, p.fps), (1920, 1080, 24));
+        let p = encode_params(Rung::Medium, QualityPreset::Auto, 1920, 1080, 1000);
+        assert_eq!((p.width, p.height, p.fps), (1600, 900, 15));
+        assert!(p.screen_content);
+        let p = encode_params(Rung::Low, QualityPreset::Auto, 1920, 1080, 500);
+        assert_eq!((p.width, p.height, p.fps, p.min_q), (1280, 720, 10, 10));
+        let p = encode_params(Rung::Floor, QualityPreset::Auto, 1920, 1080, 900);
+        assert_eq!((p.width, p.height, p.fps), (1024, 576, 5));
+        assert_eq!(p.kbps, FLOOR_BUDGET_KBPS, "floor caps the leg at 250 kbps");
+        assert_eq!(p.keyframe_secs, 15);
+        // Never upscales a small source; odd sizes become even.
+        let p = encode_params(Rung::Full, QualityPreset::Auto, 1279, 721, 3000);
+        assert_eq!((p.width, p.height), (1278, 720));
+        // The per-monitor cap holds.
+        assert_eq!(
+            encode_params(Rung::Full, QualityPreset::Auto, 64, 64, 99_000).kbps,
+            limits::AGENT_MAX_KBPS
+        );
+    }
+
+    #[test]
+    fn presets_pin_resolution_or_fps() {
+        // sharp: native long edge kept at a low rung, fps drops with the rung.
+        let p = encode_params(Rung::Low, QualityPreset::Sharp, 1920, 1080, 500);
+        assert_eq!((p.width, p.height, p.fps), (1920, 1080, 10));
+        // smooth: 30 fps kept, resolution drops with the rung.
+        let p = encode_params(Rung::Low, QualityPreset::Smooth, 1920, 1080, 500);
+        assert_eq!((p.width, p.height, p.fps), (1280, 720, 30));
+        // floor preset forces the floor rung whatever the controller said.
+        let p = encode_params(Rung::Full, QualityPreset::Floor, 1920, 1080, 5000);
+        assert_eq!((p.width, p.fps, p.kbps), (1024, 5, FLOOR_BUDGET_KBPS));
+    }
+
+    #[test]
+    fn recorder_follows_min_of_assist_rung_and_medium() {
+        // Assist above medium: the recorder runs the medium ladder at the medium-band top,
+        // so a second encoder is needed.
+        let a = encode_params(Rung::Full, QualityPreset::Auto, 1920, 1080, 5000);
+        let r = recorder_params(Rung::Full, 1920, 1080, 5000);
+        assert_eq!(
+            (r.width, r.height, r.fps, r.kbps),
+            (1600, 900, 15, MEDIUM_MAX_KBPS)
+        );
+        assert!(!can_share_encoder(&a, &r));
+        // Assist at medium: identical settings, one shared encoder.
+        let a = encode_params(Rung::Medium, QualityPreset::Auto, 1920, 1080, 1100);
+        let r = recorder_params(Rung::Medium, 1920, 1080, 1100);
+        assert!(can_share_encoder(&a, &r));
+        // Floor: the recorder is capped at 250 kbps / 5 fps too, shared.
+        let a = encode_params(Rung::Floor, QualityPreset::Auto, 1920, 1080, 200);
+        let r = recorder_params(Rung::Floor, 1920, 1080, 200);
+        assert_eq!((r.fps, r.kbps), (5, 200));
+        assert!(can_share_encoder(&a, &r));
+        // The uplink total stays within 8000 kbps.
+        let r = recorder_params(Rung::Full, 2560, 1440, 6000);
+        assert!(6000 + r.kbps <= TOTAL_MAX_KBPS);
+    }
+
+    #[test]
+    fn encoder_rebuild_vs_reconfigure() {
+        let a = encode_params(Rung::Medium, QualityPreset::Auto, 1920, 1080, 1000);
+        let b = encode_params(Rung::Medium, QualityPreset::Auto, 1920, 1080, 1300);
+        assert!(!a.needs_new_encoder(&b));
+        assert!(a.bitrate_moved(&b));
+        let c = encode_params(Rung::Medium, QualityPreset::Auto, 1920, 1080, 1050);
+        assert!(!a.bitrate_moved(&c), "a 5 % wobble is not reconfigured");
+        let d = encode_params(Rung::High, QualityPreset::Auto, 1920, 1080, 1600);
+        assert!(a.needs_new_encoder(&d));
     }
 
     #[test]

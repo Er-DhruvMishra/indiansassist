@@ -8,9 +8,11 @@ pub mod cli;
 pub mod codecs;
 pub mod elevate;
 pub mod filerecv;
+pub mod hopipe;
 pub mod live;
 pub mod pbrun;
 pub mod sechs;
+pub mod tokencheck;
 pub mod tokensource;
 
 #[cfg(feature = "media")]
@@ -20,10 +22,16 @@ pub mod channels;
 #[cfg(feature = "media")]
 pub mod peer;
 #[cfg(feature = "media")]
+pub mod pump;
+#[cfg(feature = "media")]
+pub mod recorder;
+#[cfg(feature = "media")]
 pub mod serve;
 #[cfg(feature = "media")]
 pub mod session;
 #[cfg(feature = "media")]
 pub mod signal;
+#[cfg(feature = "media")]
+pub mod voice;
 #[cfg(feature = "media")]
 pub mod vp8;

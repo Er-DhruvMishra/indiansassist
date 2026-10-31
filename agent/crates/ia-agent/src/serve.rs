@@ -30,6 +30,8 @@ use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_remote::TrackRemote;
 
 use crate::capture::SyntheticCapturer;
 use crate::channels::run_handshake;
@@ -38,8 +40,10 @@ use crate::filerecv::{self, PartFile};
 use crate::live::{ControlServer, SessionEffect};
 use crate::pbrun::{self, RunEvent, RunHandle, RunSpec};
 use crate::peer::{AgentPeer, PeerRole};
+use crate::pump::{run_pump, CaptureSource, PumpSpec, VideoCtl};
+use crate::recorder::{is_recorder_frame, server_records, RecorderPeer};
 use crate::signal::SignalWriter;
-use crate::vp8::Vp8Encoder;
+use crate::voice::{voice_state, Voice};
 use ia_core::clipsync::prepare_desk_text;
 use ia_core::consent::{LevelRequestOutcome, LiveConsent};
 use ia_core::ctl::CtlReq;
@@ -66,10 +70,12 @@ type Secs = HashMap<String, SecChannel>;
 
 mod link;
 mod meter;
+mod recleg;
 mod secfail;
 mod selfdel;
 use link::*;
 use meter::*;
+use recleg::*;
 use secfail::*;
 use selfdel::*;
 
@@ -505,6 +511,9 @@ async fn connect_and_serve(
 
     // Wait for consent.ok (carries the Desk ICE servers; localhost uses host candidates).
     let ice_servers: Vec<RTCIceServer>;
+    // Recorder frames (`peer: 'recorder'`) that arrive before the serve loop runs are kept and
+    // replayed there: the recorder may join and offer while the Assist PC is still negotiating.
+    let mut pending_recorder: Vec<Value> = Vec::new();
     let consent_deadline = tokio::time::sleep(Duration::from_secs(15));
     tokio::pin!(consent_deadline);
     loop {
@@ -518,6 +527,10 @@ async fn connect_and_serve(
                     end_ui(ui, "The session ended.").await;
                     return Ok(LiveOutcome::EndedRemotely);
                 };
+                if crate::recorder::is_recorder_frame(&v) {
+                    pending_recorder.push(v);
+                    continue;
+                }
                 match v.get("t").and_then(|t| t.as_str()) {
                     Some("consent.ok") => {
                         // F5: parse the STUN/TURN servers into the PC configuration so a
@@ -556,6 +569,17 @@ async fn connect_and_serve(
     )
     .await
     .map_err(|e| format!("peer: {e}"))?;
+    // Voice (§6.3): one Opus track, added muted at start when a capture + render device exists;
+    // the Assist's audio track (if it sends one) is played.
+    let voice = crate::voice::voice_available().then(Voice::new);
+    let audio_track = voice.as_ref().map(|v| v.track.clone());
+    let (remote_audio_tx, remote_audio_rx) = mpsc::unbounded_channel::<Arc<TrackRemote>>();
+    if let Some(t) = &audio_track {
+        peer.add_audio_track(t.clone())
+            .await
+            .map_err(|e| format!("audio track: {e}"))?;
+    }
+    wire_remote_audio(&peer, remote_audio_tx.clone());
     let chans = match wire_channels(&peer, 0, &in_tx, &fail_tx).await {
         Ok(c) => c,
         Err(e) => {
@@ -565,7 +589,17 @@ async fn connect_and_serve(
     };
 
     // 3) Offer (gen 0), apply the answer, read the fingerprints.
-    let (own_fpr, remote_fpr) = match negotiate(&peer, ws, ws_rx, session_id, 0, false).await {
+    let (own_fpr, remote_fpr) = match negotiate(
+        &peer,
+        ws,
+        ws_rx,
+        session_id,
+        0,
+        false,
+        &mut pending_recorder,
+    )
+    .await
+    {
         NegotiateOutcome::Fingerprints(f) => f,
         NegotiateOutcome::Ended => {
             end_ui(ui, "The session ended.").await;
@@ -651,6 +685,11 @@ async fn connect_and_serve(
         fail_tx,
         ice_servers,
         monitor_ids,
+        pending_recorder,
+        voice,
+        audio_track,
+        remote_audio_tx,
+        remote_audio_rx,
     };
     serve(ws, ws_rx, params, io, ui, ui_rx).await
 }
@@ -1249,12 +1288,20 @@ impl Live<'_> {
             "ia.ctrl" => {
                 let Some(text) = opened.as_text() else { return };
                 if let Ok(v) = serde_json::from_str::<Value>(text) {
-                    if v.get("t").and_then(|t| t.as_str()) == Some("recording.state") {
-                        let on = v
-                            .get("recording")
-                            .and_then(|r| r.as_bool())
-                            .unwrap_or(false);
-                        self.ui(UiCommand::Recording { on, server: false });
+                    match v.get("t").and_then(|t| t.as_str()) {
+                        Some("recording.state") => {
+                            let on = v
+                                .get("recording")
+                                .and_then(|r| r.as_bool())
+                                .unwrap_or(false);
+                            self.ui(UiCommand::Recording { on, server: false });
+                        }
+                        Some("voice.state") => {
+                            let muted = v.get("muted").and_then(|m| m.as_bool()).unwrap_or(true);
+                            tracing::info!(muted, "technician voice.state");
+                            self.ui(UiCommand::TechnicianVoice { muted });
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1688,9 +1735,18 @@ struct ServeIo {
     fail_tx: mpsc::UnboundedSender<(u16, SecFailReason)>,
     ice_servers: Vec<RTCIceServer>,
     monitor_ids: Vec<u32>,
+    /// Recorder frames received before the serve loop (replayed by it).
+    pending_recorder: Vec<Value>,
+    /// Voice (§6.3) when a device exists, its outgoing track, and the Assist-audio bus.
+    voice: Option<Voice>,
+    audio_track: Option<Arc<TrackLocalStaticSample>>,
+    remote_audio_tx: mpsc::UnboundedSender<Arc<TrackRemote>>,
+    remote_audio_rx: mpsc::UnboundedReceiver<Arc<TrackRemote>>,
 }
 
-/// Spawn the one-monitor VP8 pump, returning its join handle (None if the track is missing).
+/// Spawn the one-monitor VP8 pump (contract §4.1-§4.3, §9 R2), returning its join handle (None
+/// if the track is missing). The pump follows the ABR decision published in `ctl` and also feeds
+/// the recorder track while one is attached.
 fn spawn_video(
     peer: &AgentPeer,
     viewed: u32,
@@ -1698,7 +1754,7 @@ fn spawn_video(
     synthetic: bool,
     stop: Arc<tokio::sync::Notify>,
     path: Arc<std::sync::atomic::AtomicU8>,
-    meter: Arc<VideoMeter>,
+    ctl: Arc<VideoCtl>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     peer.video_track(viewed).map(|track| {
         let (w, h) = monitors
@@ -1706,9 +1762,13 @@ fn spawn_video(
             .find(|m| m.id == viewed)
             .map(|m| (m.width.max(2) & !1, m.height.max(2) & !1))
             .unwrap_or((1280, 720));
-        tokio::spawn(
-            async move { pump_video(track, w, h, viewed, synthetic, stop, path, meter).await },
-        )
+        let spec = PumpSpec {
+            monitor_id: viewed,
+            native_w: w,
+            native_h: h,
+        };
+        let source = CaptureSource::new(synthetic, w, h);
+        tokio::spawn(run_pump(track, spec, source, ctl, stop, path))
     })
 }
 
@@ -1743,6 +1803,11 @@ async fn serve(
         fail_tx,
         ice_servers,
         monitor_ids,
+        mut pending_recorder,
+        mut voice,
+        audio_track,
+        remote_audio_tx,
+        mut remote_audio_rx,
     } = io;
     let viewed = monitors
         .iter()
@@ -1795,11 +1860,22 @@ async fn serve(
     });
     live.seal("ia.control", &monitors_event.to_string()).await;
     live.send_level_event().await;
+    if voice.is_some() {
+        // Default muted (A D8): tell the console, show the pill's mic button.
+        live.seal("ia.ctrl", &voice_state(true, now_ms()).to_string())
+            .await;
+        live.ui(UiCommand::Voice {
+            available: true,
+            muted: true,
+        });
+    }
 
-    // Video pump + throughput meter + ABR controller fed by REMB/loss (contract §4.3, §4.4).
+    // Video pump + throughput meter + ABR controller fed by REMB/loss (contract §4.3, §4.4). The
+    // controller's decision is published into `ctl`, which the pump makes libvpx follow.
     let mut stop = Arc::new(tokio::sync::Notify::new());
     let capture_path = Arc::new(std::sync::atomic::AtomicU8::new(CapturePath::Gdi as u8));
-    let meter = Arc::new(VideoMeter::default());
+    let mut abr = ia_core::abr::AbrController::default();
+    let ctl = Arc::new(VideoCtl::new(abr.rung(), 1500));
     let remb_kbps = Arc::new(AtomicU64::new(0));
     let loss_permille = Arc::new(AtomicU64::new(0));
     let mut video_handle = spawn_video(
@@ -1809,17 +1885,29 @@ async fn serve(
         synthetic,
         stop.clone(),
         capture_path.clone(),
-        meter.clone(),
+        ctl.clone(),
     );
     let mut remb_handle = spawn_remb_reader(
         &peer,
         remb_kbps.clone(),
         loss_permille.clone(),
+        ctl.clone(),
         stop.clone(),
     );
-    let mut abr = ia_core::abr::AbrController::default();
-    let mut last_meter = MeterSnapshot::take(&meter);
+    let mut last_meter = MeterSnapshot::take(&ctl.meter);
     let mut last_rung = abr.rung();
+    let mut last_target = ctl.target_kbps();
+
+    // The server-recorder leg (contract §9 R2): a second PC answering the recorder's offer.
+    let mut rec = RecorderLegs::new(
+        viewed,
+        server_records(&info.recording_mode),
+        audio_track.clone(),
+    );
+    for v in std::mem::take(&mut pending_recorder) {
+        rec.on_frame(&v, live.ws, session_id, &ice_servers, &ctl)
+            .await;
+    }
 
     // PeerConnection connectivity (contract correctness F13): restart ICE on a sustained
     // `disconnected`, tear down with a sec note on `failed`.
@@ -1867,23 +1955,28 @@ async fn serve(
             stop_line = next_stop_line(&mut stdin) => { if stop_line { tracing::info!("stop: dev stop line"); break; } }
             _ = stats_iv.tick() => {
                 if let Some(preset) = live.pending_quality.take() {
+                    tracing::info!(preset = ?preset, "os.quality preset applied");
                     abr.set_preset(preset);
+                    ctl.set_preset(preset);
                 }
-                let now = MeterSnapshot::take(&meter);
+                let now = MeterSnapshot::take(&ctl.meter);
                 let interval = now.diff(&last_meter, ia_core::types::limits::AGENT_STATS_INTERVAL_MS);
                 last_meter = now;
                 let remb = remb_kbps.load(Ordering::Relaxed);
+                let loss = loss_permille.load(Ordering::Relaxed);
                 let decision = abr.step(ia_core::abr::AbrSample {
                     now_ms: now_ms() as u64,
-                    remb_kbps: abr_estimate_kbps(remb, interval.sent_kbps, loss_permille.load(Ordering::Relaxed)),
+                    remb_kbps: abr_estimate_kbps(remb, interval.sent_kbps, loss, last_target),
                     twcc_kbps: None,
-                    fraction_lost: loss_permille.load(Ordering::Relaxed) as f32 / 1000.0,
+                    fraction_lost: loss as f32 / 1000.0,
                 });
+                last_target = decision.target_kbps;
+                ctl.set_decision(decision.rung, decision.target_kbps);
                 if decision.rung != last_rung {
-                    tracing::info!(from = last_rung.as_str(), to = decision.rung.as_str(), remb_kbps = remb, loss_permille = loss_permille.load(Ordering::Relaxed), target_kbps = decision.target_kbps, sent_kbps = interval.sent_kbps, "abr rung change");
+                    tracing::info!(from = last_rung.as_str(), to = decision.rung.as_str(), remb_kbps = remb, loss_permille = loss, target_kbps = decision.target_kbps, sent_kbps = interval.sent_kbps, "abr rung change");
                     last_rung = decision.rung;
                 }
-                let s = build_stats(&monitors, viewed, path_from_u8(capture_path.load(Ordering::Relaxed)), &interval, &decision);
+                let s = build_stats(&monitors, viewed, path_from_u8(capture_path.load(Ordering::Relaxed)), &interval, &decision, ctl.has_recorder());
                 live.seal("ia.ctrl", &s.to_wire().to_string()).await;
             }
             _ = prompt_iv.tick() => live.expire_prompts().await,
@@ -1908,6 +2001,21 @@ async fn serve(
                     _ => {}
                 }
             }
+            ra = remote_audio_rx.recv() => {
+                if let (Some(track), Some(v)) = (ra, voice.as_mut()) {
+                    v.attach_remote(track);
+                }
+            }
+            c = rec.ice_rx.recv() => {
+                if let Some((leg, cand)) = c {
+                    rec.send_candidate(leg, cand, live.ws, session_id).await;
+                }
+            }
+            st = rec.state_rx.recv() => {
+                if let Some((leg, state)) = st {
+                    rec.on_state(leg, state, &ctl).await;
+                }
+            }
             ev = next_ui(ui_rx) => {
                 match ev {
                     Some(UiEvent::Stop) => { tracing::info!("stop: pill / panel / tray"); break; }
@@ -1917,6 +2025,19 @@ async fn serve(
                     Some(UiEvent::FileDecision { file_id, accept }) => live.file_decision(file_id, accept, false).await,
                     Some(UiEvent::LevelDecision { allow }) => live.answer_level_request(allow, false).await,
                     Some(UiEvent::ChatSend(text)) => live.send_chat(text).await,
+                    Some(UiEvent::Mic(on)) => {
+                        if let Some(v) = voice.as_mut() {
+                            let res = v.set_muted(!on);
+                            if let Err(e) = &res {
+                                tracing::warn!("microphone could not be opened: {e}");
+                                live.ui(UiCommand::Toast("The microphone could not be opened.".into()));
+                            }
+                            let muted = v.muted();
+                            tracing::info!(muted, "desk microphone");
+                            live.seal("ia.ctrl", &voice_state(muted, now_ms()).to_string()).await;
+                            live.ui(UiCommand::Voice { available: true, muted });
+                        }
+                    }
                     Some(UiEvent::ConsentGranted(_)) | Some(UiEvent::ConsentDeclined) => {}
                     Some(UiEvent::Failed(_)) | Some(UiEvent::Closed) | None => {
                         // The indicator is mandatory (§3.5): no indicator, no sharing.
@@ -1929,6 +2050,10 @@ async fn serve(
             }
             msg = ws_rx.recv() => {
                 let Some(v) = msg else { outcome = LiveOutcome::EndedRemotely; break; };
+                if is_recorder_frame(&v) {
+                    rec.on_frame(&v, live.ws, session_id, &ice_servers, &ctl).await;
+                    continue;
+                }
                 match v.get("t").and_then(|t| t.as_str()) {
                     Some("webrtc.ice") => add_remote_ice(&peer, &v).await,
                     Some("ping") => { let _ = live.ws.send(json!({ "t": "pong" })).await; }
@@ -1937,6 +2062,10 @@ async fn serve(
                     Some("session.recording") => {
                         let on = v.get("recording").and_then(|r| r.as_bool()).unwrap_or(false);
                         live.ui(UiCommand::Recording { on, server: true });
+                        if !on && v.get("source").and_then(|s| s.as_str()) == Some("server") {
+                            // The recorder left / stopped: drop its PC (it re-offers if re-assigned).
+                            rec.close(&ctl, "server recording stopped").await;
+                        }
                     }
                     Some("consent.level_ok") => tracing::info!("consent.level_ok"),
                     // §3.7 resume / ICE refresh: the agent never reuses a PC — close it, build a
@@ -1996,7 +2125,8 @@ async fn serve(
             remb_handle.abort();
             let _ = peer.pc.close().await;
             while in_rx.try_recv().is_ok() {} // drop stale (old-gen) frames
-            match rebuild_generation(
+            let mut stash = Vec::new();
+            let rebuilt = rebuild_generation(
                 live.ws,
                 ws_rx,
                 session_id,
@@ -2005,9 +2135,18 @@ async fn serve(
                 &monitor_ids,
                 &in_tx,
                 &fail_tx,
+                &mut stash,
+                audio_track.clone(),
+                &remote_audio_tx,
             )
-            .await
-            {
+            .await;
+            // Recorder frames that arrived during the re-offer: the recorder PC is independent
+            // of the Assist PC and survives the rebuild (§9 R2 / §3.7).
+            for v in stash {
+                rec.on_frame(&v, live.ws, session_id, &ice_servers, &ctl)
+                    .await;
+            }
+            match rebuilt {
                 Ok(g) => {
                     peer = g.peer;
                     live.chans = g.chans;
@@ -2017,7 +2156,7 @@ async fn serve(
                     stop = Arc::new(tokio::sync::Notify::new());
                     remb_kbps.store(0, Ordering::Relaxed);
                     loss_permille.store(0, Ordering::Relaxed);
-                    last_meter = MeterSnapshot::take(&meter);
+                    last_meter = MeterSnapshot::take(&ctl.meter);
                     video_handle = spawn_video(
                         &peer,
                         viewed,
@@ -2025,12 +2164,13 @@ async fn serve(
                         synthetic,
                         stop.clone(),
                         capture_path.clone(),
-                        meter.clone(),
+                        ctl.clone(),
                     );
                     remb_handle = spawn_remb_reader(
                         &peer,
                         remb_kbps.clone(),
                         loss_permille.clone(),
+                        ctl.clone(),
                         stop.clone(),
                     );
                     let (pc_tx, pc_rx) = mpsc::unbounded_channel();
@@ -2039,6 +2179,10 @@ async fn serve(
                     disconnected_since = None;
                     live.seal("ia.control", &monitors_event.to_string()).await;
                     live.send_level_event().await;
+                    if let Some(v) = &voice {
+                        live.seal("ia.ctrl", &voice_state(v.muted(), now_ms()).to_string())
+                            .await;
+                    }
                     if let Some(ui) = &live.ui {
                         ui.send(UiCommand::Sas(sas.clone()));
                     }
@@ -2106,6 +2250,10 @@ async fn serve(
         inc.part.abort();
     }
     live.sec.clear(); // SecChannel keys are dropped with the peer (zeroise step)
+    rec.close(&ctl, "teardown").await; // the recorder PC goes with the main peer (§9 R2)
+    if let Some(v) = voice.as_mut() {
+        v.stop(); // close the microphone / speaker streams
+    }
     let _ = peer.pc.close().await;
     match &outcome {
         LiveOutcome::Stopped => {
@@ -2181,109 +2329,6 @@ fn emit_pb_error(pb_tx: &mpsc::UnboundedSender<PbMsg>, run: &RunRequest, err: Pl
         playbook_id: run.playbook_id.clone(),
         body_hash: run.body_hash.clone(),
     });
-}
-
-/// Continuous VP8 pump for one monitor (synthetic or GDI), keyframe every second.
-#[allow(clippy::too_many_arguments)]
-async fn pump_video(
-    track: Arc<webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
-    w: u32,
-    h: u32,
-    monitor_id: u32,
-    synthetic: bool,
-    stop: Arc<tokio::sync::Notify>,
-    path: Arc<std::sync::atomic::AtomicU8>,
-    meter: Arc<VideoMeter>,
-) {
-    use webrtc::media::Sample;
-    let fps = 15u32;
-    let mut encoder = match Vp8Encoder::new(w, h, 1200, fps, 1) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!("vp8 encoder init failed: {e}");
-            return;
-        }
-    };
-    let mut capturer = CaptureSource::new(synthetic, w, h);
-    let dur = Duration::from_millis((1000 / fps) as u64);
-    let mut i = 0usize;
-    loop {
-        tokio::select! {
-            _ = stop.notified() => break,
-            _ = tokio::time::sleep(dur) => {}
-        }
-        let frame = capturer.next_frame(monitor_id);
-        path.store(
-            capturer.path(monitor_id) as u8,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        let Some(frame) = frame else {
-            continue;
-        };
-        let force_kf = i.is_multiple_of(fps as usize);
-        let t0 = Instant::now();
-        let encoded = encoder.encode(&frame, force_kf);
-        let encode_ns = t0.elapsed().as_nanos() as u64;
-        match encoded {
-            Ok(pkts) => {
-                // Measured throughput for agent.stats (contract §4.4 / F13): bytes and frames
-                // actually sent, and the capture-to-encoded latency.
-                meter.encode_ns.fetch_add(encode_ns, Ordering::Relaxed);
-                meter.encode_frames.fetch_add(1, Ordering::Relaxed);
-                meter.sent_frames.fetch_add(1, Ordering::Relaxed);
-                for pkt in pkts {
-                    meter
-                        .sent_bytes
-                        .fetch_add(pkt.data.len() as u64, Ordering::Relaxed);
-                    let _ = track
-                        .write_sample(&Sample {
-                            data: Bytes::from(pkt.data),
-                            duration: dur,
-                            ..Default::default()
-                        })
-                        .await;
-                }
-            }
-            Err(e) => tracing::debug!("encode error: {e}"),
-        }
-        i += 1;
-    }
-}
-
-/// The frame source: synthetic (e2e / loopback), or DXGI Desktop Duplication with the
-/// per-monitor GDI fallback (§4.1).
-enum CaptureSource {
-    Synthetic(SyntheticCapturer),
-    #[cfg(all(windows, feature = "winapi"))]
-    Dxgi(Box<ia_capture_win::dxgi::DxgiCapturer>),
-}
-
-impl CaptureSource {
-    fn new(synthetic: bool, w: u32, h: u32) -> Self {
-        #[cfg(all(windows, feature = "winapi"))]
-        if !synthetic {
-            return CaptureSource::Dxgi(Box::new(ia_capture_win::dxgi::DxgiCapturer::new()));
-        }
-        let _ = synthetic;
-        CaptureSource::Synthetic(SyntheticCapturer::single(w, h))
-    }
-
-    fn next_frame(&mut self, id: u32) -> Option<ia_platform::traits::Frame> {
-        match self {
-            CaptureSource::Synthetic(c) => c.next_frame(id),
-            #[cfg(all(windows, feature = "winapi"))]
-            CaptureSource::Dxgi(c) => c.next_frame(id),
-        }
-    }
-
-    /// `agent.stats.capturePath` (the synthetic source reports `gdi`, as before).
-    fn path(&self, id: u32) -> CapturePath {
-        match self {
-            CaptureSource::Synthetic(_) => CapturePath::Gdi,
-            #[cfg(all(windows, feature = "winapi"))]
-            CaptureSource::Dxgi(c) => c.path(id),
-        }
-    }
 }
 
 fn path_from_u8(v: u8) -> CapturePath {
@@ -2407,7 +2452,9 @@ mod tests {
         let interval = MeterInterval {
             sent_kbps: 1100,
             sent_fps: 15.0,
+            capture_fps: 15.0,
             encode_ms: Some(6.0),
+            rec_kbps: 0,
         };
         let decision = ia_core::abr::AbrDecision {
             target_kbps: 1500,
@@ -2415,7 +2462,8 @@ mod tests {
             floor_mode: false,
             force_keyframe: false,
         };
-        let wire = build_stats(&monitors, 1, CapturePath::Gdi, &interval, &decision).to_wire();
+        let wire =
+            build_stats(&monitors, 1, CapturePath::Gdi, &interval, &decision, false).to_wire();
         assert_eq!(wire["t"], json!("agent.stats"));
         assert_eq!(wire["encoder"], json!("vp8"));
         assert_eq!(wire["capturePath"], json!("gdi"));
@@ -2429,6 +2477,17 @@ mod tests {
         let mons = wire["monitors"].as_array().unwrap();
         assert_eq!(mons[0]["fps"].as_u64().unwrap(), 15);
         assert_eq!(mons[1]["fps"].as_u64().unwrap(), 0);
+
+        // With a recorder PC attached: recorderKbps is the measured recorder track and
+        // sentKbps sums both PCs (contract §4.4).
+        let with_rec = MeterInterval {
+            rec_kbps: 700,
+            ..interval
+        };
+        let wire =
+            build_stats(&monitors, 1, CapturePath::Gdi, &with_rec, &decision, true).to_wire();
+        assert_eq!(wire["recorderKbps"], json!(700));
+        assert_eq!(wire["sentKbps"], json!(1800));
     }
 
     #[test]

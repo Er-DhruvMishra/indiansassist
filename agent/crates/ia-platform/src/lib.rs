@@ -10,6 +10,7 @@
 pub mod protocol;
 pub mod selfdelete;
 pub mod traits;
+pub mod trust;
 
 #[cfg(all(windows, feature = "winapi"))]
 pub mod win;

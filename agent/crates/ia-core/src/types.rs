@@ -168,7 +168,7 @@ impl SecFailReason {
 }
 
 /// `AGENT_FEATURES` (contract §3.1). `input_lock`/`privacy_screen` never advertised in C;
-/// `nav` and (for now) `recorder` are Android-only.
+/// `nav` is Android-only.
 pub const AGENT_FEATURES: &[&str] = &[
     "screen",
     "multi_monitor",
@@ -186,9 +186,10 @@ pub const AGENT_FEATURES: &[&str] = &[
     "recorder",
 ];
 
-/// The Windows agent's own feature set (contract §3.1 example, minus Android `nav`). `recorder` is
-/// omitted until the agent answers `webrtc.offer { peer: 'recorder' }` (A.2 server recorder): the
-/// API assigns the P3 server recorder only to a Desk that advertises it (contract §9 amendment).
+/// The Windows agent's own feature set (contract §3.1 example, minus Android `nav`). `recorder`
+/// is advertised because the agent answers `webrtc.offer { peer: 'recorder' }` with a second
+/// PC (`ia_agent::recorder`, contract §9 R2); the API assigns the P3 server recorder only to a
+/// Desk that advertises it (§9 R6).
 pub const WINDOWS_FEATURES: &[&str] = &[
     "screen",
     "multi_monitor",
@@ -200,6 +201,7 @@ pub const WINDOWS_FEATURES: &[&str] = &[
     "voice",
     "elevation",
     "playbooks",
+    "recorder",
 ];
 
 /// The Windows feature list the agent advertises, dropping `voice` when no audio device was
@@ -391,10 +393,11 @@ mod tests {
     }
 
     #[test]
-    fn recorder_feature_not_advertised_yet() {
-        // The API would assign the P3 server recorder, which this agent does not answer yet.
+    fn recorder_feature_is_advertised() {
+        // The agent answers the server recorder's offer (§9 R2), so the API may assign one.
         assert!(AGENT_FEATURES.contains(&"recorder"));
-        assert!(!WINDOWS_FEATURES.contains(&"recorder"));
+        assert!(WINDOWS_FEATURES.contains(&"recorder"));
+        assert!(windows_features(false).iter().any(|f| f == "recorder"));
     }
 
     #[test]

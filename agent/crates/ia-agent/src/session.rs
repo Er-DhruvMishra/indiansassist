@@ -92,6 +92,31 @@ pub async fn run_signaling(
     source: TokenSource,
     budget: Duration,
 ) -> Result<SignalOutcome, String> {
+    // The cpal device probe takes ~2 s on some hosts: run it while the socket connects
+    // (`voice_available` is a once-cell, so the later call just waits for this result).
+    std::thread::spawn(crate::voice::voice_available);
+    // Contract §2.1 / C10: the token is checked locally before the first network call.
+    let keys = crate::tokencheck::compiled_keys();
+    match crate::tokencheck::local_check(token, &keys, crate::tokencheck::now_sec()) {
+        crate::tokencheck::LocalCheck::Invalid(why) => {
+            tracing::warn!(why, "This code is not valid (local check); not connecting");
+            return Ok(SignalOutcome::Rejected {
+                code: why.to_string(),
+                message: "This code is not valid".to_string(),
+            });
+        }
+        crate::tokencheck::LocalCheck::Unsigned { tier, region } => tracing::warn!(
+            %tier,
+            %region,
+            "token checked locally without a signature (no region key compiled into this build)"
+        ),
+        crate::tokencheck::LocalCheck::Verified { tier, region } => {
+            tracing::info!(%tier, %region, "token verified locally against the compiled region key")
+        }
+        crate::tokencheck::LocalCheck::ShortCode => {
+            tracing::info!("12-digit code passed the Luhn check")
+        }
+    }
     let signal_url = resolve_signal_url(cli);
     let id = AgentIdentity {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -101,9 +126,10 @@ pub async fn run_signaling(
     tracing::info!(%signal_url, "connecting to signaling");
 
     let mut client = SignalClient::connect(&signal_url, &id).await?;
-    // Voice is advertised only when an audio device is present (§6.3); the cpal duplex loop
-    // is not yet wired, so the bring-up path reports no voice device.
-    let caps = windows_capabilities(1, false, false);
+    // Voice is advertised only when a default capture and render device exist (§6.3).
+    let has_voice = crate::voice::voice_available();
+    tracing::info!(has_voice, "voice capability");
+    let caps = windows_capabilities(1, false, has_voice);
     client
         .desk_hello(&token_string(token), None, &id, source_wire(source), &caps)
         .await?;

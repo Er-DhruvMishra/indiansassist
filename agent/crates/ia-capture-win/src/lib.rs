@@ -5,6 +5,7 @@
 
 pub mod canvas;
 pub mod convert;
+pub mod scale;
 
 #[cfg(all(windows, feature = "winapi"))]
 pub mod dxgi;

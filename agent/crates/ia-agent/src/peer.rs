@@ -125,6 +125,18 @@ impl AgentPeer {
         })
     }
 
+    /// Add the Desk's Opus track (contract §6.3: one audio track at start, muted until the Desk
+    /// unmutes, so unmuting needs no renegotiation). Call before [`AgentPeer::offer`].
+    pub async fn add_audio_track(
+        &self,
+        track: Arc<TrackLocalStaticSample>,
+    ) -> Result<(), webrtc::Error> {
+        self.pc
+            .add_track(track as Arc<dyn TrackLocal + Send + Sync>)
+            .await
+            .map(|_| ())
+    }
+
     /// Create the offer, set it locally, and return the gathered (non-trickle) SDP.
     pub async fn offer(&self) -> Result<String, webrtc::Error> {
         let offer = self.pc.create_offer(None).await?;

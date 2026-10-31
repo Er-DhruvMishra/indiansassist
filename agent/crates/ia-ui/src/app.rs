@@ -28,7 +28,9 @@ use ia_core::types::{AgentConsentLevel, ElevationLevel, MonitorInfo};
 
 use crate::bridge::{human_size, ConsentRequest, FilePrompt, UiCommand, UiEvent};
 use crate::guard::Guard;
-use crate::model::{level_chip, prompt_allowed, ConsentModel, PillModel, PromptDirection};
+use crate::model::{
+    level_chip, mic_direction, mic_label, prompt_allowed, ConsentModel, PillModel, PromptDirection,
+};
 use crate::tray::{Tray, TrayAction, TrayState};
 
 /// Window titles (the Win32 layer finds the HWNDs by title within this process).
@@ -163,6 +165,9 @@ struct LiveState {
     notes: Vec<String>,
     stopping: bool,
     refusal_hint: Option<Instant>,
+    voice_available: bool,
+    mic_muted: bool,
+    technician_talking: bool,
 }
 
 impl LiveState {
@@ -188,6 +193,9 @@ impl LiveState {
             notes: Vec::new(),
             stopping: false,
             refusal_hint: None,
+            voice_available: false,
+            mic_muted: true,
+            technician_talking: false,
         }
     }
 
@@ -381,6 +389,11 @@ impl IaApp {
                     }
                 }
                 UiCommand::Toast(t) => self.live.toast = Some((t, Instant::now())),
+                UiCommand::Voice { available, muted } => {
+                    self.live.voice_available = available;
+                    self.live.mic_muted = muted;
+                }
+                UiCommand::TechnicianVoice { muted } => self.live.technician_talking = !muted,
                 UiCommand::Ended { lines } => self.enter_ended(ctx, lines),
             }
         }
@@ -589,12 +602,38 @@ impl IaApp {
         let mut toggle_panel = false;
         let mut start_drag = false;
         let mut stop = false;
+        let mut mic_clicked = false;
+        let mic = mic_label(self.live.voice_available, self.live.mic_muted);
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             let full = ui.max_rect();
             let stop_rect =
                 Rect::from_min_size(pos2(full.right() - 64.0, full.top()), vec2(64.0, PILL_H));
-            let body_rect =
-                Rect::from_min_max(full.min, pos2(stop_rect.left() - 2.0, full.bottom()));
+            let mic_rect = Rect::from_min_size(
+                pos2(
+                    stop_rect.left() - if mic.is_some() { 58.0 } else { 0.0 },
+                    full.top(),
+                ),
+                vec2(56.0, PILL_H),
+            );
+            let body_right = if mic.is_some() {
+                mic_rect.left()
+            } else {
+                stop_rect.left()
+            };
+            let body_rect = Rect::from_min_max(full.min, pos2(body_right - 2.0, full.bottom()));
+            if let Some(label) = mic {
+                let fill = if self.live.mic_muted {
+                    Color32::from_rgb(60, 66, 78)
+                } else {
+                    Color32::from_rgb(30, 130, 70)
+                };
+                let btn = egui::Button::new(RichText::new(label).size(13.0).color(Color32::WHITE))
+                    .fill(fill)
+                    .rounding(0.0);
+                if ui.put(mic_rect, btn).clicked() {
+                    mic_clicked = true;
+                }
+            }
             let body = ui.interact(body_rect, Id::new("ia-pill-body"), Sense::click_and_drag());
             if body.clicked() {
                 toggle_panel = true;
@@ -643,6 +682,9 @@ impl IaApp {
             if self.live.unread {
                 line2.push_str("   new message");
             }
+            if self.live.technician_talking {
+                line2.push_str("   technician mic on");
+            }
             painter.text(
                 pos2(x, body_rect.top() + 31.0),
                 Align2::LEFT_CENTER,
@@ -682,6 +724,17 @@ impl IaApp {
             // Safe direction: never gated.
             self.live.stopping = true;
             self.emit(UiEvent::Stop);
+        }
+        if mic_clicked {
+            // Unmuting is a grant (physical press only); muting is always honoured (§3.5, §6.3).
+            let unmute = self.live.mic_muted;
+            let ok = match mic_direction(unmute) {
+                PromptDirection::Safe => true,
+                PromptDirection::Grant => self.grant(),
+            };
+            if ok {
+                self.emit(UiEvent::Mic(unmute));
+            }
         }
         if toggle_panel {
             self.panel_open = !self.panel_open;
@@ -1122,6 +1175,8 @@ impl IaApp {
                 self.emit(UiEvent::Stop);
             }
             "revoke" => self.emit(UiEvent::Revoke),
+            "mic on" => self.emit(UiEvent::Mic(true)),
+            "mic off" => self.emit(UiEvent::Mic(false)),
             _ => {}
         }
     }

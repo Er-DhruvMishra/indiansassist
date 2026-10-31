@@ -32,6 +32,11 @@ fn wide(s: &str) -> Vec<u16> {
 /// so only `%SystemRoot%\System32` is searched, never the exe's directory.
 pub struct SysLib(HMODULE);
 
+// SAFETY: a module handle is a process-wide value; LoadLibrary / GetProcAddress / FreeLibrary
+// are thread-safe, so the handle may be shared and moved across threads.
+unsafe impl Send for SysLib {}
+unsafe impl Sync for SysLib {}
+
 /// `sys_lib(name)` — load a non-KnownDLL system library from System32 and resolve procs.
 pub fn sys_lib(name: &str) -> io::Result<SysLib> {
     let wname = wide(name);

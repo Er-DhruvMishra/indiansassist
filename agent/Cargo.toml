@@ -79,6 +79,11 @@ ia-input-win = { path = "crates/ia-input-win" }
 ia-capture-win = { path = "crates/ia-capture-win" }
 ia-ui = { path = "crates/ia-ui" }
 
+# The ladder downscale and the BGRA->I420 converter are per-pixel loops: optimise them in dev /
+# test builds too, so the pump (and its loopback tests) run near real time without `--release`.
+[profile.dev.package.ia-capture-win]
+opt-level = 3
+
 [profile.release]
 strip = true
 panic = "abort"

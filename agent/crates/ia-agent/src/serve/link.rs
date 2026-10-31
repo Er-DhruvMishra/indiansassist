@@ -23,6 +23,7 @@ pub(super) async fn negotiate(
     session_id: &str,
     gen: u16,
     restart: bool,
+    recorder_stash: &mut Vec<Value>,
 ) -> NegotiateOutcome {
     let offer = match peer.offer().await {
         Ok(o) => o,
@@ -62,6 +63,12 @@ pub(super) async fn negotiate(
             _ = tokio::time::sleep(Duration::from_millis(50)), if answered => {}
             msg = ws_rx.recv() => {
                 let Some(v) = msg else { return NegotiateOutcome::Ended; };
+                // Recorder-leg frames are never applied to the Assist PC; the serve loop
+                // replays them (contract §9 R2).
+                if crate::recorder::is_recorder_frame(&v) {
+                    recorder_stash.push(v);
+                    continue;
+                }
                 match v.get("t").and_then(|t| t.as_str()) {
                     Some("webrtc.answer") if !answered => {
                         tracing::info!("webrtc.answer received; applying");
@@ -116,6 +123,16 @@ pub(super) fn open_sec_set(
     Ok(sec)
 }
 
+/// Forward the Assist's audio track (if it sends one) to the serve loop for playback (§6.3).
+pub(super) fn wire_remote_audio(peer: &AgentPeer, tx: mpsc::UnboundedSender<Arc<TrackRemote>>) {
+    peer.pc.on_track(Box::new(move |track, _recv, _trans| {
+        if track.kind() == webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio {
+            let _ = tx.send(track);
+        }
+        Box::pin(async {})
+    }));
+}
+
 /// Register the PeerConnection state-change handler, forwarding each state to the serve loop.
 pub(super) fn wire_pc_state(peer: &AgentPeer, tx: mpsc::UnboundedSender<RTCPeerConnectionState>) {
     peer.pc
@@ -152,6 +169,9 @@ pub(super) async fn rebuild_generation(
     monitor_ids: &[u32],
     in_tx: &mpsc::UnboundedSender<Inbound>,
     fail_tx: &mpsc::UnboundedSender<(u16, SecFailReason)>,
+    recorder_stash: &mut Vec<Value>,
+    audio: Option<Arc<TrackLocalStaticSample>>,
+    remote_audio: &mpsc::UnboundedSender<Arc<TrackRemote>>,
 ) -> Result<Generation, RebuildErr> {
     let peer = AgentPeer::new(
         PeerRole::Desk,
@@ -161,14 +181,21 @@ pub(super) async fn rebuild_generation(
     )
     .await
     .map_err(|_| RebuildErr::SecFail(SecFailReason::Timeout))?;
+    if let Some(t) = audio {
+        peer.add_audio_track(t)
+            .await
+            .map_err(|_| RebuildErr::SecFail(SecFailReason::Timeout))?;
+    }
+    wire_remote_audio(&peer, remote_audio.clone());
     let chans = wire_channels(&peer, gen, in_tx, fail_tx)
         .await
         .map_err(|_| RebuildErr::SecFail(SecFailReason::Timeout))?;
-    let (own_fpr, remote_fpr) = match negotiate(&peer, ws, ws_rx, session_id, gen, true).await {
-        NegotiateOutcome::Fingerprints(f) => f,
-        NegotiateOutcome::Ended => return Err(RebuildErr::Ended),
-        NegotiateOutcome::NoAnswer => return Err(RebuildErr::SecFail(SecFailReason::Timeout)),
-    };
+    let (own_fpr, remote_fpr) =
+        match negotiate(&peer, ws, ws_rx, session_id, gen, true, recorder_stash).await {
+            NegotiateOutcome::Fingerprints(f) => f,
+            NegotiateOutcome::Ended => return Err(RebuildErr::Ended),
+            NegotiateOutcome::NoAnswer => return Err(RebuildErr::SecFail(SecFailReason::Timeout)),
+        };
     let sec_dc = await_channel(&peer, "ia.sec")
         .await
         .ok_or(RebuildErr::SecFail(SecFailReason::Timeout))?;

@@ -20,6 +20,9 @@ fn main() {
     // load, restrict the loader to System32 and clear the DLL directory so a planted DLL in
     // the exe's folder (Downloads) cannot be side-loaded. Must be the first statement.
     harden_dll_search();
+    // Physical-pixel monitor geometry before anything enumerates monitors or opens a window.
+    #[cfg(all(windows, feature = "winapi"))]
+    ia_capture_win::enumerate::ensure_per_monitor_dpi_awareness();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -74,6 +77,26 @@ fn harden_dll_search() {
 #[cfg(not(windows))]
 fn harden_dll_search() {}
 
+/// The startup `WinVerifyTrust` self-check (contract §11.3 / §14, C10). The user instance only
+/// logs the verdict (every local / dev build is unsigned); the elevated hand-over child is
+/// where an untrusted image becomes fatal (§7.3 step 4).
+#[cfg(all(feature = "media", windows, feature = "winapi"))]
+fn self_trust_check() {
+    let verdict = ia_platform::trust::verify_self();
+    match verdict {
+        ia_platform::trust::TrustVerdict::Trusted => {
+            tracing::info!("self-check: the executable's Authenticode signature is valid")
+        }
+        other => tracing::warn!(
+            verdict = other.as_str(),
+            "self-check: the executable is not validly signed (log-only in the user instance)"
+        ),
+    }
+}
+
+#[cfg(all(feature = "media", not(all(windows, feature = "winapi"))))]
+fn self_trust_check() {}
+
 #[cfg(feature = "media")]
 fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
     use std::time::Duration;
@@ -83,6 +106,8 @@ fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init();
+
+    self_trust_check();
 
     let Some(r) = resolved else {
         // No token: a release build would open the connect window here. Nothing to do

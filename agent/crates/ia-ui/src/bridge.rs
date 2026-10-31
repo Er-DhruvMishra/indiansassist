@@ -89,6 +89,16 @@ pub enum UiCommand {
     },
     /// A short pill toast (e.g. "Copied text was shared with <technician>", §5.6 C1).
     Toast(String),
+    /// The Desk microphone (contract §6.3): `available` = a capture + render device exists (the
+    /// pill shows the mic button only then); `muted` = the live state (default muted, A D8).
+    Voice {
+        available: bool,
+        muted: bool,
+    },
+    /// The technician's `voice.state` (shown on the pill: "Technician is talking").
+    TechnicianVoice {
+        muted: bool,
+    },
     /// The session ended; show the receipt lines, then close.
     Ended {
         lines: Vec<String>,
@@ -117,6 +127,9 @@ pub enum UiEvent {
         allow: bool,
     },
     ChatSend(String),
+    /// The pill microphone button: `true` = unmute (grant direction, needs a physical press),
+    /// `false` = mute (safe direction, never gated).
+    Mic(bool),
     /// The UI could not start (no display, window creation failed): treated as Decline.
     Failed(String),
     /// The UI window is gone.
