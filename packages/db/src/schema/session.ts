@@ -69,6 +69,9 @@ export const session = pgTable(
     handoverHash: char('handover_hash', { length: 64 }),
     handoverOpid: text('handover_opid'),
     handoverExpiresAt: tstz('handover_expires_at'),
+    // Phase C section 8.3 (F6): the manifest hashes pinned at the first `session.created` (playbook id -> body hash),
+    // written once by ensureAgentManifest so the `playbook_changed` check works on any node, not just the owner.
+    playbookPins: jsonb('playbook_pins').$type<Record<string, string>>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

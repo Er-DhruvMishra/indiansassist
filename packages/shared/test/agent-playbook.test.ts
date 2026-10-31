@@ -34,6 +34,24 @@ describe('playbook params', () => {
     expect(playbookParamSchema.safeParse({ name: 'x', label: 'X', type: 'int', required: true, pattern: '.*' }).success).toBe(false);
     expect(playbookParamSchema.safeParse({ name: 'X', label: 'X', type: 'bool', required: true }).success).toBe(false);
     expect(playbookParamSchema.safeParse({ name: 'x', label: 'X', type: 'string', required: true, pattern: '(?=a)a' }).success).toBe(false);
+    // ReDoS: nested-quantifier patterns are rejected at create time; safe single-level quantifiers are accepted.
+    for (const pat of ['(a+)+', '(a*)*', '(?:\\d+)+$', '(a+){3}', '([a-z]+)*']) {
+      expect(playbookParamSchema.safeParse({ name: 'x', label: 'X', type: 'string', required: true, pattern: pat }).success, pat).toBe(false);
+    }
+    for (const pat of ['[a-z0-9.-]{1,64}', '.{1,300}', '\\d+', '(abc)+', '(?:ab|cd)+']) {
+      expect(playbookParamSchema.safeParse({ name: 'x', label: 'X', type: 'string', required: true, pattern: pat }).success, pat).toBe(true);
+    }
+  });
+
+  it('a catastrophic pattern is rejected in bounded time rather than matched (ReDoS, section 8.4)', () => {
+    const p: PlaybookParam[] = [{ name: 's', label: 'S', type: 'string', required: true, pattern: '(a+)+$' }];
+    const value = `${'a'.repeat(3000)}!`; // the classic catastrophic-backtracking trigger against `(a+)+$`
+    const t0 = performance.now();
+    const r = validatePlaybookArgs(p, { s: value }, 'powershell');
+    const elapsed = performance.now() - t0;
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('pattern is not allowed');
+    expect(elapsed).toBeLessThan(100); // never enters V8's backtracking match loop
   });
 
   it('create body: unique param names, body size, timeout range', () => {

@@ -14,6 +14,7 @@ import {
   getPlaybookScoped,
   getSession,
   insertHandover,
+  pinSessionPlaybooks,
   insertPlaybook,
   insertPlaybookRun,
   listExpiredHandoverSessions,
@@ -92,6 +93,18 @@ describe('phase C schema', () => {
     expect((await clearSessionHandover(db, s.id, 'a'.repeat(64)))?.handoverHash).toBeNull();
     expect((await listExpiredHandoverSessions(db)).map((r) => r.id)).not.toContain(s.id);
     expect(await countAgentSessionsSince(db, a.org.id, new Date(Date.now() - 86400_000))).toBeGreaterThanOrEqual(1);
+  });
+
+  it('playbook pins are written once per session (F6)', async () => {
+    const tok = await seedToken(db, a.org, a.user, { tier: 'p3_portable' });
+    const s = await seedSession(db, tok);
+    expect((await getSession(db, s.id))!.playbookPins).toBeNull();
+    const first = { p1: 'a'.repeat(64), p2: 'b'.repeat(64) };
+    expect(await pinSessionPlaybooks(db, s.id, first)).toEqual(first);
+    expect((await getSession(db, s.id))!.playbookPins).toEqual(first);
+    // Write-once: a later call keeps the original pins and returns them.
+    expect(await pinSessionPlaybooks(db, s.id, { p3: 'c'.repeat(64) })).toEqual(first);
+    expect((await getSession(db, s.id))!.playbookPins).toEqual(first);
   });
 
   it('hand-over log: settle once, counts; playbook runs complete once', async () => {

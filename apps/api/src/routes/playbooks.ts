@@ -160,15 +160,18 @@ export async function playbookRoutes(app: FastifyInstance, ctx: AppContext): Pro
     requireSessionAssist(p, session);
     const body = parseOr400(playbookRunRequestSchema, req.body);
     if (session.tier !== 'p3_portable' || session.state !== 'active') fail('bad_state', 'playbooks run in an active P3 session');
+    // C12: rate-limit before the DB load and the (regex) validation, so one request cannot stall the node first.
+    const lim = await ctx.limiter.hit(`playbook-run:${session.id}`, 10, 60_000);
+    if (!lim.allowed) fail('rate_limited', 'too many playbook runs', { retryAfterSec: lim.retryAfterSec });
     const pb = await getPlaybookScoped(ctx.db, req.params.playbookId, session.orgId);
     if (!pb) fail('not_found', 'playbook not found');
     if (!pb.enabled) fail('playbook_disabled', 'this playbook is disabled');
-    const pinned = ctx.hub.live.get(session.id)?.manifest?.hashes.get(pb.id);
+    // F6: the pinned hashes are persisted on the session (ensureAgentManifest), so the check holds on any node; the
+    // owner node's live manifest is an equivalent fallback for the moment before the pin row is observed.
+    const pinned = session.playbookPins?.[pb.id] ?? ctx.hub.live.get(session.id)?.manifest?.hashes.get(pb.id);
     if (pinned !== pb.bodySha256)
       fail('playbook_changed', 'this playbook was edited during the session; it cannot run until the session is restarted');
     if (pb.requiresElevation && session.consentLevel !== 'elevated') fail('elevation_required', 'request elevation first');
-    const lim = await ctx.limiter.hit(`playbook-run:${session.id}`, 10, 60_000);
-    if (!lim.allowed) fail('rate_limited', 'too many playbook runs', { retryAfterSec: lim.retryAfterSec });
     const params = (Array.isArray(pb.parameters) ? pb.parameters : []) as PlaybookParam[];
     const args = validatePlaybookArgs(params, body.args, pb.interpreter);
     if (!args.ok) fail('validation_failed', `${args.param ?? 'args'}: ${args.error}`, { param: args.param ?? null });

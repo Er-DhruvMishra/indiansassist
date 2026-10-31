@@ -145,6 +145,26 @@ describe('hand-over hello', () => {
     expect([x.reply, y.reply].filter((r) => r !== null)).toHaveLength(1);
   });
 
+  it('two identical hellos: exactly one elevation.granted, no spurious elevation.failed, the winner keeps the session (C10/F10)', async () => {
+    kit = new P3Kit(t, url);
+    const a = await kit.active(admin);
+    const h = await mint(a);
+    const [x, y] = await Promise.all([adminHello(a.compact, h), adminHello(a.compact, h)]);
+    const winner = [x, y].find((r) => r.reply !== null)!;
+    const loser = [x, y].find((r) => r.reply === null)!;
+    expect(winner).toBeDefined();
+    expect(loser).toBeDefined();
+    const entries = await listAuditBySession(t.db, a.sessionId);
+    // The loser of the atomic consume wrote nothing: exactly one grant, no stray handover_rejected.
+    expect(entries.filter((e) => e.action === 'elevation.granted')).toHaveLength(1);
+    expect(await failures(a.sessionId)).toEqual([]);
+    // The winner holds the now-elevated session; its hand-over fields are cleared.
+    expect(winner.reply!.resume).toMatchObject({ sessionId: a.sessionId, state: 'active' });
+    const s = (await getSession(t.db, a.sessionId))!;
+    expect([s.elevation, s.consentLevel, s.handoverHash, s.handoverOpid]).toEqual(['admin', 'elevated', null, null]);
+    expect(await loser.d.closed()).toBe(4403);
+  });
+
   it('desk.elevation without the elevation feature is bad_state', async () => {
     kit = new P3Kit(t, url);
     const { compact } = await p3Token(t, admin, 'timed');

@@ -213,6 +213,21 @@ export async function updateSession(exec: Executor, id: string, patch: SessionPa
   return row;
 }
 
+/**
+ * Pins the P3 playbook manifest hashes (playbook id -> body hash) on a session, write-once (only when still null), so
+ * the `playbook_changed` run check reads them from the row on any node (Phase C section 8.3, F6). Returns the stored
+ * pins: the ones just written, or the ones a concurrent writer already set.
+ */
+export async function pinSessionPlaybooks(exec: Executor, id: string, pins: Record<string, string>): Promise<Record<string, string> | null> {
+  const rows = await exec
+    .update(session)
+    .set({ playbookPins: pins })
+    .where(and(eq(session.id, id), sql`${session.playbookPins} is null`))
+    .returning({ pins: session.playbookPins });
+  if (rows[0]) return rows[0].pins ?? null;
+  return (await getSession(exec, id))?.playbookPins ?? null;
+}
+
 /** Sets `server_recording` once (Phase A.2 section 6); true only for the first call. */
 export async function markServerRecording(exec: Executor, id: string): Promise<boolean> {
   const rows = await exec

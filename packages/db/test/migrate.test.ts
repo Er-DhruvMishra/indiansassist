@@ -137,10 +137,10 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(6);
+    expect(rows[0]!.n).toBe(7);
   });
 
-  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder and Phase C migrations', () => {
+  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C and playbook-pins migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
@@ -151,6 +151,7 @@ describe('migrations', () => {
       '0003_phase_b',
       '0004_recorder',
       '0005_phase_c',
+      '0006_playbook_pins',
     ]);
   });
 

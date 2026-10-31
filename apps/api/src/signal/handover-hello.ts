@@ -37,17 +37,34 @@ const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
 type ClientLike = { kind?: string; os?: string; platform?: { arch?: string }; capabilities?: { elevation?: string; features?: string[] } } | null;
 
-/** Any failure of (1)-(5): `error forbidden` + close 4403, chained `elevation.failed { handover_rejected }`. */
-async function reject(hub: SignalHub, conn: Conn, reId: string | undefined, why: string, s?: SessionRow | null, org?: OrgRow | null, entry?: HandoverEntry | null, hash?: string): Promise<void> {
+/**
+ * Any failure of (1)-(5): `error forbidden` + close 4403. Only a hello that actually consumed the token (`settle`)
+ * settles the row and chains `elevation.failed { handover_rejected }`, and only under a fresh row lock that still
+ * names this `hash` and leaves `settleHandover` succeeding (i.e. unclaimed). A hello that LOST the atomic consume
+ * passes `settle = false` and writes nothing, so it can never settle the winner's claim, wipe the live hand-over or
+ * fail the winner's transaction (C10/F10); a late / superseded / expired value likewise touches nothing (the sweeper
+ * owns `handover_expired`).
+ */
+async function reject(
+  hub: SignalHub,
+  conn: Conn,
+  reId: string | undefined,
+  why: string,
+  s?: SessionRow | null,
+  org?: OrgRow | null,
+  entry?: HandoverEntry | null,
+  hash?: string,
+  settle = false,
+): Promise<void> {
   const { ctx } = hub;
   ctx.log.warn({ connectionId: conn.id, sessionId: s?.id, why }, 'hand-over refused');
   const opId = s?.handoverOpid ?? entry?.opId ?? null;
-  if (s && org && opId && /^[0-9a-f]{16}$/.test(opId)) {
+  if (settle && s && org && hash && opId && /^[0-9a-f]{16}$/.test(opId)) {
     await ctx.db.transaction(async (tx) => {
-      if (hash) {
-        await settleHandover(tx, hash, 'rejected');
-        await clearSessionHandover(tx, s.id, hash);
-      }
+      const locked = await lockSession(tx, s.id);
+      if (!locked || locked.handoverHash !== hash) return; // a concurrent claim / supersede / clear won: leave it
+      if (!(await settleHandover(tx, hash, 'rejected'))) return; // already claimed or settled
+      await clearSessionHandover(tx, s.id, hash);
       await writeAudit(ctx, tx, org, { sessionId: s.id, actor: systemActor, action: 'elevation.failed', data: { opId, error: 'handover_rejected' } });
     });
   }
@@ -81,7 +98,7 @@ export async function handoverHello(hub: SignalHub, conn: Conn, msg: SignalOf<'d
     entry.expiresAt > Date.now() &&
     s.handoverHash === hash &&
     s.handoverOpid === entry.opId;
-  if (!fieldsOk) return reject(hub, conn, msg.id, 'hand-over entry does not match', s, v.org, entry, hash); // (3)
+  if (!fieldsOk) return reject(hub, conn, msg.id, 'hand-over entry does not match', s, v.org, entry, hash, true); // (3)
   const client = (msg.client ?? null) as ClientLike;
   const original = (s.deskClient ?? null) as ClientLike;
   const clientOk =
@@ -91,8 +108,8 @@ export async function handoverHello(hub: SignalHub, conn: Conn, msg: SignalOf<'d
     client.platform?.arch !== undefined &&
     client.platform.arch === original?.platform?.arch &&
     (original?.capabilities?.features ?? []).includes('elevation');
-  if (!clientOk) return reject(hub, conn, msg.id, 'hand-over client mismatch', s, v.org, entry, hash); // (4)
-  if (s.state !== 'active') return reject(hub, conn, msg.id, 'session not active', s, v.org, entry, hash); // (5)
+  if (!clientOk) return reject(hub, conn, msg.id, 'hand-over client mismatch', s, v.org, entry, hash, true); // (4)
+  if (s.state !== 'active') return reject(hub, conn, msg.id, 'session not active', s, v.org, entry, hash, true); // (5)
   // (6) a session owned by another live node completes there.
   if (await hub.bridge.forwardDeskHandover(conn, v, s, entry.opId, hash, msg.id)) return;
   return completeHandover(hub, conn, { token: tok, org: v.org, session: s }, entry.opId, hash, msg.id);
@@ -145,7 +162,7 @@ export async function completeHandover(
   } catch {
     if (live.deskConnId === conn.id) live.deskConnId = hub.conn(previousConnId) ? previousConnId : null;
     if (live.deskConnId === null && live.state !== 'ended') startDeskGrace(hub, live);
-    return reject(hub, conn, reId, 'session changed during the hand-over', s0, t.org, null, hash);
+    return reject(hub, conn, reId, 'session changed during the hand-over', s0, t.org, null, hash, true);
   }
   const s = (await getSession(ctx.db, s0.id))!;
   ensureLive(hub, s);

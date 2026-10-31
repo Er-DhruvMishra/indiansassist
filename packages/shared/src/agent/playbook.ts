@@ -27,10 +27,89 @@ const C0_RE = /[\u0000-\u001f\u007f]/;
 const STRING_VALUE_MAX = 4000;
 const POWERSHELL_VALUE_MAX = 4096;
 
-/** A pattern the server accepts: compiles, <= 200 chars, and stays inside the RE2 subset (no lookaround, no backrefs). */
+/** A `{n}` / `{n,}` / `{n,m}` quantifier at `s[i]` (i points at `{`): its maximum repeat, or null when `s[i]` is not one. */
+function braceQuantMax(s: string, i: number): number | null {
+  const m = /^\{(\d+)(,(\d*))?\}/.exec(s.slice(i));
+  if (!m) return null;
+  if (m[2] === undefined) return Number(m[1]); // {n}
+  if (m[3] === undefined || m[3] === '') return Number.POSITIVE_INFINITY; // {n,}
+  return Number(m[3]); // {n,m}
+}
+
+/** True when `s[i]` begins a quantifier that can repeat its atom two or more times (`*`, `+`, `{>=2}`). */
+function repeatsTwiceOrMore(s: string, i: number): boolean {
+  const c = s[i];
+  if (c === '*' || c === '+') return true;
+  if (c === '{') {
+    const hi = braceQuantMax(s, i);
+    return hi !== null && hi >= 2;
+  }
+  return false;
+}
+
+/** True when `s` holds an unbounded quantifier (`*`, `+`, `{n,}`) outside a character class or an escape. */
+function hasUnboundedQuant(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === '[') {
+      i++;
+      while (i < s.length && s[i] !== ']') {
+        if (s[i] === '\\') i++;
+        i++;
+      }
+      continue;
+    }
+    if (c === '*' || c === '+') return true;
+    if (c === '{' && braceQuantMax(s, i) === Number.POSITIVE_INFINITY) return true;
+  }
+  return false;
+}
+
+/**
+ * Heuristic for catastrophic backtracking (ReDoS): a repeated group whose body can itself repeat unboundedly, e.g.
+ * `(a+)+`, `(a*)*`, `(?:\d+)+`. V8's backtracking engine stalls the shared event loop on such a pattern against a long
+ * value, so the server rejects it at create / patch and at run time (the length cap bounds the rest). The check skips
+ * escapes and character classes and only needs the catastrophic nesting, not a full parse.
+ */
+export function hasNestedQuantifier(p: string): boolean {
+  const open: number[] = [];
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === '[') {
+      i++;
+      while (i < p.length && p[i] !== ']') {
+        if (p[i] === '\\') i++;
+        i++;
+      }
+      continue;
+    }
+    if (c === '(') open.push(i);
+    else if (c === ')') {
+      const start = open.pop();
+      if (start === undefined) continue;
+      if (repeatsTwiceOrMore(p, i + 1) && hasUnboundedQuant(p.slice(start + 1, i))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A pattern the server accepts: compiles, <= 200 chars, stays inside the RE2 subset (no lookaround, no backrefs) and
+ * carries no nested-quantifier ReDoS (section 8.4). Compiling (bounded, <= 200 chars) is safe; matching an attacker's
+ * value is the hazard, so callers gate the match on this check.
+ */
 export function isSafePattern(p: string): boolean {
   if (p.length === 0 || p.length > 200) return false;
   if (/\(\?[=!<]|\\[1-9]|\\k</.test(p)) return false;
+  if (hasNestedQuantifier(p)) return false;
   try {
     new RegExp(`^(?:${p})$`, 'u');
     return true;
@@ -266,7 +345,11 @@ export function validatePlaybookArgs(
         const err = checkString(s, interpreter);
         if (err) return bad(err);
         if (p.type === 'enum' && !p.enum.includes(s)) return bad('not one of the allowed values');
-        if (p.type === 'string' && !new RegExp(`^(?:${p.pattern})$`, 'u').test(s)) return bad('does not match the pattern');
+        if (p.type === 'string') {
+          // Never run a rejected (e.g. nested-quantifier) pattern against the value: that is the ReDoS hazard.
+          if (!isSafePattern(p.pattern)) return bad('pattern is not allowed');
+          if (!new RegExp(`^(?:${p.pattern})$`, 'u').test(s)) return bad('does not match the pattern');
+        }
         out[p.name] = s;
         break;
       }

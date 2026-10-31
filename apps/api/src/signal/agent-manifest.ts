@@ -5,7 +5,7 @@
  * and the run endpoint refuses a body whose hash differs from the pinned one (`409 playbook_changed`).
  */
 import { LIMITS, utf8Encode, type PlaybookManifest } from '@indiansassist/shared';
-import { listManifestPlaybooks, type SessionRow } from '@indiansassist/db';
+import { listManifestPlaybooks, pinSessionPlaybooks, type SessionRow } from '@indiansassist/db';
 import type { Live, LiveManifest } from './conn.js';
 import type { SignalHub } from './hub.js';
 
@@ -56,9 +56,14 @@ function toEntry(r: {
   };
 }
 
-/** Loads `live.manifest` once for a P3 session (no-op for other tiers or when already pinned). */
+/**
+ * Loads `live.manifest` once for a P3 session (no-op for other tiers or when already pinned) and persists the pinned
+ * hashes on the session row, write-once, so the `playbook_changed` run check works on any node and not only this
+ * owner (section 8.3, F6).
+ */
 export async function ensureAgentManifest(hub: SignalHub, live: Live, s: SessionRow): Promise<void> {
   if (s.tier !== 'p3_portable' || live.manifest) return;
   const rows = await listManifestPlaybooks(hub.ctx.db, s.orgId, interpretersOf(s), LIMITS.playbookCatalogueMax + 1);
   live.manifest ??= buildManifest(rows);
+  if (s.playbookPins === null) await pinSessionPlaybooks(hub.ctx.db, s.id, Object.fromEntries(live.manifest.hashes));
 }

@@ -43,6 +43,13 @@
       "when": 1793382752027,
       "tag": "0005_phase_c",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793433603590,
+      "tag": "0006_playbook_pins",
+      "breakpoints": true
     }
   ]
 }
