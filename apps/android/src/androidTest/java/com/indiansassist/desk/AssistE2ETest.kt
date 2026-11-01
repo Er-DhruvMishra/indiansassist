@@ -233,8 +233,13 @@ class AssistE2ETest {
 
     private fun screenTexts(): String = device.findObjects(By.textStartsWith("")).mapNotNull { it.text?.takeIf { t -> t.isNotBlank() } }.take(40).joinToString(" | ")
 
+    /**
+     * Values are percent-encoded (`Uri.encode`), which is lossless: a space becomes `%20` and an underscore stays an
+     * underscore. The runner decodes with `decodeURIComponent`. The earlier space-to-underscore scheme could not be
+     * reversed, so a wire value such as `desk_stopped` reached the runner as "desk stopped".
+     */
     private fun step(name: String, vararg kv: Pair<String, String>) {
-        Log.i(TAG, "step=$name" + kv.joinToString("") { " ${it.first}=${it.second.replace(' ', '_')}" })
+        Log.i(TAG, "step=$name" + kv.joinToString("") { " ${it.first}=${Uri.encode(it.second)}" })
     }
 
     private fun check(cond: Boolean, code: String, message: String) {

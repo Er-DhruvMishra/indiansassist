@@ -165,7 +165,14 @@ class LogWatch {
     const step = /IA_E2E\s*\(\s*\d+\):\s+step=(\S+)(.*)$/.exec(line);
     if (step) {
       const kv = {};
-      for (const m of step[2].matchAll(/(\w+)=(\S*)/g)) kv[m[1]] = m[2].replace(/_/g, ' ');
+      // Values arrive percent-encoded (AssistE2ETest.step uses Uri.encode), so underscores in wire values survive.
+      for (const m of step[2].matchAll(/(\w+)=(\S*)/g)) {
+        try {
+          kv[m[1]] = decodeURIComponent(m[2]);
+        } catch {
+          kv[m[1]] = m[2];
+        }
+      }
       this.steps.set(step[1], kv);
       log(`device: ${step[1]}${step[2]}`);
     }
