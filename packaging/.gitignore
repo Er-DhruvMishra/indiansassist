@@ -1,0 +1,3 @@
+# Build outputs of packaging/windows/build.mjs and the custom-action crate
+windows/out/
+windows/ca/target/

@@ -1,7 +1,7 @@
 # Signed-release process
 
 How the shippable artifacts of IndiansAssist are built, signed and published: the **Windows portable agent** (`agent/`,
-Phase C) and the **self-hosted server images** (`apps/api`, `apps/web`, `services/recorder`). This document describes the
+Phase C), the **installed agent MSI** (`packaging/windows/`, Phase D, section 1.6) and the **self-hosted server images** (`apps/api`, `apps/web`, `services/recorder`). This document describes the
 CI steps; it does not implement them. It is the companion to the Phase C contract
 (`docs/specs/phase-c-contracts.md`, sections 2.2, 2.6, 7, 11.3, 15.5) and to `infra/HARDENING.md`.
 
@@ -114,6 +114,51 @@ short-lived single-use-ish grant and a per-download **desk code**; `GET /api/v1/
 - A downloader can verify a file against the `sha256` in `manifest.json` and against the "Signed by IndiansAssist" / unsigned
   line the join page prints from `manifest.signed`.
 
+### 1.6 Phase D installed agent MSI (contracts `docs/specs/phase-d-contracts.md` sections 11.3, 12)
+
+The installed agent ships as one signed MSI per architecture (`x64`, `arm64`), built with **WiX Toolset v5**. WiX runs as a
+.NET global tool (`dotnet tool install --global wix --version 5.0.2`). It is MS-RL and a build tool only, never shipped; see
+`docs/LICENSE-REGISTER.md`. The authoring and the scripts live in `packaging/windows/`; `packaging/README.md` covers what
+the package does and the GPO, Intune and MST deployment paths.
+
+CI order (the install manifest and the MSI must cover **signed** bytes):
+
+1. `cargo build --release --locked --target <triple>` for `ia-service`, `ia-desktop` (the C agent with the section 4.3
+   seams, renamed) and `ia-watchdog`, on both `-msvc` triples. Run the section 1.2 import-table and size gates on each exe.
+   C section 10 self-delete is disabled in the P4 build.
+2. Authenticode SHA-256 + timestamp on all three exes, with the same identity as section 1.3 (`IA_EXPECTED_SIGNER`
+   compiled in).
+3. Build the MSI from the signed exes:
+   `node packaging/windows/build.mjs --arch <x64|arm64> --service <ia-service.exe> --desktop <ia-desktop.exe> --watchdog <ia-watchdog.exe>`
+   (`pnpm packaging:msi` finds them under `agent/target/<triple>/release/` by default). The script:
+   - builds the custom-action DLL (`packaging/windows/ca`, static CRT, `cargo build --release --locked`);
+   - writes `manifest.json` (sha256 per signed exe; the watchdog compares against it, section 10.1);
+   - runs `wix build` and then **`wix msi validate`** (the full ICE suite; any ICE error fails the build);
+   - records `build-info.json`.
+4. Authenticode-sign the MSI (`signtool sign /fd SHA256 /tr <rfc3161> /td SHA256 ...`, or `AzureSignTool`), then
+   `signtool verify /pa` it. Publish the MSI and its sha256 to `AGENT_MSI_DIST_DIR` on the region's api nodes. From there
+   the tokens page serves the branded download (section 13.4).
+5. The org transform is created per enrollment config: by the api for the tokens page, or by an admin with
+   `packaging/windows/tools/New-EnrollTransform.ps1`. It is not signed. It only sets Property rows (`IA_ENROLL`,
+   branding) and the ARP icon, and the enroll config it carries is itself region-signed (section 12.3).
+
+**Manual check before a release (Windows Sandbox or a throwaway VM, never a developer machine):**
+
+- `msiexec /i <msi> IA_ENROLL=<dev config> /l*v install.log`. Confirm:
+  - both services run as `LocalSystem`;
+  - the "IndiansAssist Watchdog" task exists;
+  - `enroll.iaconfig` is readable only by `SYSTEM`/`Administrators` (`icacls`) and is gone after the first service
+    start;
+  - `%ProgramData%\IndiansAssist` has the protected ACL and the system mandatory label;
+  - `install.log` never contains the `IA_ENROLL` value.
+- Repeat with the MST (`TRANSFORMS=`). The product name and ARP entry show the org.
+- Upgrade over the previous MSI. The device identity, keys and `config.json` survive and the device stays online.
+- `msiexec /x`. The fleet shows the device "Uninstalled" (`deregistered`). `%ProgramData%\IndiansAssist`, the task and
+  `HKLM\SOFTWARE\IndiansAssist\Device` are gone.
+
+Until the `ia-service` crate exists, `pnpm packaging:msi:placeholder` stands the Phase C agent in for the three exes. It
+validates the authoring only. The result is named `...-placeholder.msi` and refuses to install (launch condition).
+
 ---
 
 ## 2. Self-hosted server releases
@@ -160,6 +205,10 @@ Before cutting a server release the full gate set must be green:
 **Windows agent:** `cargo build --release --locked` (both `-msvc`) → import-table gate → size `<= 25 MiB` → no stray DLL →
 Authenticode + timestamp (`IA_EXPECTED_SIGNER`) → `WinVerifyTrust` self-check verified → lay out `AGENT_DIST_DIR` →
 `node scripts/agent-manifest.mjs` (mark signed) → deploy to region nodes → set `AGENT_MIN_VERSION`.
+
+**Installed agent MSI (Phase D):** release build of `ia-service`/`ia-desktop`/`ia-watchdog` (both `-msvc`) → gates →
+Authenticode on all three → `node packaging/windows/build.mjs` (wix build + ICE validation, manifest of signed hashes) →
+sign + verify the MSI → publish to `AGENT_MSI_DIST_DIR` → sandbox install/upgrade/uninstall check (section 1.6).
 
 **Server:** build reproducible images → SBOM + `SHA256SUMS` → `cosign` sign → run the section 2.3 gates →
 publish digests + signatures → self-hoster `cosign verify` and pins `IA_VERSION`.

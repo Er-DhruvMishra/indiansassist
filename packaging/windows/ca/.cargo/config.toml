@@ -1,0 +1,8 @@
+# Static CRT: the custom-action DLL runs inside msiexec on machines that may not have the
+# VC++ redistributable. Cargo reads this file only when invoked with this directory as cwd
+# (packaging/windows/build.mjs does that).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

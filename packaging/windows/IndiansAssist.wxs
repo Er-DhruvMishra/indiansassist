@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IndiansAssist Agent: the Phase D installed service (contracts docs/specs/phase-d-contracts.md
+  sections 4.1, 10, 11.3 and 12). WiX Toolset v5; build with packaging/windows/build.mjs, which
+  passes every preprocessor variable below:
+
+    ProductVersion  MSI version (MAJOR.MINOR.PATCH, from agent/Cargo.toml)
+    ServiceExe      signed ia-service.exe   (crate ia-service)
+    DesktopExe      signed ia-desktop.exe   (the Phase C ia-agent, renamed for the install)
+    WatchdogExe     signed ia-watchdog.exe  (crate ia-service / ia-watchdog, section 10.1)
+    ManifestJson    install manifest (sha256 of the three signed exes), section 10.1 / 10.4
+    TaskXml         the watchdog scheduled task, UTF-16
+    CaDll           ia_msi_ca.dll (packaging/windows/ca), embedded, never installed
+    Placeholder     1 = the payload is not the real service (blocks installation), 0 = release
+
+  Enrollment never happens here: the MSI only places the signed enroll.iaconfig (from IA_ENROLL,
+  given on the command line or by an org transform) and the service enrolls on first start (3.1).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?if $(var.Placeholder) = 1 ?>
+    <?define NameSuffix = " (placeholder payload, not for deployment)" ?>
+  <?else?>
+    <?define NameSuffix = "" ?>
+  <?endif?>
+
+  <Package
+    Name="IndiansAssist Agent$(var.NameSuffix)"
+    Manufacturer="IndiansAssist"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="6F3B2A91-4C7E-4E0D-9B1A-2D5C8E7F6A43"
+    Scope="perMachine"
+    InstallerVersion="500"
+    Compressed="yes"
+    Language="1033">
+
+    <SummaryInformation Description="IndiansAssist Agent (installed service with unattended access)" Manufacturer="IndiansAssist" />
+
+    <!-- Upgrade (12.2): install the new version first, then remove the old one, so components
+         shared by both (services, task, %ProgramData% identity) are never removed in between. -->
+    <MajorUpgrade
+      Schedule="afterInstallExecute"
+      DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <?if $(var.Placeholder) = 1 ?>
+    <!-- The payload is the Phase C agent standing in for ia-service.exe and ia-watchdog.exe, which
+         are not SCM binaries yet; installing would fail at StartServices. Validation only. -->
+    <Launch
+      Condition="Installed"
+      Message="This IndiansAssist Agent package carries placeholder binaries and cannot be installed. Build it with the ia-service crate's release binaries." />
+    <?endif?>
+
+    <!-- Enrollment carrier (12.1, 12.3): base64url of the signed enroll.iaconfig. Hidden keeps it out
+         of the MSI log; Secure lets it reach the elevated server side. It is not written to the
+         registry and is not a remembered property; a transform that sets it is cached by Windows
+         Installer like any applied transform (see packaging/README.md). -->
+    <Property Id="IA_ENROLL" Hidden="yes" Secure="yes" />
+    <!-- Optional device opt-outs written into config.json (rules 8.2d, 8.4b): 1 or 0. -->
+    <Property Id="IA_WAKER_OPT_OUT" Secure="yes" />
+    <Property Id="IA_AMT_PROXY_OPT_OUT" Secure="yes" />
+    <!-- The CustomActionData properties carry IA_ENROLL to the deferred action: hide them too. -->
+    <Property Id="IaApplyInstall" Hidden="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://indiansassist.com" />
+    <Property Id="ARPCOMMENTS" Value="Installed IndiansAssist Agent for remote support with unattended access." />
+
+    <Feature Id="Agent" Title="IndiansAssist Agent" Level="1" AllowAdvertise="no" AllowAbsent="no">
+      <ComponentGroupRef Id="AgentBinaries" />
+      <ComponentGroupRef Id="AgentData" />
+    </Feature>
+
+    <!-- %ProgramFiles%\IndiansAssist\ (4.1). Private id (mixed case): the install path cannot be
+         redirected from the command line, because the service checks the worker's image path
+         against it (4.2) and the scheduled task names it. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="IaInstallDir" Name="IndiansAssist" />
+    </StandardDirectory>
+    <!-- %ProgramData%\IndiansAssist\ (3.3, 4.1, 10.4): identity, config, manifest, logs. -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="IaDataDir" Name="IndiansAssist" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="AgentBinaries" Directory="IaInstallDir">
+      <Component Id="ServiceExe" Bitness="always64">
+        <File Id="ServiceExe" Name="ia-service.exe" Source="$(var.ServiceExe)" KeyPath="yes" />
+        <!-- 4.1: LocalSystem, auto start, not delayed (must run before the logon screen; a plain
+             SERVICE_AUTO_START is not delayed). Failure actions (restart after 5 s / 10 s / 60 s) are
+             applied by ia-service with ChangeServiceConfig2 (4.1), for both services: the MSI
+             MsiServiceConfig* tables are documented by Microsoft as not working reliably. -->
+        <ServiceInstall
+          Id="AgentService"
+          Name="IndiansAssistAgent"
+          DisplayName="IndiansAssist Agent"
+          Description="Lets your organisation's IndiansAssist technicians support this computer, including unattended access when your policy allows it."
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Account="LocalSystem"
+          Vital="yes" />
+        <ServiceControl Id="AgentServiceControl" Name="IndiansAssistAgent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- The enroll config the custom action writes beside the binary (12.3); the service shreds
+             it after enrolling, IaWipeData shreds it on uninstall, this is the backstop. -->
+        <RemoveFile Id="RemoveEnrollConfig" Name="enroll.iaconfig" On="uninstall" />
+        <!-- Replace the manifest on every install so an upgrade never keeps a stale one (10.1). -->
+        <RemoveFile Id="RemoveStaleManifest" Directory="IaDataDir" Name="manifest.json" On="install" />
+      </Component>
+
+      <Component Id="DesktopExe" Bitness="always64">
+        <File Id="DesktopExe" Name="ia-desktop.exe" Source="$(var.DesktopExe)" KeyPath="yes" />
+      </Component>
+
+      <Component Id="WatchdogExe" Bitness="always64">
+        <File Id="WatchdogExe" Name="ia-watchdog.exe" Source="$(var.WatchdogExe)" KeyPath="yes" />
+        <!-- 4.1 / 10.1: a second auto-start LocalSystem service that only watches. -->
+        <ServiceInstall
+          Id="WatchdogService"
+          Name="IndiansAssistWatchdog"
+          DisplayName="IndiansAssist Watchdog"
+          Description="Keeps the IndiansAssist Agent running and reports if it is stopped or modified."
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Account="LocalSystem"
+          Vital="yes" />
+        <ServiceControl Id="WatchdogServiceControl" Name="IndiansAssistWatchdog" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <Component Id="WatchdogTaskXml" Bitness="always64">
+        <File Id="WatchdogTaskXml" Name="watchdog-task.xml" Source="$(var.TaskXml)" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="AgentData" Directory="IaDataDir">
+      <Component Id="InstallManifest" Bitness="always64">
+        <File Id="InstallManifest" Name="manifest.json" Source="$(var.ManifestJson)" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ============================ custom actions ============================ -->
+    <Binary Id="IaMsiCa" SourceFile="$(var.CaDll)" />
+
+    <!-- Install, repair, upgrade: ACLs (3.3, 10.4), enroll.iaconfig and config.json (12.2). -->
+    <SetProperty
+      Id="IaApplyInstall"
+      Value="[IaInstallDir]|[IaDataDir]|[IA_WAKER_OPT_OUT]|[IA_AMT_PROXY_OPT_OUT]|[IA_ENROLL]"
+      Before="IaApplyInstall"
+      Sequence="execute"
+      Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+    <SetProperty
+      Id="IaApplyInstallRollback"
+      Value="[IaInstallDir]"
+      Before="IaApplyInstallRollback"
+      Sequence="execute"
+      Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+    <CustomAction Id="IaApplyInstallRollback" BinaryRef="IaMsiCa" DllEntry="IaApplyInstallRollback" Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="IaApplyInstall" BinaryRef="IaMsiCa" DllEntry="IaApplyInstall" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+
+    <!-- The watchdog scheduled task (10.1): LocalSystem, at startup and every 5 minutes. -->
+    <CustomAction
+      Id="IaTaskCreate"
+      Directory="System64Folder"
+      ExeCommand="&quot;[System64Folder]schtasks.exe&quot; /Create /F /TN &quot;IndiansAssist Watchdog&quot; /XML &quot;[IaInstallDir]watchdog-task.xml&quot;"
+      Execute="deferred"
+      Impersonate="no"
+      Return="check" />
+    <CustomAction
+      Id="IaTaskCreateRollback"
+      Directory="System64Folder"
+      ExeCommand="&quot;[System64Folder]schtasks.exe&quot; /Delete /F /TN &quot;IndiansAssist Watchdog&quot;"
+      Execute="rollback"
+      Impersonate="no"
+      Return="ignore" />
+
+    <!-- Uninstall (4.1): deregister with the identity key (best effort, bounded by the service),
+         remove the task, shred the keys and wipe %ProgramData%\IndiansAssist. Never on the removal
+         of the old product during an upgrade. -->
+    <CustomAction
+      Id="IaDeregister"
+      Directory="IaInstallDir"
+      ExeCommand="&quot;[IaInstallDir]ia-service.exe&quot; --msi-uninstall"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore" />
+    <CustomAction
+      Id="IaTaskDelete"
+      Directory="System64Folder"
+      ExeCommand="&quot;[System64Folder]schtasks.exe&quot; /Delete /F /TN &quot;IndiansAssist Watchdog&quot;"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore" />
+    <SetProperty
+      Id="IaWipeData"
+      Value="[IaInstallDir]|[IaDataDir]"
+      Before="IaWipeData"
+      Sequence="execute"
+      Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    <CustomAction Id="IaWipeData" BinaryRef="IaMsiCa" DllEntry="IaWipeData" Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- install side: after the files exist, before the services start (the service reads
+           enroll.iaconfig on first start). -->
+      <Custom Action="IaApplyInstallRollback" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="IaApplyInstall" After="IaApplyInstallRollback" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="IaTaskCreateRollback" After="IaApplyInstall" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="IaTaskCreate" After="IaTaskCreateRollback" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+
+      <!-- uninstall side: services stopped first (StopServices), then deregister, task, wipe, all
+           before the binaries are removed. -->
+      <Custom Action="IaDeregister" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="IaTaskDelete" After="IaDeregister" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="IaWipeData" After="IaTaskDelete" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

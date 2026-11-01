@@ -1,0 +1,37 @@
+# MSI custom actions for the IndiansAssist Agent package (Phase D contracts section 12.2).
+# A standalone crate on purpose: it is a packaging artifact, not part of the agent workspace,
+# and it is embedded into the MSI as a Binary row, never installed on disk.
+[package]
+name = "ia-msi-ca"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Deferred LocalSystem custom actions: write enroll.iaconfig and config.json from IA_ENROLL, apply the section 3.3 / 10.4 ACLs, wipe key material on uninstall."
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+# Same versions as agent/Cargo.lock, so the crate builds offline from the shared cargo cache.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_ApplicationInstallationAndServicing",
+  "Win32_System_Registry",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+# Detach from any parent workspace.
+[workspace]
