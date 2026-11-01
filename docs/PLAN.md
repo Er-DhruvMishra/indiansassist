@@ -105,7 +105,7 @@ Open before Phase B can be called done:
 - **Gates (31 Oct 2026):** build, typecheck, lint; tests shared 299, db 62 + 3 skipped, api 192, web 223, extension 129; `pnpm test:scripts` 25; `pnpm validate:infra`; `pnpm agent:fixtures`; against one api started with `SIGNUP_PLAN_TIER=p3_portable` and `RECORDER_TOKEN`: `pnpm smoke` 26/26, `smoke:p2` 14/14, `smoke:recorder` 16/16 (12 + 4 P3 cases), `smoke:p3` 12/12.
 - **Open:** the agent's live serve loop (the glue above) so a real agent completes a session — this is what `pnpm e2e:p3` proves. The e2e is scaffolded (`apps/web/e2e/package3.spec.ts`, `agent-harness.ts`, a P3 branch of `playwright.config.ts` using `./data/e2e-p3` + `SIGNUP_PLAN_TIER=p3_portable` + `AGENT_DEV_STUB`, and the `e2e:p3` / `agent:build:dev` scripts); it runs through the knock but the post-accept assertions wait on the serve loop. Also open: P3 console voice and Assist-side recording, the File System Access receive path, nginx `proxy_buffering off` for downloads, Compose mount of `AGENT_DIST_DIR`, the Android emulator smoke against the api.
 
-**Phase D (Package 4), the service stream: built, not reviewed or committed (1 Nov 2026).** The
+**Phase D (Package 4), the service stream: built, verified and committed as `f413710` (1 Nov 2026).** The
 contract is `docs/specs/phase-d-contracts.md` (revision 5). Everything else in Phase D was
 already built; this stream was the installed service, the desktop worker and the Phase C
 elevation wiring that `agent/README.md` recorded as stubbed.
@@ -149,3 +149,28 @@ elevation wiring that `agent/README.md` recorded as stubbed.
   on a real desktop, the secure desktop through DXGI, a real UAC prompt, `SendSAS`, `BlockInput`,
   a service restart and the uninstall are **built but unverified**. They are the manual checks in
   `docs/release.md` and in the handoff brief, and they need a disposable machine and a person.
+
+**Phase D, the whole package: complete (1 Nov 2026), `f413710` and `4468bbb`.** The contract is
+revision 6. The three section 13.5 targets the server stream owed are closed and committed
+earlier (`80317ac`, `f21c7de`): the seven fleet metric series, `smoke:p4:load`, and the
+keyboard-only accessibility spec (`e2e:p4`). The api table of section 15.3 has no open row left.
+
+- **Coordinator verification of the service stream, run independently of the stream's own
+  report and agreeing with it line for line.** `cargo fmt --all --check` and `cargo clippy
+  --all-targets --all-features -- -D warnings` clean; `cargo test --workspace --all-features`
+  **529 passed, 0 failed, 2 ignored** across 19 suites. `pnpm -r build typecheck lint`; tests
+  shared 377, db 71 (+3 skipped), api 267, web 304, extension 129 (**1,148**); `test:scripts` 25;
+  `license:check`; `agent:fixtures --check`; `fleet:fixtures --check`; `validate:infra`;
+  `packaging:test` 5 node + 7 cargo. Against one api on **4105** with `API_ORIGIN` matched (4000
+  and 4100 are held by leftover processes): `smoke` 26/26, `smoke:p2` 14/14, `smoke:p3` 12/12,
+  `smoke:recorder` 17/17, `smoke:p4` 15/15 — **84 steps, none failing or skipped**. `pnpm e2e:p3`
+  passes with `E2E_API_PORT=4105`, which is what proves the worker's reuse of the Phase C serve
+  loop did not regress it.
+- **A review of the new crates for destructive behaviour found none.** The only file removals are
+  the enrollment-material shred, the key-blob shred and one test under a temporary directory.
+- **Still open, and each needs something this machine cannot give.** The manual checks on a
+  disposable machine (install, enrollment, a real desktop session, the secure desktop, one
+  elevation prompt, a service restart, uninstall); a serial-over-LAN close carrying real bytes,
+  which needs a proxy that streams data; the full-size `smoke:p4:load` run at 2,000 devices,
+  proven so far at 25; and an Android emulator re-run of the strengthened `desk_stopped`
+  assertion.
