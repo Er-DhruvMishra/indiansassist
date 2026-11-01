@@ -19,7 +19,7 @@ import {
   shots,
 } from './helpers';
 
-const WEB = 'http://localhost:5173';
+const WEB = `http://localhost:${process.env.E2E_WEB_PORT || '5173'}`;
 const DESK_NAME = 'E2E Desk';
 const FILE_NAME = 'e2e-desk-note.txt';
 const FILE_BYTES = randomBytes(2048).toString('hex'); // 4096 ASCII bytes

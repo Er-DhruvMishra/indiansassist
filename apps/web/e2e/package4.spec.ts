@@ -20,7 +20,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { assertKeyboardReachable, assertTextNotColour, focused, tab, tabUntil } from './a11y';
 import { captureConsole, shot } from './helpers';
 
-const WEB = 'http://localhost:5173';
+const WEB = `http://localhost:${process.env.E2E_WEB_PORT || '5173'}`;
 const API = `http://localhost:${process.env.E2E_API_PORT || '4000'}`;
 const HEADERS = { Origin: WEB, 'X-Requested-With': 'IndiansAssist' };
 const DEVICES = ['E2E-KBD-ONE', 'E2E-KBD-TWO'];

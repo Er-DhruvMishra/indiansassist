@@ -25,6 +25,15 @@ const repoRoot = resolve(here, '../..');
 const headed = process.env.E2E_HEADED === '1';
 const apiPort = process.env.E2E_API_PORT || '4000';
 const apiUrl = `http://localhost:${apiPort}`;
+// E2E_WEB_PORT and E2E_DATA_DIR let several suites run at once (the Phase E streams each use their own pair);
+// the defaults keep every existing command unchanged.
+const webPort = process.env.E2E_WEB_PORT || '5173';
+const webUrl = `http://localhost:${webPort}`;
+const dataDir = process.env.E2E_DATA_DIR || './data/e2e';
+const originEnv = {
+  WEB_ORIGIN: webUrl,
+  REGION_ORIGINS: `in-mum=${webUrl},eu-fra=${webUrl},us-east=${webUrl}`,
+};
 const p3 = process.env.E2E_P3 === '1';
 const p4 = process.env.E2E_P4 === '1';
 
@@ -56,11 +65,12 @@ const apiEnv: Record<string, string> = p4
       PORT: apiPort,
       API_ORIGIN: apiUrl,
       METRICS_PORT: '0',
-      PGLITE_DIR: './data/e2e/pglite',
-      STORAGE_FS_DIR: './data/e2e/storage',
+      PGLITE_DIR: `${dataDir}/pglite`,
+      STORAGE_FS_DIR: `${dataDir}/storage`,
       RATE_LIMIT_DISABLED: '1',
       LOG_LEVEL: 'warn',
     };
+Object.assign(apiEnv, originEnv);
 const resetCmd = p4
   ? 'node apps/web/e2e/reset-data-p4.mjs'
   : p3
@@ -78,7 +88,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [['list', { printSteps: true }]],
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: webUrl,
     // `chromium` channel = the full Chromium build in new headless mode (the headless shell has no screen capture).
     channel: 'chromium',
     headless: !headed,
@@ -106,9 +116,9 @@ export default defineConfig({
       env: apiEnv,
     },
     {
-      command: 'pnpm --filter @indiansassist/web dev',
+      command: `pnpm --filter @indiansassist/web dev --port ${webPort}`,
       cwd: repoRoot,
-      url: 'http://localhost:5173',
+      url: webUrl,
       reuseExistingServer: false,
       timeout: 120_000,
       stdout: 'ignore',

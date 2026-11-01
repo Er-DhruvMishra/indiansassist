@@ -21,7 +21,7 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { captureConsole, probeRemoteVideo, recordPeerConnections, shot, shots } from './helpers';
 import { spawnAgent, type AgentProcess } from './agent-harness';
 
-const WEB = 'http://localhost:5173';
+const WEB = `http://localhost:${process.env.E2E_WEB_PORT || '5173'}`;
 const API = `http://localhost:${process.env.E2E_API_PORT || '4000'}`;
 const FILE_NAME = 'e2e-assist-note.txt';
 const FILE_BYTES = randomBytes(1024).toString('hex'); // 2048 ASCII bytes
