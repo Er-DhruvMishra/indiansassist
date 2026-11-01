@@ -38,6 +38,15 @@ fn main() {
         return;
     }
 
+    // §7.3 step 4: this process is the elevated hand-over child. It takes its whole context
+    // from the pipe its parent is holding — not from the command line, which any process of
+    // this user can read — and refuses to run if the image it is running is not the one the
+    // parent hashed.
+    if let Some(suffix) = cli.handover_pipe.clone() {
+        run_handover_child(&cli, &suffix);
+        return;
+    }
+
     // Rank 1 (arg / deeplink) from the command line; the remaining carriers (sidecar,
     // filename, clipboard, manual) are resolved by the connect flow (§2.1).
     let arg = cli
@@ -57,6 +66,106 @@ fn main() {
     }
 
     run(&cli, resolved);
+}
+
+/// §7.3 step 4: read the blob, check this image is the one the parent hashed and that it is
+/// signed by the publisher this build expects, then take the session over.
+///
+/// Both checks are **fatal here** and only warnings in the parent (§2.6): the parent is already
+/// running, while the child is about to run as administrator, so this is the last place an
+/// unexpected image can be stopped.
+#[cfg(all(feature = "media", windows, feature = "winapi"))]
+fn run_handover_child(cli: &ia_agent::cli::Cli, suffix: &str) {
+    use std::time::Duration;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+    let Some(parent) = ia_agent::hopipe::parent_pid() else {
+        eprintln!("the elevated instance could not identify its parent");
+        std::process::exit(1);
+    };
+    let bytes = match ia_agent::hopipe::read_blob(suffix, parent, Duration::from_secs(20)) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("the hand-over blob could not be read: {e:?}");
+            std::process::exit(1);
+        }
+    };
+    let blob = match ia_agent::hochild::HandoverBlob::parse(&bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("the hand-over blob is not usable: {e}");
+            std::process::exit(1);
+        }
+    };
+    // The image the parent hashed, over a handle it held open the whole time.
+    match std::env::current_exe().and_then(|exe| ia_agent::hopipe::ImageHold::open(&exe)) {
+        Ok(hold) if hold.sha256.eq_ignore_ascii_case(&blob.image_sha256) => {}
+        Ok(hold) => {
+            eprintln!(
+                "image_mismatch: this instance is {} but the parent hashed {}",
+                &hold.sha256[..16],
+                &blob.image_sha256[..16]
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("image_mismatch: this instance could not hash itself: {e}");
+            std::process::exit(1);
+        }
+    }
+    match ia_platform::trust::verify_self() {
+        ia_platform::trust::TrustVerdict::Trusted => {}
+        ia_platform::trust::TrustVerdict::Unsigned if cfg!(feature = "dev") => {
+            tracing::warn!(
+                "this development build is unsigned; a release build would refuse to elevate"
+            )
+        }
+        other => {
+            eprintln!(
+                "image_mismatch: this instance is not signed by the expected publisher ({})",
+                other.as_str()
+            );
+            std::process::exit(1);
+        }
+    }
+    if let Err(e) = ia_agent::hochild::set(blob) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    let outcome = rt.block_on(ia_agent::session::run_handover_child_session(
+        cli,
+        Duration::from_secs(24 * 3600),
+    ));
+    match outcome {
+        Ok(o) => tracing::info!(outcome = ?o, "the elevated instance finished"),
+        Err(e) => {
+            eprintln!("the elevated instance stopped: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Without the media stack or the Win32 layer there is no hand-over to take over.
+#[cfg(not(all(feature = "media", windows, feature = "winapi")))]
+fn run_handover_child(_cli: &ia_agent::cli::Cli, _suffix: &str) {
+    eprintln!(
+        "This build has no signalling or Win32 layer, so it cannot take over an elevated          hand-over. See agent/README.md."
+    );
+    std::process::exit(2);
 }
 
 /// Restrict the DLL search path to System32 and clear the application DLL directory (§14 /

@@ -11,7 +11,7 @@
 use serde_json::Value;
 
 use ia_core::consent::LiveConsent;
-use ia_core::ctl::{dispatch, Action, CtlReq, DispatchCtx, KeyKind, PointerKind};
+use ia_core::ctl::{dispatch, Action, CtlReq, DispatchCtx, KeyKind, PointerKind, ServiceGrade};
 use ia_core::stats::{ControlInputAggregate, InputKind};
 use ia_core::types::MonitorInfo;
 use ia_platform::traits::{ClipboardBridge, InputSink, KeyAction, PointerAction};
@@ -39,6 +39,19 @@ pub enum SessionEffect {
     PlaybookCancel {
         run_id: String,
     },
+    /// §5.4: the local input lock was turned on or off. `applied` is what the platform sink
+    /// actually did, so the serve loop reports the state the machine is really in rather than
+    /// the state that was asked for.
+    InputLock {
+        locked: bool,
+        applied: bool,
+    },
+    /// §5.4: the privacy screen was turned on or off (the overlay is the serve loop's).
+    PrivacyScreen {
+        on: bool,
+    },
+    /// §5.4 `os.sas`: the service must press Ctrl+Alt+Del.
+    SendSas,
 }
 
 /// Serves `ia.control` for the Desk: holds the live consent and the consented monitors,
@@ -48,6 +61,12 @@ pub struct ControlServer {
     pub monitors: Vec<MonitorInfo>,
     pub secure_desktop: bool,
     pub input: ControlInputAggregate,
+    /// Phase D (§5.4): the policy flags and what this build implements. `None` in a portable
+    /// Phase C agent, which keeps answering `not_supported { phase_d }`.
+    pub service: Option<ServiceGrade>,
+    /// The live protection state, so §5.4d can be reported.
+    pub input_locked: bool,
+    pub privacy_screen: bool,
 }
 
 impl ControlServer {
@@ -58,6 +77,9 @@ impl ControlServer {
             monitors,
             secure_desktop: false,
             input: ControlInputAggregate::new(window_ms, viewed_monitor),
+            service: None,
+            input_locked: false,
+            privacy_screen: false,
         }
     }
 
@@ -68,7 +90,22 @@ impl ControlServer {
             clipboard_enabled: self.consent.clipboard_active(),
             consented_monitors: self.consent.consented_monitors.clone(),
             secure_desktop: self.secure_desktop,
+            service: self.service,
         }
+    }
+
+    /// Rule 5.4d "fail-open release": every protection comes off on a level drop below
+    /// `elevated`, on teardown, and on session end. Returns what was released so the caller can
+    /// chain each with its cause.
+    pub fn release_protections(&mut self, input_sink: &mut dyn InputSink) -> (bool, bool) {
+        let released_lock = self.input_locked;
+        let released_privacy = self.privacy_screen;
+        if released_lock {
+            input_sink.block_local_input(false);
+            self.input_locked = false;
+        }
+        self.privacy_screen = false;
+        (released_lock, released_privacy)
     }
 
     fn monitor(&self, id: u32) -> Option<&MonitorInfo> {
@@ -192,6 +229,24 @@ impl ControlServer {
             Action::PlaybookCancel { run_id } => SessionEffect::PlaybookCancel {
                 run_id: run_id.clone(),
             },
+            Action::InputLock { locked } => {
+                // The sink says whether the platform did it; a sink that cannot answers false
+                // and the serve loop turns that into `not_supported` rather than claiming a
+                // lock that is not in force.
+                let applied = input_sink.block_local_input(*locked);
+                if applied {
+                    self.input_locked = *locked;
+                }
+                SessionEffect::InputLock {
+                    locked: *locked,
+                    applied,
+                }
+            }
+            Action::PrivacyScreen { on } => {
+                self.privacy_screen = *on;
+                SessionEffect::PrivacyScreen { on: *on }
+            }
+            Action::SendSas => SessionEffect::SendSas,
         }
     }
 }

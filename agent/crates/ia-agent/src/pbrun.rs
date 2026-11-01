@@ -68,6 +68,11 @@ pub struct RunSpec {
     pub body: String,
     /// `IA_PARAM_<NAME>` pairs (`ia_core::playbook::param_env`).
     pub env: Vec<(String, String)>,
+    /// Phase D rule 9.8: vault secrets injected into this one child's environment. They are a
+    /// separate field from `env` because the type redacts itself in a `Debug` dump and wipes
+    /// its bytes on drop, so a log line or a freed allocation cannot leak one. Empty for every
+    /// Phase C run.
+    pub secret_env: Vec<(String, ia_core::fleet::Secret)>,
     pub timeout: Duration,
     /// Working directory and (cmd) run-file directory.
     pub run_dir: PathBuf,
@@ -390,6 +395,11 @@ fn launch(spec: &RunSpec) -> std::io::Result<Launched> {
     cmd.env("PATH", windows_path());
     for (k, v) in &spec.env {
         cmd.env(k, v);
+    }
+    // Rule 9.8: the secret reaches the child through its environment and nowhere else — not a
+    // command line (which any process can read), not a file, not a log.
+    for (k, v) in &spec.secret_env {
+        cmd.env(k, v.expose());
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     const CREATE_SUSPENDED: u32 = 0x0000_0004;

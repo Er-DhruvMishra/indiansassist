@@ -6,15 +6,21 @@
 //! The pure logic the contract requires tests for — the self-delete stub's argument
 //! safety (§10 D2), the HKCU protocol-handler value set (§2.5 L1) and the single-instance
 //! pipe-name derivation (§11.5) — is implemented and tested here with no OS calls.
+//!
+//! Phase D adds the service seams of its §11.1 — `ServiceHost`, `DesktopBridge`, `Waker`,
+//! `Amt` and `SecretInjector` ([`service`]) — on the same principle: the trait is the OS
+//! boundary, the decision behind it is a pure function in the crate that owns it.
 
 pub mod protocol;
 pub mod selfdelete;
+pub mod service;
 pub mod traits;
 pub mod trust;
 
 #[cfg(all(windows, feature = "winapi"))]
 pub mod win;
 
+pub use service::*;
 pub use traits::*;
 
 /// `sys_lib(name)`: the single late-binding loader of §14. Every non-KnownDLL system

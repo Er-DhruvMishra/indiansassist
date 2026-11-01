@@ -28,6 +28,15 @@ pub trait InputSink: Send {
     fn key(&mut self, code: &str, action: KeyAction, modifiers: ia_core::types::Modifiers);
     /// Type Unicode text (`KEYEVENTF_UNICODE`, §5.4).
     fn text(&mut self, text: &str);
+    /// Phase D §5.4 `os.input_lock`: block (or release) the local physical keyboard and mouse
+    /// while the technician works. `BlockInput` on Windows, which the person sitting there can
+    /// always break with Ctrl+Alt+Del — the service notices and releases it (rule 5.4d).
+    ///
+    /// The default is "this platform cannot", so a Phase C sink and the Phase E platforms
+    /// answer honestly without implementing anything, and the op reports `not_supported`.
+    fn block_local_input(&mut self, _locked: bool) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

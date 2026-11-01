@@ -6,6 +6,17 @@
 //!
 //! The verdict mapping is pure and tested on any target; the call itself is Windows-only.
 
+/// The Authenticode subject this build expects, compiled in at build time
+/// (`IA_EXPECTED_SIGNER`), or `None` in a local build that has none.
+///
+/// It is used for two different things, and only one of them is implemented: the §7.3 prompt
+/// card tells the person **what publisher to look for** in the Windows dialog, which is the
+/// part that protects them. The subject *compare* against the signature's certificate is still
+/// not implemented (`agent/README.md` records it); the verdict here is the chain only.
+pub fn expected_signer() -> Option<&'static str> {
+    option_env!("IA_EXPECTED_SIGNER").filter(|s| !s.is_empty())
+}
+
 /// What `WinVerifyTrust` said about a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustVerdict {

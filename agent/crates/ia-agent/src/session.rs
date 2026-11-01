@@ -13,6 +13,34 @@ use crate::signal::{windows_capabilities, AgentIdentity, SignalClient};
 use ia_core::join_input::TokenInput;
 use ia_core::types::TokenSource;
 
+/// What this process joined with, remembered once so the §7.3 hand-over can pass it to the
+/// elevated child. It is the token the Desk already holds, not a new credential: the child
+/// presents the same token plus the one-time hand-over (§7.2).
+pub struct JoinedWith {
+    pub token: String,
+    pub source: &'static str,
+    pub api_origin: String,
+    pub signal_url: String,
+}
+
+static JOINED: std::sync::OnceLock<JoinedWith> = std::sync::OnceLock::new();
+
+/// What this process joined with, or `None` before the hello (and in a worker, which joins
+/// with a worker credential and can never hand over: §4.3 "elevation hand-over is not used in
+/// P4", the level is raised in place instead).
+pub fn joined() -> Option<&'static JoinedWith> {
+    JOINED.get()
+}
+
+fn remember(token: String, source: &'static str, api_origin: String, signal_url: String) {
+    let _ = JOINED.set(JoinedWith {
+        token,
+        source,
+        api_origin,
+        signal_url,
+    });
+}
+
 /// How the signaling exchange ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignalOutcome {
@@ -65,6 +93,18 @@ pub fn resolve_signal_url(cli: &Cli) -> String {
         return format!("{}/signal", ws.trim_end_matches('/'));
     }
     compiled_default_signal_url()
+}
+
+/// The API origin this build talks to: the dev override, else the compiled one derived from the
+/// signalling URL (the hand-over blob carries it so the child does not re-resolve it).
+fn api_host_origin(cli: &Cli) -> String {
+    if let Some(o) = &cli.api_origin {
+        return o.clone();
+    }
+    let ws = resolve_signal_url(cli);
+    ws.trim_end_matches("/signal")
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1)
 }
 
 fn token_string(tok: &TokenInput) -> String {
@@ -126,6 +166,12 @@ pub async fn run_signaling(
     };
     tracing::info!(%signal_url, "connecting to signaling");
 
+    remember(
+        token_string(token),
+        source_wire(source),
+        api_host_origin(cli),
+        signal_url.clone(),
+    );
     let mut client = SignalClient::connect(&signal_url, &id).await?;
     // Voice is advertised only when a default capture and render device exist (§6.3).
     let has_voice = crate::voice::voice_available();
@@ -153,6 +199,100 @@ pub async fn run_signaling(
     )
     .await;
     tracing::info!(outcome = ?out, "live serve loop returned");
+    match out {
+        Ok(_) => Ok(SignalOutcome::SessionCreated),
+        Err(e) => Err(e),
+    }
+}
+
+/// §7.3 steps 4-5: the elevated child's side of signalling. The same socket and the same
+/// serve loop; what differs is that the hello carries the hand-over, there is no knock (the
+/// session is live and is being taken over), and the handshake starts at the parent's
+/// generation + 1 so the console accepts the rebuild (W43).
+pub async fn run_handover_child_session(
+    cli: &Cli,
+    budget: Duration,
+) -> Result<SignalOutcome, String> {
+    let blob = crate::hochild::get().ok_or("run_handover_child_session needs a hand-over blob")?;
+    std::thread::spawn(crate::voice::voice_available);
+    let id = AgentIdentity {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        os_version: "10.0".to_string(),
+        arch: arch().to_string(),
+    };
+    tracing::info!(
+        session = %blob.session_id,
+        gen = blob.gen,
+        offering = blob.child_gen(),
+        "the elevated instance is taking the session over"
+    );
+    let mut client = SignalClient::connect(&blob.signal_url, &id).await?;
+    let has_voice = crate::voice::voice_available();
+    let caps = windows_capabilities(1, false, has_voice);
+    client
+        .desk_hello_handover(
+            &blob.token,
+            &blob.handover,
+            blob.desk_label.as_deref(),
+            &id,
+            &blob.token_source,
+            &caps,
+        )
+        .await?;
+    let created = match drive_until_created(&mut client, budget).await? {
+        Drive::Created(v) => v,
+        Drive::Outcome(o) => {
+            // §7.3 step 5: a child the server rejects (its hand-over was consumed or expired)
+            // exits; the user instance keeps the session.
+            tracing::error!(outcome = ?o, "the hand-over was refused; the elevated instance is exiting");
+            return Ok(o);
+        }
+    };
+    let (mut writer, mut ws_rx) = client.split();
+    let out =
+        crate::serve::run_live_session(&mut writer, &mut ws_rx, cli, &created, budget, false).await;
+    tracing::info!(outcome = ?out, "the elevated instance's serve loop returned");
+    match out {
+        Ok(_) => Ok(SignalOutcome::SessionCreated),
+        Err(e) => Err(e),
+    }
+}
+
+/// §4.2 / §4.3: the worker's side of signalling. It is the same socket, the same `desk.hello`
+/// shape and the same live serve loop as Phase C — only the credential differs, and there is no
+/// knock or poll: the session already exists, so `session.created` follows the hello.
+pub async fn run_worker_session(cli: &Cli, budget: Duration) -> Result<SignalOutcome, String> {
+    let ctx = crate::svc::get().ok_or("run_worker_session needs a worker context")?;
+    std::thread::spawn(crate::voice::voice_available);
+    let id = AgentIdentity {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        os_version: "10.0".to_string(),
+        arch: arch().to_string(),
+    };
+    tracing::info!(
+        signal_url = %ctx.signal_url,
+        session = %ctx.session_id,
+        decision = ?ctx.decision,
+        gen = ctx.gen,
+        "the worker is joining its session"
+    );
+    let mut client = SignalClient::connect(&ctx.signal_url, &id).await?;
+    let has_voice = crate::voice::voice_available();
+    let caps = windows_capabilities(1, false, has_voice);
+    client
+        .desk_hello_worker(ctx.credential.expose(), &id, &caps)
+        .await?;
+    let created = match drive_until_created(&mut client, budget).await? {
+        Drive::Created(v) => v,
+        Drive::Outcome(o) => {
+            tracing::warn!(outcome = ?o, "the worker did not reach session.created");
+            return Ok(o);
+        }
+    };
+    let (mut writer, mut ws_rx) = client.split();
+    let out =
+        crate::serve::run_live_session(&mut writer, &mut ws_rx, cli, &created, budget, false).await;
+    tracing::info!(outcome = ?out, "the worker's serve loop returned");
     match out {
         Ok(_) => Ok(SignalOutcome::SessionCreated),
         Err(e) => Err(e),

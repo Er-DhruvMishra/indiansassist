@@ -23,6 +23,8 @@ hex.workspace = true
 rand.workspace = true
 rand_core.workspace = true
 regex.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
 url.workspace = true
 thiserror.workspace = true
 # NFC for the A F5 `sanitiseFileName` port; already in the tree through url -> idna (Unicode-3.0).

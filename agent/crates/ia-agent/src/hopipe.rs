@@ -30,30 +30,12 @@ pub enum PipeError {
 /// The largest blob either side accepts (the §7.2 JSON is well under 4 KiB).
 pub const BLOB_MAX: usize = 16 * 1024;
 
-/// A fresh, non-secret pipe suffix (32 lower-case hex; the checks, not the name, authenticate).
-pub fn new_suffix() -> String {
-    use rand::RngCore;
-    let mut b = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-/// Whether two image paths name the same file (case-insensitive, `\\?\` prefix ignored).
-pub fn same_image(a: &str, b: &str) -> bool {
-    let norm = |s: &str| {
-        s.trim_start_matches(r"\\?\")
-            .replace('/', "\\")
-            .to_lowercase()
-    };
-    !a.is_empty() && norm(a) == norm(b)
-}
-
-/// The `--handover-pipe <hex>` suffix is exactly 32 lower-case hex characters.
-pub fn valid_suffix(s: &str) -> bool {
-    s.len() == 32
-        && s.bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-}
+/// A fresh, non-secret pipe suffix (32 lower-case hex; the checks, not the name, authenticate),
+/// whether two image paths name the same file, and the suffix grammar — shared with the Phase D
+/// service pipe (D §4.2) so there is one implementation of each.
+pub use ia_platform::protocol::{
+    new_pipe_suffix as new_suffix, same_image, valid_pipe_suffix as valid_suffix,
+};
 
 #[cfg(windows)]
 pub use win::*;

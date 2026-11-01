@@ -1,0 +1,18 @@
+[package]
+name = "ia-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase D secret injection (contract D 11.1, rule 9.8): opens server-sealed secrets with the device sealing key, places them in one child process's environment, wipes them, and masks their exact values in captured output. Holds no vault credential and makes no network call."
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

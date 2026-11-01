@@ -109,6 +109,7 @@ fn spec_for(f: &Fixture, args: &[(&str, &str)], dir: &Path, n: u8) -> RunSpec {
         interpreter: f.interpreter,
         body: f.body.clone(),
         env: param_env(&canonical),
+        secret_env: vec![],
         timeout: Duration::from_secs(m.effective_timeout_sec(f.timeout_sec) as u64),
         run_dir: dir.to_path_buf(),
         limits: OutputLimits {

@@ -32,6 +32,11 @@ pub struct Cli {
     /// `--stop-after <secs>` (dev only): once the session is live, Stop it after this many
     /// seconds (so an automated run ends the session deterministically without a UI click).
     pub stop_after: Option<u64>,
+    /// `--handover-pipe <32 hex>` (§7.3 step 3): this process is the elevated child, and the
+    /// suffix names the pipe its parent is holding the blob on. **Not** a dev switch: the
+    /// hand-over is a release feature, and the suffix is not a secret (the pipe's pid and image
+    /// checks are what authenticate the two ends, §7.2).
+    pub handover_pipe: Option<String>,
 }
 
 /// A credential captured from the command line, kept as the raw string so it can be
@@ -79,6 +84,15 @@ impl Cli {
                 }
             }
             return Ok(cli);
+        }
+
+        if let Some(suffix) = value_after(args, "--handover-pipe") {
+            if !ia_platform::protocol::valid_pipe_suffix(suffix) {
+                return Err(CliError(
+                    "--handover-pipe wants 32 lower-case hex characters".into(),
+                ));
+            }
+            cli.handover_pipe = Some(suffix.clone());
         }
 
         if let Some(code) = value_after(args, "--code") {
@@ -179,6 +193,21 @@ mod tests {
 
     fn p(args: &[&str]) -> Result<Cli, CliError> {
         Cli::parse(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn the_handover_switch_is_parsed_in_every_build_and_checked() {
+        let ok = p(&["--handover-pipe", "0123456789abcdef0123456789abcdef"]).unwrap();
+        assert_eq!(
+            ok.handover_pipe.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        // The suffix is not a secret, but a malformed one means something other than our own
+        // service launched us, so it is refused rather than tried.
+        for bad in ["", "SHOUTY0123456789abcdef0123456789", "short"] {
+            assert!(p(&["--handover-pipe", bad]).is_err(), "{bad} must not pass");
+        }
+        assert!(p(&[]).unwrap().handover_pipe.is_none());
     }
 
     #[test]

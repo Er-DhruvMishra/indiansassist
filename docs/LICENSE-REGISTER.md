@@ -68,6 +68,12 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | rav1e | BSD-2-Clause | AV1 (feature `av1`, off by default) | planned (Phase C, off by default) |
 | openh264 | BSD-2-Clause (Cisco binary caveat, §4.2: MPEG-LA royalty exposure; not shipped in the default build) | H.264 software (feature `h264-sw`, off by default) | planned (Phase C, off by default) |
 | yuvutils-rs | BSD-3-Clause OR Apache-2.0 | BGRA→I420 (SIMD; the self-contained converter is the interim path) | planned (Phase C capture path) |
+| **Phase D installed service (`agent/`, Rust: `ia-service`, `ia-session0`, `ia-waker`, `ia-vault`, `ia-watchdog`, `ia-desktop`)** | | | |
+| windows-service 0.7 | MIT OR Apache-2.0 | SCM integration for both service binaries (D §4.1, §10.1): the dispatcher, the control handler, the failure actions | in use (Phase D, `service` feature) |
+| chrono 0.4, chrono-tz 0.10 | MIT OR Apache-2.0 (chrono-tz bundles the IANA tz database, which is public domain) | the device evaluates `allowedHours` in its own zone before it acts (D §6.1, rule 9.9), and stamps tamper events (rule 10.5) | in use (Phase D) |
+| md-5 0.10 | MIT OR Apache-2.0 | HTTP Digest authentication to AMT firmware, which offers no other scheme (D rule 8.4c); not used for anything else | in use (Phase D, `ia-waker`) |
+| ureq 2 (with rustls, webpki-roots, ring) | MIT OR Apache-2.0 (ring: ISC AND MIT AND OpenSSL) | the service's own HTTP calls: enrollment, the signed deregister, fetching a pushed file, and the AMT WS-Management POST (D §3.2, §4.1, rule 9.4, rule 8.4b) | in use (Phase D, `service` / `net` features) |
+| tempfile 3 | MIT OR Apache-2.0 | temporary directories in the service's own tests (config, identity, tamper-log round trips); dev only, not shipped | in use (dev, Phase D) |
 | fast_image_resize | MIT OR Apache-2.0 | ladder downscale | planned (Phase C capture path) |
 | image | MIT OR Apache-2.0 | org-logo decode with limits (§3.3) | planned (Phase C `gui`) |
 | cpal | MIT OR Apache-2.0 | WASAPI audio I/O (voice device layer; full duplex stubbed) | in use (Phase C `media`) |

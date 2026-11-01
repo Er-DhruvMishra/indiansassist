@@ -176,6 +176,20 @@ impl InputSink for WinInput {
             Self::send(&[Self::unicode_input(unit, true)]);
         }
     }
+
+    /// Phase D §5.4 `os.input_lock`: `BlockInput`, which needs the calling process to be at
+    /// least as privileged as the desktop it is blocking — true for the `LocalSystem` worker,
+    /// false for a portable agent, where the call simply fails and the op reports
+    /// `not_supported`.
+    ///
+    /// The escape is deliberate and the contract's: the person sitting there can always press
+    /// Ctrl+Alt+Del, which Windows itself honours — `BlockInput` does not block the secure
+    /// attention sequence. That is why rule 5.4b has the pill say so.
+    fn block_local_input(&mut self, locked: bool) -> bool {
+        // SAFETY: `BlockInput` takes a BOOL and has no other precondition. A failure (not
+        // privileged enough, or already blocked by another process) is reported as `false`.
+        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::BlockInput(locked).is_ok() }
+    }
 }
 
 #[cfg(test)]

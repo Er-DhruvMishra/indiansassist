@@ -3,6 +3,12 @@ resolver = "2"
 members = [
     "crates/ia-core",
     "crates/ia-platform",
+    "crates/ia-session0",
+    "crates/ia-waker",
+    "crates/ia-vault",
+    "crates/ia-service",
+    "crates/ia-watchdog",
+    "crates/ia-desktop",
     "crates/ia-input-win",
     "crates/ia-capture-win",
     "crates/ia-ui",
@@ -38,6 +44,16 @@ hex = "0.4.3"
 rand = "0.8.5"
 rand_core = "0.6.4"
 uuid = { version = "1.10.0", features = ["v4"] }
+# Phase D §6.1 `allowedHours`: the policy is evaluated on the device in its own IANA zone, so
+# the tz database travels with the service (pure Rust, no C, no network).
+#
+# **No `clock` feature here.** `ia-core` takes `now` as an argument everywhere (that is what
+# makes the decision table testable against fixed instants), and `clock` binds chrono to the
+# Windows time API through an import library, which needs `dlltool` on the gnu toolchain — and
+# so would break the `ia-core` gnu cross-check. `ia-service`, which does need the wall clock,
+# turns `clock` on for itself.
+chrono = { version = "0.4.38", default-features = false, features = ["std", "serde"] }
+chrono-tz = { version = "0.10.0", default-features = false, features = ["std"] }
 regex = "1.10.6"
 url = "2.5.2"
 thiserror = "1.0.64"
@@ -75,6 +91,12 @@ cpal = "0.15.3"
 # Internal crates
 ia-core = { path = "crates/ia-core" }
 ia-platform = { path = "crates/ia-platform" }
+ia-session0 = { path = "crates/ia-session0" }
+ia-waker = { path = "crates/ia-waker" }
+ia-vault = { path = "crates/ia-vault" }
+ia-service = { path = "crates/ia-service" }
+ia-watchdog = { path = "crates/ia-watchdog" }
+ia-agent = { path = "crates/ia-agent", default-features = false }
 ia-input-win = { path = "crates/ia-input-win" }
 ia-capture-win = { path = "crates/ia-capture-win" }
 ia-ui = { path = "crates/ia-ui" }

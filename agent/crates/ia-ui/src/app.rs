@@ -1073,6 +1073,13 @@ impl IaApp {
 
 impl eframe::App for IaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // §6.2 `auto_grant`: go straight to the pill on the first frame, so an unattended
+        // session never flashes a consent form at a machine with nobody in front of it. The
+        // pill, the tray icon and the input guard are installed by the same `enter_live` the
+        // consent path uses, so an unattended session is indicated exactly like an attended one.
+        if self.req.start_live && self.phase == Phase::Consent {
+            self.enter_live(ctx);
+        }
         self.drain(ctx);
         #[cfg(feature = "dev")]
         self.autopilot_tick(ctx);

@@ -1,0 +1,43 @@
+[package]
+name = "ia-watchdog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase D watchdog (contract D 10.1): the second service and the scheduled task that check IndiansAssistAgent is running and unmodified, attempt one restart, and record a signed tamper event. The detect-and-restart decision table is pure and tested."
+
+[features]
+default = []
+# The SCM-aware binary (CI target); the library and its decision table are pure.
+service = ["dep:windows-service", "dep:windows", "ia-session0/winapi", "ia-service/service"]
+
+[[bin]]
+name = "ia-watchdog"
+path = "src/main.rs"
+required-features = ["service"]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-session0.workspace = true
+# The watchdog reuses the service's own storage: the same paths, the same DPAPI-sealed identity
+# and the same signed tamper log. A second implementation of any of those would be a second
+# thing to keep in step, and the one that matters is the signature.
+ia-service.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+windows-service = { version = "0.7.0", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+] }

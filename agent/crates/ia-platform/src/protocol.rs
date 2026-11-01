@@ -58,6 +58,57 @@ pub fn handover_pipe(hex32: &str) -> String {
     format!(r"\\.\pipe\IndiansAssist.ho.{hex32}")
 }
 
+/// `\\.\pipe\IndiansAssist.svc.<32 hex>`: the Phase D service to desktop-worker pipe (D §4.2).
+/// The suffix is not a secret — the pid, image and DACL checks are what authenticate the peer —
+/// but it is fresh per worker, so a stale pipe can never be reused.
+pub fn service_worker_pipe(hex32: &str) -> String {
+    format!(r"\\.\pipe\IndiansAssist.svc.{hex32}")
+}
+
+/// The well-known SDDL alias for `NT AUTHORITY\SYSTEM`.
+pub const SDDL_SYSTEM: &str = "SY";
+
+/// The DACL of the §4.2 pipe: a protected ACL (`P`, so no inherited entry widens it) granting
+/// full access to `SYSTEM` and to the launched worker's user SID, and to nobody else — not even
+/// `Administrators`, which the C §7.2 hand-over pipe grants because its server runs as the user,
+/// and which here would only widen the surface (the server is already `LocalSystem`). A worker
+/// that itself runs as `LocalSystem` (the secure-desktop and logon-screen targets) collapses to
+/// the single `SYSTEM` entry rather than repeating it.
+pub fn service_worker_pipe_dacl(worker_sid: &str) -> String {
+    let w = worker_sid.trim();
+    let is_system =
+        w.is_empty() || w.eq_ignore_ascii_case(SDDL_SYSTEM) || w.eq_ignore_ascii_case("S-1-5-18");
+    if is_system {
+        format!("D:P(A;;GA;;;{SDDL_SYSTEM})")
+    } else {
+        format!("D:P(A;;GA;;;{SDDL_SYSTEM})(A;;GA;;;{w})")
+    }
+}
+
+/// Whether two image paths name the same file (case-insensitive, `\\?\` prefix and slash
+/// direction ignored). Both pipe peers use it to check that the process on the other end runs
+/// the image this one does (C §7.2, D §4.2).
+pub fn same_image(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.trim_start_matches(r"\\?\")
+            .replace('/', "\\")
+            .to_lowercase()
+    };
+    !a.is_empty() && norm(a) == norm(b)
+}
+
+/// A fresh, non-secret pipe suffix: 32 lower-case hex characters from the OS generator.
+pub fn new_pipe_suffix() -> String {
+    ia_core::rnd::hex(16)
+}
+
+/// A pipe suffix is exactly 32 lower-case hex characters (`--handover-pipe`, `--service-pipe`).
+pub fn valid_pipe_suffix(s: &str) -> bool {
+    s.len() == 32
+        && s.bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
 /// The `--url` argument rule (§2.5 L2): when `--url` is present the agent joins the entire
 /// remaining command-line tail into one string and ignores every other switch. This
 /// reassembles that tail from the already-split args following `--url`.
@@ -103,6 +154,53 @@ mod tests {
             handover_pipe("ab").as_str(),
             r"\\.\pipe\IndiansAssist.ho.ab"
         );
+    }
+
+    #[test]
+    fn the_service_pipe_name_and_dacl_are_the_contract_ones() {
+        assert_eq!(
+            service_worker_pipe("0123456789abcdef0123456789abcdef"),
+            r"\\.\pipe\IndiansAssist.svc.0123456789abcdef0123456789abcdef"
+        );
+        // A worker running as a user: SYSTEM and that user, nobody else, protected.
+        let d = service_worker_pipe_dacl("S-1-5-21-77-1001");
+        assert_eq!(d, "D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-77-1001)");
+        assert!(
+            !d.contains(";;BA)"),
+            "Administrators are not granted this pipe"
+        );
+        // A LocalSystem worker: one entry, not a repeated one.
+        for sid in ["SY", "S-1-5-18", "s-1-5-18", ""] {
+            assert_eq!(service_worker_pipe_dacl(sid), "D:P(A;;GA;;;SY)");
+        }
+    }
+
+    #[test]
+    fn a_pipe_suffix_is_fresh_and_checked() {
+        let a = new_pipe_suffix();
+        assert!(valid_pipe_suffix(&a));
+        assert_ne!(a, new_pipe_suffix());
+        for bad in [
+            "",
+            "ABCDEF0123456789abcdef0123456789",
+            "0123",
+            &"0".repeat(33),
+        ] {
+            assert!(!valid_pipe_suffix(bad), "{bad} must not pass");
+        }
+    }
+
+    #[test]
+    fn the_same_image_check_ignores_case_prefix_and_slashes_but_not_another_file() {
+        assert!(same_image(
+            r"\\?\C:\Program Files\IndiansAssist\ia-desktop.exe",
+            r"c:/program files/indiansassist/IA-DESKTOP.EXE"
+        ));
+        assert!(!same_image(
+            r"C:\Program Files\IndiansAssist\ia-desktop.exe",
+            r"C:\Users\x\Downloads\ia-desktop.exe"
+        ));
+        assert!(!same_image("", ""));
     }
 
     #[test]

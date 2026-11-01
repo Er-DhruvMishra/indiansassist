@@ -14,27 +14,43 @@
 //! * playbook argument validation, the cmd value rule, body lint and the output
 //!   marker parser ([`playbook`]).
 //!
+//! Phase D (`docs/specs/phase-d-contracts.md`) adds the portable half of the installed
+//! service: the device signature domains ([`devsig`]), sealing to a device key ([`seal`]),
+//! the unattended policy and its decisions ([`policy`]), the fleet wire types and the
+//! `/signal/device` protocol ([`fleet`]), the enrollment client state machine ([`enroll`]),
+//! the offline action queue ([`queue`]), the tamper outbox ([`tamper`]) and the
+//! service to desktop-worker handoff blob ([`handoff`]).
+//!
 //! Cross-language parity: `tests/shared_vectors.rs` loads the shared fixtures under
 //! `packages/shared/test/fixtures/agent/` (sec vectors, wire names, file lists), the same
 //! files the TypeScript and Kotlin tests load.
 
 pub mod abr;
+pub mod backoff;
 pub mod canonical;
 pub mod capture_decision;
 pub mod clipsync;
 pub mod consent;
 pub mod control;
 pub mod ctl;
+pub mod devsig;
 pub mod download;
+pub mod enroll;
 pub mod files;
 pub mod filexfer;
+pub mod fleet;
 pub mod handover;
 pub mod join_input;
 pub mod playbook;
+pub mod policy;
+pub mod queue;
+pub mod rnd;
+pub mod seal;
 pub mod sec;
 pub mod secchan;
 pub mod state;
 pub mod stats;
+pub mod tamper;
 pub mod teardown;
 pub mod token;
 pub mod types;

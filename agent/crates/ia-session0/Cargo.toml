@@ -1,0 +1,42 @@
+[package]
+name = "ia-session0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase D session-0 bridge (contract D 11.1): the service to desktop-worker handoff blob and duplex pipe protocol, the pipe name / DACL / peer checks, desktop selection and InteractiveState derivation. Pure logic by default; WTSQueryUserToken, CreateProcessAsUser and the desktop API behind the `winapi` feature."
+
+[features]
+# Default build is pure Rust: the blob codec, the pipe protocol, the desktop-selection table
+# and the secure-surface gates, all unit-tested without an OS call (contract D 15.2).
+default = []
+winapi = ["dep:windows", "ia-platform/winapi"]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Environment",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+serde_json.workspace = true

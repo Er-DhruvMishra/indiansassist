@@ -23,6 +23,11 @@ pub struct ConsentRequest {
     pub warnings: Vec<String>,
     /// The consent deadline (A: 180 s), shown as a countdown; expiry = Decline.
     pub deadline_secs: u64,
+    /// Phase D §6.2 `auto_grant`: the server already settled consent under the device's
+    /// unattended policy, so there is nobody to ask and no form to show. The window opens
+    /// **as the indicator pill** instead — the indicator is never skipped (P3), it is just
+    /// not preceded by a question. `false` for every Phase C session.
+    pub start_live: bool,
 }
 
 /// The Desk's file-accept prompt facts (contract §6.1 F4).

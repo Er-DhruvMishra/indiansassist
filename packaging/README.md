@@ -134,18 +134,24 @@ as an administrator. Command-line equivalent:
 | `IA_WAKER_OPT_OUT`     | `1` or `0`: this device never acts as a LAN waker (rule 8.2d). Written into `config.json`.                                                  |
 | `IA_AMT_PROXY_OPT_OUT` | `1` or `0`: this device never proxies AMT commands (rule 8.4b).                                                                             |
 
-## Depends on the service crate (not built yet)
+## What the service side provides (built)
 
-The MSI expects these behaviours from `ia-service` / `ia-watchdog`. They are proposals until the service stream
-implements and confirms them:
+The MSI expected these behaviours from `ia-service` / `ia-watchdog`. The service stream implemented them, and each one
+is now a real entry point rather than a proposal:
 
-- `ia-service.exe` and `ia-watchdog.exe` are SCM-aware service binaries.
-- `ia-service.exe --msi-uninstall` performs the signed deregister (`ia-dereg-v1`, section 7.2) with a bounded timeout,
-  shreds the key blobs and exits.
-- `ia-watchdog.exe --task` is the one-shot check run by the scheduled task.
-- `ia-service` applies the failure actions (restart after 5 s / 10 s / 60 s, section 4.1) to both services with
-  `ChangeServiceConfig2`. The MSI does not set them, because Microsoft documents the MSI `MsiServiceConfig*` tables as
-  not working reliably.
-- The service reads `%ProgramData%\IndiansAssist\manifest.json`. The packaging stream proposes this shape:
-  `{ v: 1, version, arch, placeholder, files: [{ name, size, sha256 }] }`.
-- The service reads `enroll.iaconfig` beside its binary and `config.json`, which has no `deviceId` until enrollment.
+| What the MSI does                                  | What the service provides                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| registers two SCM services                         | `ia-service.exe` and `ia-watchdog.exe` are SCM-aware (`windows-service`): `ia-service` handles `STOP`, `SHUTDOWN` and `SESSIONCHANGE`, `ia-watchdog` handles `STOP` and `SHUTDOWN`.                                                                                                                                                                       |
+| runs `ia-service.exe --msi-uninstall` on uninstall | performs the signed deregister (`ia-dereg-v1`, section 7.2) with a 10 s timeout, then overwrites and deletes both key blobs. A server it cannot reach is logged, not retried: section 10.2's silent-past-grace rule still surfaces the device.                                                                                                            |
+| registers the scheduled task                       | `ia-watchdog.exe --task` is the one-shot check (`ia_watchdog::decide`), and the watchdog re-registers the task itself if it disappears.                                                                                                                                                                                                                   |
+| does **not** set the failure actions               | `ia-service` applies them to both services at start-up (`restart after 5 s / 10 s / 60 s`, section 4.1) through `ChangeServiceConfig2`, and also sets "restart on a non-zero exit".                                                                                                                                                                       |
+| writes `%ProgramData%\IndiansAssist\manifest.json` | read by `ia_service::config::InstallManifest` in exactly the proposed shape, `{ v: 1, version, arch, placeholder, files: [{ name, size, sha256 }] }`, and compared against the installed binaries on every start and every hour (section 10.3). A mismatch records `binary_changed` and the service **refuses to spawn the worker** until it is repaired. |
+| writes `config.json` without a `deviceId`          | `ia_service::config::ServiceConfig` treats that as un-enrolled and enrols on first start; it then writes `deviceId`, `keyId`, `region` and `orgId` back. It also re-checks the section 12.3 origin rules on load, so a config edited to point at another host is refused.                                                                                 |
+| writes `enroll.iaconfig` beside the binary         | read, verified against the region keys compiled into `ia-service` (`IA_TOKEN_PUBKEYS`), sent verbatim, and **shredded only after a `201`** (section 3.1 step 5).                                                                                                                                                                                          |
+
+Two notes for whoever builds the MSI next:
+
+- **`watchdog-task.xml` must be installed beside the binaries.** The watchdog re-registers the task from
+  `<install dir>\watchdog-task.xml` with `schtasks /Create /XML`, the same path the MSI uses.
+- **The manifest should list the three exes.** Anything else it lists is integrity-checked too, which is fine, but a
+  file that the installer legitimately rewrites would make every hourly check record `binary_changed`.

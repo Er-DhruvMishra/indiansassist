@@ -1,0 +1,34 @@
+[package]
+name = "ia-waker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase D wake and AMT proxy (contract D 11.1): the magic-packet builder, rule 8.2a segment hashing, opening a sealed target MAC, and the AMT WS-Management request builder, digest authentication and SOL redirection framing. Pure by default; UDP and HTTPS transports behind the `net` feature."
+
+[features]
+# Default build is pure Rust: packet bytes, segment hashes, WS-Man XML, digest headers and SOL
+# frames, all tested against vectors with no socket (contract D 15.2 "no test calls ... a real
+# AMT host").
+default = []
+# The transports: UDP broadcast (std only) and the AMT HTTPS client (ureq + rustls, D 11.2).
+net = ["dep:ureq"]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+base64.workspace = true
+md-5 = "0.10.6"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+ureq = { version = "2.10.1", default-features = false, features = ["tls", "gzip"], optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

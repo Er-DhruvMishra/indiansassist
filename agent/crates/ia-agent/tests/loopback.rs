@@ -249,6 +249,8 @@ fn fake_assist_control_ops_are_gated_by_level() {
         clipboard_enabled: false,
         consented_monitors: vec![1],
         secure_desktop: false,
+        // A portable Phase C agent: the Phase D service-grade ops stay `not_supported`.
+        service: None,
     };
 
     // The fake Assist sends an encrypted `os.pointer` (an input op) at `control`.
@@ -446,6 +448,7 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
             clipboard_enabled: false,
             consented_monitors: vec![1],
             secure_desktop: false,
+            service: None,
         },
     );
     let Action::PlaybookRun {
@@ -483,6 +486,7 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
             interpreter: PlaybookInterpreter::Powershell,
             body: run.body.clone(),
             env: vec![],
+            secret_env: vec![],
             timeout: std::time::Duration::from_secs(60),
             run_dir: dir.clone(),
             limits: Default::default(),

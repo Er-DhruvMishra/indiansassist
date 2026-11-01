@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Platform traits (Capturer, InputSink, ClipboardBridge, Elevation, SelfDelete, ProtocolHandler, KnownFolders) and the sys_lib late-binding loader, with Windows impls behind the `winapi` feature (contract §11.1, §14)."
+description = "Platform traits (Capturer, InputSink, ClipboardBridge, Elevation, SelfDelete, ProtocolHandler, KnownFolders, and the Phase D ServiceHost, DesktopBridge, Waker, Amt, SecretInjector) and the sys_lib late-binding loader, with Windows impls behind the `winapi` feature (contract C 11.1, 14; D 11.1)."
 
 [features]
 # Default build is pure-Rust and compiles on x86_64-pc-windows-gnu with no C toolchain.
@@ -16,7 +16,9 @@ winapi = ["dep:windows", "dep:libloading"]
 [dependencies]
 ia-core.workspace = true
 regex.workspace = true
+serde.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, optional = true, features = [

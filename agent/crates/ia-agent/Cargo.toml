@@ -39,6 +39,7 @@ winapi = [
     "ia-input-win/winapi",
     "ia-capture-win/winapi",
     "ia-platform/winapi",
+    "ia-session0/winapi",
 ]
 # The egui/eframe consent window, pill, panel and tray icon.
 gui = ["ia-ui/gui"]
@@ -46,9 +47,13 @@ gui = ["ia-ui/gui"]
 [dependencies]
 ia-core.workspace = true
 ia-platform.workspace = true
+ia-session0.workspace = true
 ia-input-win.workspace = true
 ia-capture-win.workspace = true
 ia-ui.workspace = true
+# The §7.2 / D §4.2 blobs are serde types, and the hand-over errors are `thiserror` ones.
+serde.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_json.workspace = true
@@ -86,6 +91,11 @@ windows = { workspace = true, features = [
     "Win32_System_Pipes",
     "Win32_System_Threading",
     "Win32_UI_Shell",
+    # `ShellExecuteExW` / `SHELLEXECUTEINFOW` (the §7.3 `runas` launch) sit behind the `windows`
+    # crate's `Win32_System_Registry` gate. Phase C compiled only because another crate in the
+    # graph happened to enable it; naming it here keeps `ia-agent` building on its own, which is
+    # how `ia-service` depends on it (`default-features = false`).
+    "Win32_System_Registry",
 ] }
 
 [dev-dependencies]

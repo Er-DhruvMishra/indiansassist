@@ -3,6 +3,7 @@
  * merge with strict re-validation, allowed hours across a time-zone boundary, every row of the section 6.2 decision
  * table and of rule 9.9, and the safe defaults.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_UNATTENDED_POLICY,
@@ -178,5 +179,79 @@ describe('decideDeviceAction: rule 9.9', () => {
   });
   it('message is never gated', () => {
     expect(a('dispatch', P({ mode: 'deny' }), present, 'message')).toEqual({ outcome: 'run', approvedBy: 'policy', notify: true });
+  });
+});
+
+/**
+ * Section 15.2: the decision the api makes and the one the installed service re-runs on the device (rule 9.9 "again
+ * on the device before running") must never drift. `test/fixtures/fleet/decisions.json` is generated from the code
+ * above by `scripts/gen-fleet-fixtures.mjs` and replayed here and by `agent/crates/ia-core/tests/fleet_vectors.rs`.
+ * This half of the pair is what fails when the fixture is regenerated from a changed implementation without the Rust
+ * side following; `pnpm fleet:fixtures` (--check) is what fails when the fixture is not regenerated at all.
+ */
+describe('cross-language decision parity (fixtures/fleet/decisions.json)', () => {
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/fleet/decisions.json', import.meta.url), 'utf8')) as {
+    v: number;
+    policies: Record<string, UnattendedPolicy>;
+    merge: { name: string; org: object | null; group: object | null; device: object | null; invalid?: boolean; expect?: UnattendedPolicy }[];
+    windows: { name: string; allowedHours: UnattendedPolicy['allowedHours']; now: string; inside: boolean; nextStart: string | null }[];
+    sessions: { name: string; policy: string; unattended: boolean; interactive: string | null; now: string; recorderAvailable: boolean | null; expect: unknown }[];
+    actions: { name: string; stage: 'queue' | 'dispatch'; kind: string; privileged: boolean; policy: string | null; policyInline: UnattendedPolicy | null; interactive: string | null; now: string; expect: unknown }[];
+  };
+
+  it('the fixture is the one this build generates', () => {
+    expect(fx.v).toBe(1);
+    expect(Object.keys(fx.policies).length).toBeGreaterThan(5);
+    for (const p of Object.values(fx.policies)) expect(unattendedPolicySchema.parse(p)).toEqual(p);
+  });
+
+  it('replays every merge case', () => {
+    expect(fx.merge.length).toBeGreaterThanOrEqual(10);
+    for (const c of fx.merge) {
+      const orgDefault = c.org ? P(c.org as Partial<UnattendedPolicy>) : null;
+      const run = () => resolveUnattendedPolicy({ unattendedPolicy: c.device }, { defaultPolicy: c.group }, orgDefault);
+      if (c.invalid) expect(run, c.name).toThrow();
+      else expect(run(), c.name).toEqual(c.expect);
+    }
+  });
+
+  it('replays every allowed-hours case', () => {
+    for (const c of fx.windows) {
+      const policy = P({ allowedHours: c.allowedHours });
+      expect(isWithinPolicyWindow(policy, new Date(c.now)), c.name).toBe(c.inside);
+      const next = nextPolicyWindowStart(policy, new Date(c.now));
+      expect(next ? next.toISOString() : null, c.name).toBe(c.nextStart);
+    }
+  });
+
+  it('replays every section 6.2 session row', () => {
+    expect(fx.sessions.length).toBeGreaterThanOrEqual(15);
+    for (const c of fx.sessions) {
+      const got = decideDeviceSession({
+        unattended: c.unattended,
+        policy: fx.policies[c.policy]!,
+        interactive: c.interactive ? { state: c.interactive as 'active' } : null,
+        now: new Date(c.now),
+        ...(c.recorderAvailable === null ? {} : { recorderAvailable: c.recorderAvailable }),
+      });
+      expect(got, c.name).toEqual(c.expect);
+    }
+  });
+
+  it('replays every rule 9.9 action row at both stages', () => {
+    expect(fx.actions.length).toBeGreaterThanOrEqual(15);
+    for (const c of fx.actions) {
+      const got = decideDeviceAction({
+        stage: c.stage,
+        kind: c.kind as 'playbook_run',
+        privileged: c.privileged,
+        policy: c.policy ? fx.policies[c.policy]! : c.policyInline!,
+        interactive: c.interactive ? { state: c.interactive as 'active' } : null,
+        now: new Date(c.now),
+      });
+      expect(got, c.name).toEqual(c.expect);
+    }
+    for (const stage of ['queue', 'dispatch']) expect(fx.actions.some((c) => c.stage === stage)).toBe(true);
+    for (const kind of ['playbook_run', 'file_push', 'print', 'message']) expect(fx.actions.some((c) => c.kind === kind)).toBe(true);
   });
 });

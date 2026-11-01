@@ -1,0 +1,28 @@
+[package]
+name = "ia-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase D desktop worker (contract D 11.1): a thin main.rs that reads the section 4.2 handoff blob from the service pipe, serves the duplex channel, and runs the Phase C ia-agent serve loop with the section 4.3 seams. No capture, input or protocol code of its own."
+
+[[bin]]
+name = "ia-desktop"
+path = "src/main.rs"
+
+[features]
+# The worker is the C agent: the same media stack, the same Win32 layer, the same UI.
+default = ["ia-agent/media", "ia-agent/winapi", "ia-agent/gui", "ia-session0/winapi"]
+# `dev` passes the C local-testing switches through (`--synthetic-capture` for an automated run).
+dev = ["ia-agent/dev"]
+
+[dependencies]
+ia-agent = { workspace = true, default-features = false }
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-session0.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

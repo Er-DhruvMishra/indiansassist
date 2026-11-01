@@ -1,0 +1,82 @@
+[package]
+name = "ia-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase D installed service (contract D 11.1): device identity and DPAPI sealing, the enrollment client, the persistent /signal/device socket, interactive reporting, the action policy gate, worker supervision and the section 4.2 handoff, the offline-queue drain, waker and AMT execution, receipts and the watchdog registration."
+
+[lib]
+name = "ia_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ia-service"
+path = "src/main.rs"
+required-features = ["service"]
+
+[features]
+# Default: the pure half (paths, config, the manifest and integrity comparison, the machine
+# facts, the device-socket protocol handling) so `cargo test` runs it anywhere.
+default = []
+# The real service: Win32, the SCM, the network, the worker launch.
+service = [
+    "dep:windows",
+    "dep:windows-service",
+    "dep:tokio",
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:ureq",
+    "ia-session0/winapi",
+    "ia-platform/winapi",
+    "ia-waker/net",
+]
+# Local-testing switches (`--data-dir`, `--console`, `--api-origin`), as C does with `dev`.
+dev = []
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-session0.workspace = true
+ia-vault.workspace = true
+ia-waker.workspace = true
+ia-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# The service is the one that reads the wall clock (tamper event timestamps, the rule 9.9 gate
+# at dispatch), so it enables chrono's `clock` feature; `ia-core` deliberately does not.
+chrono = { workspace = true, features = ["clock"] }
+
+tokio = { workspace = true, optional = true, features = ["process", "signal"] }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+ureq = { version = "2.10.1", default-features = false, features = ["tls", "gzip"], optional = true }
+windows-service = { version = "0.7.0", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Registry",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_RemoteDesktop",
+] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3.13.0"

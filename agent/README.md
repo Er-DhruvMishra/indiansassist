@@ -1,10 +1,15 @@
-# IndiansAssist portable agent (`agent/`)
+# IndiansAssist Windows agent and installed service (`agent/`)
 
-The Windows portable support client (Phase C, `docs/specs/phase-c-contracts.md`). A Rust
-Cargo workspace that joins a `p3_portable` session as a native WebRTC Desk peer, shows the
-consent window and the always-on-top indicator, captures monitors, injects OS-level input,
-runs pinned playbooks, hands over to an elevated instance on request, and self-deletes on
-exit.
+Two products in one Cargo workspace, because they are mostly the same code:
+
+* **the portable agent** (Phase C, `docs/specs/phase-c-contracts.md`): joins a `p3_portable`
+  session as a native WebRTC Desk peer, shows the consent window and the always-on-top
+  indicator, captures monitors, injects OS-level input, runs pinned playbooks, hands over to an
+  elevated instance on request, and self-deletes on exit;
+* **the installed service** (Phase D, `docs/specs/phase-d-contracts.md`): a `LocalSystem`
+  service that enrols the machine, holds one authenticated socket to the region, and launches a
+  **desktop worker** per session. The worker *is* the Phase C serve loop with three seams
+  replaced (D §4.3) — it has no capture, input or protocol code of its own.
 
 ## Workspace layout (contract §11.1)
 
@@ -15,7 +20,14 @@ exit.
 | `ia-input-win` | the W3C-code→PS/2 scancode table and the virtual-desktop pointer mapping (pure, tested); `SendInput`/clipboard injection behind `winapi` | pure math (SendInput behind `winapi`) |
 | `ia-capture-win` | recorder canvas / ladder letterbox math, the BGRA→I420 converter and the I420 ladder downscale (`scale`, bilinear / area average; pure, tested); DXGI/GDI capture + monitor enumeration behind `winapi` | pure math + converter (capture behind `winapi`) |
 | `ia-ui` | the consent / pill / panel / self-defence view-model and the serve-loop bridge (pure, tested); the eframe app (consent window, pill, panel, ended view), tray, input hooks and Win32 window treatment behind `gui` | view-model + bridge (UI behind `gui`) |
-| `ia-agent` | the binary: token-source precedence, the local token check, the elevation hand-over flow, the self-delete decision, the SDP codec spec (all pure, tested); the webrtc-rs peer, the server-recorder peer, the video pump (ABR-driven VP8), voice (cpal + Opus), signaling and UI behind `media` | orchestration logic (peer behind `media`) |
+| `ia-agent` | the binary: token-source precedence, the local token check, the elevation hand-over flow, the self-delete decision, the SDP codec spec (all pure, tested); the webrtc-rs peer, the server-recorder peer, the video pump (ABR-driven VP8), voice (cpal + Opus), signaling and UI behind `media`. Phase D adds the worker seams (`svc`) and the elevated child's context (`hochild`) | orchestration logic (peer behind `media`) |
+| **Phase D (contract D §11.1)** | | |
+| `ia-service` | the SCM binary: the device identity and its DPAPI sealing, the enrollment client, the persistent `/signal/device` socket, interactive reporting, the action policy gate, worker supervision and the §4.2 handoff, the offline-queue drain, waker and AMT execution, the receipts store, the tamper outbox and the §10.3 integrity check | pure logic by default; Win32 + network behind `service` |
+| `ia-session0` | the §4.2 launch blob and duplex pipe protocol, the pipe name / DACL / peer checks, §5.3 desktop selection, §3.4 `InteractiveState` derivation and the rule 5.1c gates; `WTSQueryUserToken` / `CreateProcessAsUser` / the desktop API behind `winapi` | pure logic by default |
+| `ia-waker` | the magic-packet builder, rule 8.2a segment hashing, opening a sealed target MAC, and the AMT WS-Management request builder, HTTP Digest and answer reader; UDP and HTTPS behind `net` | pure logic by default |
+| `ia-vault` | the **injection** side of rule 9.8 only: opens server-sealed secrets, places them in one child's environment, wipes them, masks them in captured output. Holds no vault credential and makes no network call | pure Rust |
+| `ia-watchdog` | the §10.1 detect-and-restart decision table (pure, tested) and the second service / scheduled-task binary that applies it | decision table pure; SCM behind `service` |
+| `ia-desktop` | the P4 desktop worker: a thin `main.rs` that reads the §4.2 blob from the service pipe, serves the duplex channel, and runs the `ia-agent` serve loop with the §4.3 seams | the C agent's features |
 
 ## Build environment — important
 
@@ -65,6 +77,17 @@ the other screen-content settings (CBR, error-resilient, no look-ahead, high `cp
 bounded keyframe interval) are applied. Network is needed at **build** time to fetch the
 prebuilt archive.
 
+### `chrono` and the gnu cross-check
+
+`ia-core` depends on `chrono` **without** the `clock` feature, and on `chrono-tz` for the
+§6.1 `allowedHours` evaluation. That split is deliberate: every Phase D decision function takes
+`now` as an argument (which is what lets the decision table be replayed against fixed instants
+in `fixtures/fleet/decisions.json`), so the core needs no wall clock — and `clock` binds chrono
+to the Windows time API through an import library that needs `dlltool`, which this host's gnu
+toolchain does not have. `ia-service`, which does read the clock (tamper timestamps, the rule
+9.9 gate at dispatch), turns `clock` on for itself. The result is that the `ia-core` gnu
+cross-check keeps working.
+
 ### `getrandom`
 
 The earlier gnu-only `getrandom = "=0.2.11"` pin is **lifted** (it existed only for the gnu
@@ -79,7 +102,21 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo build --release -p ia-agent        # default features; GUI-subsystem exe
+# Phase D: the three installed binaries
+cargo build --release -p ia-service --features service
+cargo build --release -p ia-watchdog --features service
+cargo build --release -p ia-desktop
 ```
+
+The Phase D crates keep the same split as the Phase C ones: everything that can be decided
+without the OS is a pure function with tests, and the Win32 calls sit behind a feature. So
+`cargo test --workspace` (no features) covers the policy decisions, the protocol shapes, the
+blob and pipe grammar, the packet and hash math and the watchdog table on any host, and
+`--all-features` adds the Windows halves. **No test installs anything, starts a service, calls
+`CreateProcessAsUser`, presses `SendSAS`, blocks input or touches `%ProgramData%`** (D §15.2);
+`ia-service/tests/handoff.rs` is the one test that opens a real OS object, a named pipe between
+two processes of the test binary, because the pipe's DACL and its pid / image checks *are* the
+security property.
 
 The ia-core gnu cross-check (optional, second toolchain):
 
@@ -191,6 +228,116 @@ spawns `%SystemRoot%\System32\cmd.exe /c <stub> <pid> <exe>` with
 `CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB`. **It is never run by an automated
 test** (the e2e passes `--no-self-delete`); only the decision, the stub text, the `%TEMP%`-under-profile
 check and the stub name are unit-tested. The elevated child's `MoveFileEx` path is Phase-D-adjacent work.
+
+
+## Phase D: the installed service
+
+```
+ia-service.exe            the LocalSystem service (SCM); --msi-uninstall, --version
+ia-watchdog.exe           the second service and the scheduled task's --task one-shot
+ia-desktop.exe            the per-session desktop worker (launched by the service only)
+```
+
+**What runs where, and why it is split that way.** The service holds the device identity, the
+device socket and the policy; it never captures a screen or injects input. The worker does
+that, in the user's session (or on the secure desktop), and holds **no device key and no
+token**: it joins with a single-use worker credential the server minted, and everything
+privileged is a request back over the §4.2 pipe (`sign_sas` for rule 3.5b, `os.sas` for §5.4).
+That is what lets an unattended session exist without handing a session-0 process the ability
+to be driven by a technician.
+
+### Built and exercised
+
+* **Enrollment (§3.1, §3.2).** The signed `enroll.iaconfig` is read from beside the binary,
+  verified against the region keys compiled in (`IA_TOKEN_PUBKEYS`), sent **verbatim** with both
+  public keys and an `ia-enroll-v1` possession proof, and shredded only after a `201`. `429` and
+  `5xx` back off with jitter; `410 token_used` and `400` stop and wait for a person
+  (`ia_core::enroll`, tested with an injected transport).
+* **Identity (§3.3).** Ed25519 + X25519 generated on first start, sealed with DPAPI machine
+  scope plus a per-install entropy blob under `HKLM\SOFTWARE\IndiansAssist\Device`. The keys
+  are unsealed into `Zeroizing` buffers, used, and wiped; `Debug` prints the key **id**.
+* **The device socket (§3.4, §3.6b).** One socket, no `Origin`, no cookie, authenticated by
+  signing the server's challenge (`ia-dev-v1`) with a fresh nonce per hello. Reconnect on the
+  C §3.1 ladder; `device_disabled` pauses retries for an hour. Heartbeat every 30 s ± jitter,
+  `device.interactive` within two seconds of a change.
+* **The §4.2 handoff.** The pipe is created **before** the worker is launched
+  (`FILE_FLAG_FIRST_PIPE_INSTANCE`, a DACL for `SYSTEM` and the worker's user only), the client
+  is checked for pid *and* image, the blob is one line and carries the worker credential and the
+  generation, and the duplex channel after it carries `sign_sas`, `os.sas`, the desktop and
+  `SESSIONCHANGE` notifications. Covered end to end over real pipes by
+  `ia-service/tests/handoff.rs`.
+* **The §4.3 seams in the worker.** `auto_grant` applies the server's consent and opens the
+  window **as the pill** (no form flashes at a machine with nobody in front of it);
+  `local_approval` and `local_consent` show the consent window; rule 3.5b's `device_attest` is
+  signed by the service and sent on `ia.control` when nobody answered the consent.
+* **Privileged mode in place (§5.2, W32).** No relaunch: `allowPrivileged` is checked, a present
+  user is asked, and the level is raised with `desk.consent_level elevated`, which is what makes
+  the server chain `elevation.granted { mode: 'service' }`.
+* **§5.4 `os.input_lock` and `os.sas`.** The lock is `BlockInput` through the `InputSink` seam
+  (and the person at the machine can always break it with Ctrl+Alt+Del, which the pill says);
+  the SAS is `SendSAS` in the service, because no process can inject it. Both are gated by
+  privileged mode and by their policy flag, and each change is chained.
+* **Actions (§9).** `message` (a session toast through `WTSSendMessageW`), `file_push` (written
+  under `%ProgramData%\IndiansAssist\pushes` with the Mark-of-the-Web, hash-checked, never
+  executed) and `playbook_run` through the **Phase C runner** — the same job object, output cap,
+  owner-only run file and pinned-hash check — with rule 9.8 secrets injected into the child's
+  environment and masked out of the captured output.
+* **Wake and AMT (§8).** The sealed MAC is opened, one 102-byte packet goes to each subnet
+  broadcast and to `255.255.255.255`, and the MAC is wiped. AMT power-on and boot redirect are
+  real WS-Management calls with HTTP Digest.
+* **Self-healing and tamper (§10).** Events are signed with the identity key, appended to
+  `tamper.log` **before** they are sent, backfilled right after `device.hello.ok`, and removed
+  only on `device.tamper.ok`. A forged line (written by someone without the key) is dropped on
+  load. The integrity check compares the installed binaries against `manifest.json` at start and
+  hourly, and a mismatch records `binary_changed` and **refuses to launch the worker**.
+* **The watchdog (§10.1).** Both the service and the scheduled task run the same decision; a
+  modified binary is recorded and **never restarted**, and the restart budget (three in half an
+  hour) stops a loop from burying the evidence.
+* **The Phase C elevation hand-over (C §7.3), now wired end to end.** The prompt card (with the
+  publisher line), `desk.elevation` → `elevation.handover`, the `FILE_SHARE_READ`-only image
+  hold and its sha256, the pipe, `ShellExecuteExW(runas)`, the blob, and the parent's exit on
+  `session.handed_over` — without `session.end` and without self-deleting (§10 D3). The child
+  checks its own image hash and signer **fatally**, inherits the consent, and offers
+  `gen + 1`.
+
+### The generation question, resolved
+
+`agent/README.md` used to record a contract gap: the §7.2 blob had no `gen`, but the console
+accepts a rebuild offer only at `lastGen + 1`, so an elevated child could not know which
+generation to offer. **C §7.2 (revision 3, W43) now carries `gen` in the blob**, and D §4.2's
+launch blob carries it for the same reason. Both are implemented and both are covered by tests
+(`ia_agent::hochild`, `ia_session0::blob`).
+
+### Not built, and honest about it
+
+These are the Phase D parts this stream did **not** build. Each one is reported honestly at run
+time rather than silently doing nothing, and the device does not advertise what it cannot do —
+which is what keeps the console's buttons greyed rather than broken.
+
+| Not built | What happens instead |
+|---|---|
+| the privacy-screen overlay (rule 5.4b) | the `privacy_screen` feature is **not advertised**, so the console greys the control, and `os.privacy_screen` answers `not_supported { privacy_screen }` |
+| the per-use approval card for a protection (rule 5.4c) | the policy flag (`allowInputLock`, default false) and privileged mode are enforced, and the pill names the technician and the Ctrl+Alt+Del escape; what is missing is asking a present user *each time* |
+| printing (rule 9.5) | a `print` action fails with `unsupported`: the `__ia_print` built-in playbook does not exist, and a technician can queue a playbook that prints, with its own audit trail |
+| AMT serial-over-LAN byte forwarding (rule 8.4b) | `sol_open` answers `unsupported`. The redirection protocol on 16994/16995 is a separate binary protocol whose framing cannot be verified without vPro hardware; writing an unverified encoder that a test "confirms" against itself would be worse than saying so. Power-on and boot redirect are built |
+| key rotation (rule 3.7b) | the armed nonce is logged and `device.rotate.ok` is handled, but the service does not yet generate and swap the pair: that needs the new keys stored before the old ones are shredded, and getting the order wrong strands the device |
+| in-process desktop re-pointing (§5.1b) | the worker is **launched onto** the right desktop (`lpDesktop`), and a desktop change is a §5.3 rebuild with `gen + 1` and a fresh credential rather than a `SetThreadDesktop` on a live capture thread. The effect is the same and the failure mode is better; what is untested is whether DXGI delivers the secure desktop on real hardware, which is a manual check |
+| `idleSec` (§3.4) | always `null` from the service: `GetLastInputInfo` is per-session and a service in session 0 cannot read it. The field is fleet-view only and no policy decision uses it |
+| the `smoke:p4:load` 2,000-device run (§13.5) | still owed, as the contract already records |
+
+### Never verified here (needs a real machine, and a person)
+
+This stream was explicitly not allowed to install anything on the development machine, so the
+following have been **built and compiled but never run against a real install**. They are the
+manual checks of `docs/release.md` and of the handoff brief:
+
+* the MSI installing, the services starting, and a device enrolling against a token;
+* a session opened from the console onto a real desktop, and what a person at that machine sees;
+* the secure desktop and the logon screen actually delivering frames through DXGI;
+* a real UAC prompt (no automated run may raise one, C §7.3 / D §15.2);
+* `SendSAS`, `BlockInput` and `WTSSendMessageW` in front of a real user;
+* a service restart, a stopped service, and the tamper alert arriving in the console;
+* the uninstall leaving the machine as §12.2 requires.
 
 ## What is implemented and what is still stubbed
 
@@ -404,27 +551,30 @@ rendered pixels, physical clicks, dragging the pill, the tray icon and menu, and
   `ia_capture_win::enumerate` ensures it once before enumerating; winit would set the same context for the UI.
 
 **Stubbed / not yet wired:**
-* **Elevation (§7.2 / §7.3)**: the **transport building blocks** exist and are tested, the **flow is not wired**.
-  `ia_agent::hopipe` has the parent's pipe (`\\.\pipe\IndiansAssist.ho.<32 hex>`, `FILE_FLAG_FIRST_PIPE_INSTANCE |
-  PIPE_REJECT_REMOTE_CLIENTS`, one instance, DACL `D:P(A;;GA;;;<user SID>)(A;;GA;;;BA)`), `serve_once` (one client within
-  the window; `GetNamedPipeClientProcessId` must equal the launched pid and `QueryFullProcessImageNameW` our own image,
-  else it is disconnected and the step fails; then the blob is written and flushed), the child's `read_blob`
-  (`SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`, `GetNamedPipeServerProcessId` must be the parent pid and run our
-  image, the buffer is `Zeroizing`), `parent_pid` (toolhelp), the `FILE_SHARE_READ`-only `ImageHold` with the image
-  sha256, and `launch_elevated` (`ShellExecuteExW` `runas`, `SEE_MASK_NOCLOSEPROCESS`, `ERROR_CANCELLED` ->
-  `Cancelled`). `tests/hopipe.rs` runs the real pipes with this test binary re-launched by `CreateProcess` as the child
-  (blob delivered; a wrong client pid refused without the blob; a child refusing a server that is not its parent; a
-  second pipe instance refused; timeouts; the image hold blocking writers). `launch_elevated` is **never** called by a
-  test (no UAC prompt in automated runs). Not done: the prompt card + `desk.elevation` -> `elevation.handover` ->
-  launch sequence in the serve loop, the `--handover-pipe` child path (blob -> hash / signer check -> `desk.hello
-  { handover }` -> resume -> rebuild), the user instance's `session.handed_over` / `4411` exit, the admin-instance
-  playbook paths, and the elevated child's `MoveFileEx` self-delete; so interactive builds still answer
-  `elevation.request` with `elevation failed` (the F11 bullet above). **Contract gap for whoever wires it:** the
-  §7.2 blob has no `gen`, but the console accepts a rebuild offer only at `lastGen + 1`, so the child cannot know which
-  generation to offer; the blob (or `desk.hello.ok.resume`) needs the current generation.
-  The admin-instance playbook paths (limited linked token, `%ProgramData%` run dir with the high-integrity label) are
-  not implemented; an elevated agent refuses non-elevation playbooks instead.
-* **1.5 s pre-consent sleep** (headless only) is kept until the console reliably gets the level on resume /
+* **Elevation (§7.2 / §7.3): wired end to end by the Phase D service stream.** The transport
+  building blocks were already there and tested (`ia_agent::hopipe`: the parent's pipe
+  `\\.\pipe\IndiansAssist.ho.<32 hex>` with `FILE_FLAG_FIRST_PIPE_INSTANCE |
+  PIPE_REJECT_REMOTE_CLIENTS`, one instance and the DACL `D:P(A;;GA;;;<user SID>)(A;;GA;;;BA)`;
+  `serve_once` with its client-pid and image checks; the child's `read_blob` with
+  `SECURITY_IDENTIFICATION` and its server-pid and image checks; `parent_pid`; the
+  `FILE_SHARE_READ`-only `ImageHold` with the image sha256; and `launch_elevated`). What is new
+  is the **flow**: the §7.3 step-2 prompt card (with the publisher line), `desk.elevation` →
+  `elevation.handover`, the image hold and its hash, the pipe, `ShellExecuteExW(runas)`, the
+  blob, `ctl.event elevation { uac_shown | handover | denied | failed }`, the
+  `elevation.denied` / `elevation.failed` chain entries, and the parent's exit on
+  `session.handed_over` — without `session.end`, because the session continues, and without
+  self-deleting, because the child is running the same file (§10 D3, `ProcessRole::UserHandedOver`).
+  The child path is `--handover-pipe <hex>`: read the blob, hash its own image and compare it
+  with what the parent hashed (**fatal**), check the signer (**fatal** in a release build),
+  inherit the consent, `desk.hello { token, handover, client.elevation: 'admin' }`, and offer
+  **`gen + 1`** from the blob's `gen` (the contract gap recorded here before, now C §7.2 W43).
+  `launch_elevated` is still **never called by a test** (no UAC prompt in an automated run,
+  D §15.2), and a headless `--auto-consent` run keeps the old mint-only behaviour so the e2e is
+  unchanged. **Not verified:** a real UAC prompt and a real hand-over, which need a person at the
+  machine; that is a manual check in `docs/release.md`.
+  The admin-instance playbook paths (limited linked token, `%ProgramData%` run dir with the
+  high-integrity label) are still not implemented; an elevated agent refuses non-elevation
+  playbooks instead.
   `session.created`; dropping it now would race the e2e console's `consent.changed` subscription.
 * **Consent window extras**: no org logo (`logoData`), no "Screen capture is not available" Retry step before consent
   (capture starts after `consent.ok`), a generic region in the recording sentence, no §2.4 / §2.6 sidecar lines (only

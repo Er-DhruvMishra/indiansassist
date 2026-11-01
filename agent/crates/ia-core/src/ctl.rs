@@ -83,10 +83,23 @@ pub enum Action {
         level: AgentConsentLevel,
         reason: String,
     },
-    /// Assist asks for admin rights (shows the elevation card, §7.3).
+    /// Assist asks for admin rights (shows the elevation card, §7.3; in P4 the level is
+    /// raised in place with no relaunch, §5.2 / W32).
     ElevationRequest {
         reason: String,
     },
+    /// §5.4 `os.input_lock`: block the local keyboard and mouse while the technician works.
+    /// Only a service-tier worker produces this; a portable agent answers `not_supported`.
+    InputLock {
+        locked: bool,
+    },
+    /// §5.4 `os.privacy_screen`: blank the physical monitors behind a branded overlay.
+    PrivacyScreen {
+        on: bool,
+    },
+    /// §5.4 `os.sas`: press Ctrl+Alt+Del through the service's `SendSAS`. No process can
+    /// inject it (C §5.4), so the worker asks the service over the §4.2 pipe.
+    SendSas,
     /// A validated run op to hand to the playbook runner (§8.4).
     PlaybookRun {
         run_id: String,
@@ -129,6 +142,27 @@ pub struct DispatchCtx {
     pub consented_monitors: Vec<u32>,
     /// True while the UAC secure desktop is up: every input/capture op answers `secure_desktop`.
     pub secure_desktop: bool,
+    /// `Some` only in a Phase D desktop worker (D §5.4). A portable Phase C agent leaves it
+    /// `None` and the service-grade ops keep answering `not_supported { phase_d }`, which is
+    /// what the console greys its buttons by.
+    pub service: Option<ServiceGrade>,
+}
+
+/// What a service-tier worker may do (D §5.4): the policy flags, and what this build actually
+/// implements. A feature that is not built answers `not_supported` and is not advertised, so a
+/// technician never sees a live button that fails when pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ServiceGrade {
+    /// `allowInputLock` of the effective policy (rule 5.4a).
+    pub allow_input_lock: bool,
+    /// `allowPrivacyScreen` of the effective policy (rule 5.4a).
+    pub allow_privacy_screen: bool,
+    /// Whether this build has the local input lock (`BlockInput`).
+    pub input_lock_built: bool,
+    /// Whether this build has the privacy-screen overlay.
+    pub privacy_screen_built: bool,
+    /// Whether the service could reach `SendSAS` on this machine.
+    pub sas_built: bool,
 }
 
 impl DispatchCtx {
@@ -255,12 +289,94 @@ pub fn dispatch(req: &CtlReq, ctx: &DispatchCtx) -> Dispatched {
         "os.text" => dispatch_text(id, &req.args),
         "os.nav" => refused(id, "not_supported", Some("nav")),
         "clipboard.set" => dispatch_clipboard_set(id, &req.args, ctx),
-        "os.input_lock" | "os.privacy_screen" => refused(id, "not_supported", Some("phase_d")),
+        "os.input_lock" => dispatch_input_lock(id, &req.args, ctx),
+        "os.privacy_screen" => dispatch_privacy_screen(id, &req.args, ctx),
+        "os.sas" => dispatch_sas(id, ctx),
         "level.request" => dispatch_level_request(id, &req.args),
         "elevation.request" => dispatch_elevation_request(id, &req.args),
         "playbook.run" => dispatch_playbook_run(id, req, ctx),
         "playbook.cancel" => dispatch_playbook_cancel(id, &req.args),
         _ => refused(id, "not_supported", None),
+    }
+}
+
+/// Rule 5.4a / §5.5: a service-grade op is refused with `not_supported { phase_d }` on a
+/// portable agent, `not_supported { <feature> }` on a service build that does not implement it,
+/// and `not_allowed` when the policy flag is false. The distinction matters to a technician:
+/// the first two say "this machine cannot", the third says "this machine may not" — and only
+/// the third can be fixed by an org_admin changing the policy.
+fn service_gate(
+    id: &str,
+    ctx: &DispatchCtx,
+    allowed: bool,
+    built: bool,
+    what: &str,
+) -> Option<Dispatched> {
+    let Some(_) = ctx.service else {
+        return Some(refused(id, "not_supported", Some("phase_d")));
+    };
+    if !built {
+        return Some(refused(id, "not_supported", Some(what)));
+    }
+    if !allowed {
+        return Some(refused(id, "not_allowed", None));
+    }
+    None
+}
+
+fn dispatch_input_lock(id: &str, args: &Value, ctx: &DispatchCtx) -> Dispatched {
+    let s = ctx.service.unwrap_or_default();
+    if let Some(refusal) = service_gate(
+        id,
+        ctx,
+        s.allow_input_lock,
+        s.input_lock_built,
+        "input_lock",
+    ) {
+        return refusal;
+    }
+    match args.get("locked").and_then(Value::as_bool) {
+        Some(locked) => Dispatched {
+            response: ok_res(id, json!({ "locked": locked })),
+            action: Action::InputLock { locked },
+            refused: false,
+        },
+        None => refused(id, "bad_args", None),
+    }
+}
+
+fn dispatch_privacy_screen(id: &str, args: &Value, ctx: &DispatchCtx) -> Dispatched {
+    let s = ctx.service.unwrap_or_default();
+    if let Some(refusal) = service_gate(
+        id,
+        ctx,
+        s.allow_privacy_screen,
+        s.privacy_screen_built,
+        "privacy_screen",
+    ) {
+        return refusal;
+    }
+    match args.get("on").and_then(Value::as_bool) {
+        Some(on) => Dispatched {
+            response: ok_res(id, json!({ "on": on })),
+            action: Action::PrivacyScreen { on },
+            refused: false,
+        },
+        None => refused(id, "bad_args", None),
+    }
+}
+
+fn dispatch_sas(id: &str, ctx: &DispatchCtx) -> Dispatched {
+    let s = ctx.service.unwrap_or_default();
+    // `os.sas` has no policy flag of its own: it is reached through privileged mode, which
+    // `allowPrivileged` already gates (rule 5.2a).
+    if let Some(refusal) = service_gate(id, ctx, true, s.sas_built, "sas") {
+        return refusal;
+    }
+    Dispatched {
+        response: ok_res(id, json!({})),
+        action: Action::SendSas,
+        refused: false,
     }
 }
 
@@ -550,7 +666,126 @@ mod tests {
             clipboard_enabled: false,
             consented_monitors: vec![1, 2],
             secure_desktop: false,
+            // A portable Phase C agent: the service-grade ops stay `not_supported`.
+            service: None,
         }
+    }
+
+    /// A Phase D worker's context, with the policy flags and what this build implements.
+    fn worker_ctx(level: AgentConsentLevel, service: ServiceGrade) -> DispatchCtx {
+        DispatchCtx {
+            service: Some(service),
+            ..ctx(level)
+        }
+    }
+
+    fn all_built(allow_lock: bool, allow_privacy: bool) -> ServiceGrade {
+        ServiceGrade {
+            allow_input_lock: allow_lock,
+            allow_privacy_screen: allow_privacy,
+            input_lock_built: true,
+            privacy_screen_built: true,
+            sas_built: true,
+        }
+    }
+
+    #[test]
+    fn the_service_grade_ops_stay_phase_d_on_a_portable_agent() {
+        let cx = ctx(AgentConsentLevel::Elevated);
+        for (op, args) in [
+            ("os.input_lock", json!({ "locked": true })),
+            ("os.privacy_screen", json!({ "on": true })),
+            ("os.sas", json!({})),
+        ] {
+            let d = dispatch(&req(op, "l", args), &cx);
+            assert!(d.refused, "{op} must be refused on a portable agent");
+            assert_eq!(d.response["error"]["code"], "not_supported");
+            assert_eq!(d.response["error"]["message"], "phase_d");
+        }
+    }
+
+    #[test]
+    fn a_worker_locks_input_when_the_policy_allows_it() {
+        let cx = worker_ctx(AgentConsentLevel::Elevated, all_built(true, true));
+        let d = dispatch(&req("os.input_lock", "l", json!({ "locked": true })), &cx);
+        assert!(!d.refused);
+        assert_eq!(d.action, Action::InputLock { locked: true });
+        assert_eq!(d.response["result"]["locked"], true);
+        let off = dispatch(&req("os.input_lock", "l", json!({ "locked": false })), &cx);
+        assert_eq!(off.action, Action::InputLock { locked: false });
+    }
+
+    #[test]
+    fn a_policy_that_forbids_a_protection_answers_not_allowed_not_not_supported() {
+        let cx = worker_ctx(AgentConsentLevel::Elevated, all_built(false, false));
+        for (op, args) in [
+            ("os.input_lock", json!({ "locked": true })),
+            ("os.privacy_screen", json!({ "on": true })),
+        ] {
+            let d = dispatch(&req(op, "l", args), &cx);
+            assert!(d.refused);
+            assert_eq!(d.response["error"]["code"], "not_allowed", "{op}");
+        }
+    }
+
+    #[test]
+    fn a_protection_this_build_does_not_implement_says_so_rather_than_claiming_policy() {
+        let service = ServiceGrade {
+            allow_input_lock: true,
+            allow_privacy_screen: true,
+            input_lock_built: true,
+            privacy_screen_built: false,
+            sas_built: false,
+        };
+        let cx = worker_ctx(AgentConsentLevel::Elevated, service);
+        let d = dispatch(&req("os.privacy_screen", "p", json!({ "on": true })), &cx);
+        assert_eq!(d.response["error"]["code"], "not_supported");
+        assert_eq!(d.response["error"]["message"], "privacy_screen");
+        let s = dispatch(&req("os.sas", "s", json!({})), &cx);
+        assert_eq!(s.response["error"]["code"], "not_supported");
+        assert_eq!(s.response["error"]["message"], "sas");
+    }
+
+    #[test]
+    fn every_service_grade_op_needs_privileged_mode() {
+        let cx = worker_ctx(AgentConsentLevel::Control, all_built(true, true));
+        for (op, args) in [
+            ("os.input_lock", json!({ "locked": true })),
+            ("os.privacy_screen", json!({ "on": true })),
+            ("os.sas", json!({})),
+        ] {
+            let d = dispatch(&req(op, "l", args), &cx);
+            assert!(d.refused, "{op} at control must be refused");
+            // C §5.1: below the minimum level the code is `not_allowed`, the same code rule
+            // 5.4a uses for a policy refusal. The console shows the op as unavailable either
+            // way; the audit chain is where the two are told apart.
+            assert_eq!(d.response["error"]["code"], "not_allowed", "{op}");
+        }
+    }
+
+    #[test]
+    fn the_sas_op_takes_no_arguments_and_asks_the_service_to_press_it() {
+        let cx = worker_ctx(AgentConsentLevel::Elevated, all_built(false, false));
+        let d = dispatch(&req("os.sas", "s", json!({})), &cx);
+        assert!(
+            !d.refused,
+            "os.sas is gated by privileged mode, not by the lock flags"
+        );
+        assert_eq!(d.action, Action::SendSas);
+    }
+
+    #[test]
+    fn a_malformed_protection_request_is_bad_args() {
+        let cx = worker_ctx(AgentConsentLevel::Elevated, all_built(true, true));
+        assert_eq!(
+            dispatch(&req("os.input_lock", "l", json!({})), &cx).response["error"]["code"],
+            "bad_args"
+        );
+        assert_eq!(
+            dispatch(&req("os.privacy_screen", "p", json!({ "on": "yes" })), &cx).response["error"]
+                ["code"],
+            "bad_args"
+        );
     }
 
     fn req(op: &str, id: &str, args: Value) -> CtlReq {
