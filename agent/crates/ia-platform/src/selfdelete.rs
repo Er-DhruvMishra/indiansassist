@@ -135,6 +135,9 @@ mod tests {
         assert!(generate_cleanup_stub("s", 1, r"..\x.exe").is_err());
     }
 
+    // Windows path semantics (backslash separators, drive letters): on Linux `Path` does not split on `\`, so this
+    // assertion is only meaningful on a Windows host. The Linux temp/profile rule is the Phase E contract's.
+    #[cfg(windows)]
     #[test]
     fn temp_must_be_under_user_profile() {
         let profile = Path::new(r"C:\Users\x");
