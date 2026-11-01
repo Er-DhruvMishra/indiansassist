@@ -1,5 +1,11 @@
-/** /app/residency (contracts section 6.3): one-page printable data residency report. */
+/**
+ * /app/residency (contracts section 6.3): one-page printable data residency report, with the Phase D fleet counts
+ * (phase-d-contracts section 7.2 / 13.4: devices, online devices, unattended sessions, wake attempts, device
+ * actions and the AMT-over-plain-HTTP flag). Those keys are optional on the wire, so the card only appears when
+ * this server sends them.
+ */
 import type { ReactNode } from 'react';
+import type { ResidencyReport } from '@indiansassist/shared';
 import { Alert, Badge, Button, Card, PageHeader, Spinner } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -15,6 +21,11 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <dd className="text-sm sm:col-span-2">{children}</dd>
     </div>
   );
+}
+
+/** A node that predates Phase D sends none of the fleet keys; the report then has no fleet section at all. */
+export function hasFleet(r: ResidencyReport): boolean {
+  return r.devices !== undefined;
 }
 
 function List({ items, empty }: { items: string[]; empty: string }) {
@@ -85,6 +96,31 @@ export function ResidencyPage() {
               <Row label="Audit entries">{r.counts.auditEntries}</Row>
             </dl>
           </Card>
+          {hasFleet(r) && (
+            <Card title="Fleet (installed devices)">
+              <dl>
+                <Row label="Enrolled devices">
+                  {r.devices ?? 0}
+                  {r.onlineDevices !== undefined && <span className="text-slate-600 dark:text-slate-400"> ({r.onlineDevices} online now)</span>}
+                </Row>
+                <Row label="Unattended sessions (30 days)">{r.unattendedSessions30d ?? 0}</Row>
+                <Row label="Wake attempts (30 days)">{r.wakeAttempts30d ?? 0}</Row>
+                <Row label="Device actions (30 days)">{r.deviceActions30d ?? 0}</Row>
+                <Row label="AMT over plain HTTP">
+                  {r.amtPlainHttpDevices ? (
+                    <>
+                      <Badge tone="amber">{r.amtPlainHttpDevices} device(s)</Badge>{' '}
+                      <span className="text-slate-600 dark:text-slate-400">
+                        AMT on these devices is reached without TLS; their credentials and console traffic cross the LAN in the clear.
+                      </span>
+                    </>
+                  ) : (
+                    'None'
+                  )}
+                </Row>
+              </dl>
+            </Card>
+          )}
           <Card title="Audit chain">
             <dl>
               <Row label="Length">{r.chain.length}</Row>

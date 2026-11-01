@@ -1,4 +1,8 @@
-/** /app/tokens: create dialog, status filter, list with copy link / copy short code / QR / revoke. */
+/**
+ * /app/tokens: create dialog, status filter, list with copy link / copy short code / QR / revoke. Phase D
+ * section 13.4: an enrollment token also shows `devicesEnrolled / maxDevices` with a warning as it fills or
+ * nears expiry, and an org_admin can take the signed enrollment config and the deployment snippets from it.
+ */
 import { useState } from 'react';
 import { TOKEN_STATUSES, type Token, type TokenStatus } from '@indiansassist/shared';
 import { useAuth } from '../../auth/AuthContext';
@@ -15,6 +19,8 @@ import { iaconfigApi, saveText } from '../../lib/agentApi';
 import { fmtDateTime, fmtRelative, fmtTier, humanise, shortId } from '../../lib/format';
 import { useAssistSignal } from '../signal/AssistSignalProvider';
 import { CreateTokenDialog } from './CreateTokenDialog';
+import { EnrollDeployDialog } from './EnrollDeployDialog';
+import { enrollmentUsage, nearExpiry } from './enroll';
 
 const STATUS_TONE: Record<TokenStatus, 'green' | 'neutral' | 'red' | 'amber'> = {
   active: 'green',
@@ -35,6 +41,7 @@ export function TokensPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [qrFor, setQrFor] = useState<Token | null>(null);
   const [revokeFor, setRevokeFor] = useState<Token | null>(null);
+  const [deployFor, setDeployFor] = useState<Token | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [extra, setExtra] = useState<Token[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -48,6 +55,8 @@ export function TokensPage() {
     [status],
   );
   const canCreate = can(me?.user.role, 'tokens.create');
+  /** `GET /devices/enroll-config` is org_admin only (section 7.2); the server refuses anyone else anyway. */
+  const canDeploy = can(me?.user.role, 'fleet.admin');
   const tokens = [...(list.data ?? []), ...extra];
 
   const loadMore = async () => {
@@ -126,6 +135,8 @@ export function TokensPage() {
               <tbody>
                 {tokens.map((t) => {
                   const p = signal?.presence[t.id];
+                  const enroll = t.typ === 'enrollment' ? enrollmentUsage(t) : null;
+                  const expiring = t.status === 'active' && nearExpiry(t.expiresAt);
                   return (
                     <tr key={t.id} className="border-b border-slate-100 align-top dark:border-slate-800">
                       <td className="py-2 pr-3">
@@ -143,9 +154,23 @@ export function TokensPage() {
                       <td className="py-2 pr-3">
                         {humanise(t.typ)}
                         <div className="text-xs text-slate-600 dark:text-slate-400">{fmtTier(t.tier)}</div>
+                        {enroll && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span data-testid="devices-enrolled" className="text-xs">
+                              {enroll.enrolled} / {enroll.max} devices enrolled
+                            </span>
+                            {enroll.full && <Badge tone="red">Device limit reached</Badge>}
+                            {enroll.nearLimit && <Badge tone="amber">{enroll.remaining} left</Badge>}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2 pr-3" title={fmtDateTime(t.expiresAt)}>
                         {fmtRelative(t.expiresAt)}
+                        {expiring && (
+                          <div className="mt-1">
+                            <Badge tone="amber">Expires soon</Badge>
+                          </div>
+                        )}
                       </td>
                       <td className="py-2 pr-3">{t.createdBy.name}</td>
                       <td className="py-2">
@@ -158,6 +183,11 @@ export function TokensPage() {
                           {t.tier === 'p3_portable' && t.status === 'active' && (can(me?.user.role, 'tokens.iaconfig') || t.createdBy.id === me?.user.id) && (
                             <Button size="sm" variant="ghost" onClick={() => void downloadIaconfig(t)}>
                               Download .iaconfig for this token
+                            </Button>
+                          )}
+                          {t.typ === 'enrollment' && t.status === 'active' && canDeploy && (
+                            <Button size="sm" variant="ghost" onClick={() => setDeployFor(t)}>
+                              Install and enroll
                             </Button>
                           )}
                           {t.status === 'active' && canCreate && (
@@ -185,6 +215,12 @@ export function TokensPage() {
         onClose={() => setCreateOpen(false)}
         seatTier={me?.seat?.tier ?? null}
         onCreated={(r) => list.setData([r.token, ...(list.data ?? [])])}
+      />
+      <EnrollDeployDialog
+        token={deployFor}
+        orgName={me?.org.branding.displayName ?? me?.org.name ?? 'your organisation'}
+        open={deployFor !== null}
+        onClose={() => setDeployFor(null)}
       />
       <Dialog open={qrFor !== null} title="Join link QR code" onClose={() => setQrFor(null)}>
         {qrFor && (
