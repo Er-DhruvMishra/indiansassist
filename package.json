@@ -18,6 +18,8 @@
     "smoke:p2": "node scripts/smoke-p2.mjs",
     "smoke:recorder": "node scripts/smoke-recorder.mjs",
     "smoke:p3": "node scripts/smoke-p3.mjs",
+    "smoke:p4": "node scripts/smoke-p4.mjs",
+    "fleet:fixtures": "node scripts/gen-fleet-fixtures.mjs --check",
     "recorder:test": "cd services/recorder && go vet ./... && go test ./...",
     "recorder:build": "cd services/recorder && go build -o ../../data/recorder-bin/ ./cmd/recorder",
     "agent:build": "cargo build --manifest-path agent/Cargo.toml --workspace --all-features",

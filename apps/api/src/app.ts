@@ -41,6 +41,9 @@ import { SignalHub } from './signal/hub.js';
 import { AgentDist } from './services/agent-dist.js';
 import { downloadRoutes } from './routes/download.js';
 import { playbookRoutes } from './routes/playbooks.js';
+import { deviceRoutes } from './fleet/routes-devices.js';
+import { fleetAdminRoutes } from './fleet/routes-admin.js';
+import { buildMailer } from './mail/mailer.js';
 
 export type BuildAppOptions = {
   config: Config;
@@ -103,6 +106,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
     version: packageVersion(),
     agentDist: new AgentDist(config),
     hub: null as unknown as SignalHub,
+    mailer: buildMailer(config, app.log),
   };
   ctx.agentDist.load();
   if (ctx.agentDist.lastError) app.log.info({ reason: ctx.agentDist.lastError }, 'no agent builds served by this node');
@@ -129,6 +133,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await internalRecordingRoutes(app, ctx);
   await downloadRoutes(app, ctx);
   await playbookRoutes(app, ctx);
+  // Phase D (docs/specs/phase-d-contracts.md section 7.2)
+  await deviceRoutes(app, ctx);
+  await fleetAdminRoutes(app, ctx);
 
   ctx.hub.attach(app);
   await ctx.hub.start();

@@ -28,6 +28,8 @@ export const playbook = pgTable(
     parameters: jsonb('parameters').$type<unknown[]>().notNull().default([]),
     timeoutSec: integer('timeout_sec').notNull().default(120),
     enabled: boolean('enabled').notNull().default(true),
+    /** Phase D rule 9.8: `[{ env, path }]` (<= 8); such a playbook runs only as a device action. */
+    vaultRefs: jsonb('vault_refs').$type<{ env: string; path: string }[]>(),
     createdBy: uuid('created_by').references(() => user.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

@@ -12,7 +12,8 @@
  * `cluster`; each node applies them to its own sockets.
  */
 import { WS_CLOSE, type SessionState } from '@indiansassist/shared';
-import { findTokenByTid, getOrg, getSession, type SessionRow, type TokenRow } from '@indiansassist/db';
+import { findTokenByTid, getDevice, getOrg, getSession, type SessionRow, type TokenRow } from '@indiansassist/db';
+import { completeWorkerHello } from '../fleet/worker.js';
 import { channels } from '../adapters/presence.js';
 import { canActOnToken } from '../lib/rbac.js';
 import { principalFromAuthSessionId } from '../plugins/auth.js';
@@ -39,6 +40,11 @@ export type NodeMsg =
   | { k: 'ended'; sessionId: string; previousState: SessionState }
   | { k: 'recording'; sessionId: string }
   | { k: 'rpc'; id: string; from: string; op: 'chatCount' | 'relayCounters'; sessionId: string }
+  // Phase D rule 3.6c: an S->D frame for a device socket held by this node, and a disable / retire kick.
+  | { k: 'device'; deviceId: string; frame: Record<string, unknown> }
+  | { k: 'device-kick'; deviceId: string; code: 'device_disabled' | 'device_unauthenticated'; message: string }
+  // Phase D rule 3.6d: a P4 worker hello verified on the holder node, completed by the session's owner.
+  | { k: 'worker-hello'; from: string; conn: ConnSnapshot; sessionId: string; gen: number; re?: string }
   | { k: 'rpc-reply'; id: string; value: unknown };
 
 export type ClusterEvent =
@@ -48,7 +54,8 @@ export type ClusterEvent =
   | { e: 'close-user'; userId: string; code: number; exceptAuthSessionId?: string }
   | { e: 'close-auth'; ids: string[]; code: number }
   | { e: 'refresh-user'; userId: string }
-  | { e: 'routed-ended'; sessionId: string; frame: Record<string, unknown> };
+  | { e: 'routed-ended'; sessionId: string; frame: Record<string, unknown> }
+  | { e: 'user-frame'; userId: string; frame: Record<string, unknown> };
 
 /** Online-Assist registry TTL and refresh period. */
 const ASSIST_TTL_SEC = 90;
@@ -153,6 +160,16 @@ export class Bridge {
   /** Phase C section 7.2 (6): a hand-over hello for a session owned by another live node is completed there. */
   async forwardDeskHandover(conn: Conn, v: TokenVerifyOk, s: SessionRow, opId: string, hash: string, re: string | undefined): Promise<boolean> {
     return this.pipeDesk(conn, v, s, re, { opId, hash });
+  }
+
+  /** Phase D rule 3.6d: a worker hello for a session owned by another live node is completed there. */
+  async forwardWorkerHello(conn: Conn, s: SessionRow, gen: number, re: string | undefined): Promise<boolean> {
+    if (!this.on || !conn.desk || s.nodeId === this.self || !(await this.alive(s.nodeId))) return false;
+    conn.pipeTo = s.nodeId;
+    conn.pipes.add(s.nodeId);
+    conn.desk.sessionId = s.id;
+    this.toNode(s.nodeId, { k: 'worker-hello', from: this.self, conn: snapshot(conn), sessionId: s.id, gen, ...(re !== undefined ? { re } : {}) });
+    return true;
   }
 
   private async pipeDesk(conn: Conn, v: TokenVerifyOk, s: SessionRow, re: string | undefined, handover?: { opId: string; hash: string }): Promise<boolean> {
@@ -337,6 +354,16 @@ export class Bridge {
         this.pending.get(m.id)?.(m.value);
         this.pending.delete(m.id);
         return;
+      case 'device':
+        hub.devices.deliverLocal(m.deviceId, m.frame);
+        return;
+      case 'device-kick':
+        hub.devices.kickLocal(m.deviceId, m.code, m.message);
+        return;
+      case 'worker-hello': {
+        const rc = this.remoteFor(m.from, m.conn);
+        return this.enqueue(rc, () => this.workerHello(rc, m));
+      }
     }
   }
 
@@ -350,6 +377,19 @@ export class Bridge {
         throw Object.assign(new Error('resume target gone'), { code: 'already_ended' });
       if (m.handover) return await completeHandover(this.hub, rc, { token, org, session: s }, m.handover.opId, m.handover.hash, m.re);
       await deskResume(this.hub, rc, { ok: true, token, org, via: m.via, resumeSession: s }, m.re);
+    } catch (err) {
+      this.hub.helloFailed(rc, err, m.re);
+    }
+  }
+
+  private async workerHello(rc: RemoteConn, m: Extract<NodeMsg, { k: 'worker-hello' }>): Promise<void> {
+    const { db } = this.hub.ctx;
+    try {
+      const s = await getSession(db, m.sessionId);
+      const d = s?.deviceId ? await getDevice(db, s.deviceId) : null;
+      const org = d ? await getOrg(db, d.orgId) : null;
+      if (!s || !d || !org || s.state === 'ended') throw Object.assign(new Error('worker target gone'), { code: 'already_ended' });
+      await completeWorkerHello(this.hub, rc, { session: s, device: d, org }, m.gen, m.re);
     } catch (err) {
       this.hub.helloFailed(rc, err, m.re);
     }
@@ -380,6 +420,8 @@ export class Bridge {
         return refreshUserSockets(hub, ev.userId);
       case 'routed-ended':
         return this.deliverRoutedEnd(ev.sessionId, ev.frame);
+      case 'user-frame':
+        return hub.toUserLocal(ev.userId, ev.frame);
     }
   }
 }

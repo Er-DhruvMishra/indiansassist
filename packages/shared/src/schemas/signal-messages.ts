@@ -47,6 +47,8 @@ import { DESK_EVENT_P3_ACTIONS, DESK_EVENT_P3_DATA, DESK_EVENT_P3_REASON_ACTIONS
 import { extensionPolicySchema } from '../extension/policy.js';
 import { controlMessageSchema } from '../extension/control.js';
 import { DESK_EVENT_DATA, DESK_EVENT_P2_ACTIONS, DESK_EVENT_REASON_ACTIONS, opIdSchema } from '../audit/actions-p2.js';
+import { DESK_EVENT_P4_ACTIONS, DESK_EVENT_P4_DATA } from '../audit/actions-p4.js';
+import { APPROVED_BY } from '../enums.js';
 
 const envelope = {
   id: z.string().max(64).optional(),
@@ -133,13 +135,27 @@ export const extensionConsentSchema = z.strictObject({ level: consentLevel, scop
 // ---------- client -> server (and relayed) ----------
 
 export const assistHelloSchema = msg('assist.hello', {});
+/**
+ * `desk.hello`. Phase D section 4.2: the P4 desktop worker presents a single-use `workerCredential` (43 base64url
+ * characters) and no `token`; exactly one of the two is required, and `handover` is allowed only beside `token` (a
+ * client that sends `token` validates exactly as before).
+ */
 export const deskHelloSchema = msg('desk.hello', {
-  token: z.string().min(1).max(4096),
+  token: z.string().min(1).max(4096).optional(),
+  workerCredential: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{43}$/, 'a worker credential is 43 base64url characters')
+    .optional(),
   deskLabel: z.string().max(1000).optional(),
   resumeKey: z.string().min(1).max(256).optional(),
   /** Phase C section 7.2: the one-time hand-over value of the elevated instance. */
   handover: z.string().min(1).max(256).optional(),
   client: deskClientSchema.optional(),
+}).superRefine((m, ctx) => {
+  if ((m.token === undefined) === (m.workerCredential === undefined))
+    ctx.addIssue({ code: 'custom', path: ['token'], message: 'send exactly one of token and workerCredential' });
+  if (m.handover !== undefined && m.token === undefined)
+    ctx.addIssue({ code: 'custom', path: ['handover'], message: 'handover is only valid beside token' });
 });
 export const deskPollSchema = msg('desk.poll', {});
 export const deskKnockSchema = msg('desk.knock', { deskLabel: z.string().max(1000).optional() });
@@ -154,6 +170,11 @@ export const deskConsentSchema = msg('desk.consent', {
   surface: consentSurfaceSchema.optional(),
   extension: extensionConsentSchema.optional(),
   native: nativeConsentSchema.optional(),
+  /**
+   * Phase D section 6.2 (amendment): who allowed an unattended P4 session the worker showed the approval card for
+   * (`local_user`, or `auto_after_timeout` when the countdown allowed it). Ignored outside P4.
+   */
+  approvedBy: z.enum(APPROVED_BY).optional(),
 });
 /** Phase A.2 N2: the Desk-side far end of a relayed frame; absent = `assist`. The server sets / strips it. */
 const peer = { peer: z.enum(WEBRTC_PEERS).optional() };
@@ -203,7 +224,14 @@ export const sessionStatsSchema = msg('session.stats', {
   glassMs: z.number().nonnegative().nullable().optional(),
 });
 
-export const DESK_EVENT_ACTIONS = ['file.sent', 'file.received', ...DESK_EVENT_P2_ACTIONS, ...DESK_EVENT_P3_ACTIONS] as const;
+export const DESK_EVENT_ACTIONS = [
+  'file.sent',
+  'file.received',
+  ...DESK_EVENT_P2_ACTIONS,
+  ...DESK_EVENT_P3_ACTIONS,
+  // Phase D section 13.3: the P4 desktop worker's attestations (P4 sessions only).
+  ...DESK_EVENT_P4_ACTIONS,
+] as const;
 export type DeskEventAction = (typeof DESK_EVENT_ACTIONS)[number];
 
 /**
@@ -222,7 +250,9 @@ export const deskEventSchema = msg('desk.event', {
       ? fileEventDataSchema
       : m.action === 'control.input'
         ? z.union([DESK_EVENT_DATA['control.input'], DESK_EVENT_P3_DATA['control.input']])
-        : ((DESK_EVENT_DATA as Record<string, z.ZodType>)[m.action] ?? (DESK_EVENT_P3_DATA as Record<string, z.ZodType>)[m.action]!);
+        : ((DESK_EVENT_DATA as Record<string, z.ZodType>)[m.action] ??
+          (DESK_EVENT_P3_DATA as Record<string, z.ZodType>)[m.action] ??
+          (DESK_EVENT_P4_DATA as Record<string, z.ZodType>)[m.action]!);
   const r = schema.safeParse(m.data);
   if (!r.success) for (const i of r.error.issues) ctx.addIssue({ code: 'custom', path: ['data', ...i.path], message: i.message });
   const reasonOk = [...DESK_EVENT_REASON_ACTIONS, ...DESK_EVENT_P3_REASON_ACTIONS] as readonly string[];
@@ -277,7 +307,8 @@ export const assistHelloOkSchema = msg('assist.hello.ok', {
 });
 export const deskHelloOkSchema = msg('desk.hello.ok', {
   connectionId: z.string(),
-  tokenId: uuidSchema,
+  /** Null for the P4 desktop worker (a device session has no token, Phase D W29). */
+  tokenId: uuidSchema.nullable(),
   tier: packageTierSchema,
   technician: z.object({ name: z.string() }).nullable(),
   org: brandingPublicSchema,
@@ -319,7 +350,8 @@ export const sessionCreatedSchema = msg('session.created', {
   /** P2 sessions only (both copies): the org extension policy in force for this session. */
   extension: z.object({ policy: extensionPolicySchema }).optional(),
   sessionId,
-  tokenId: uuidSchema,
+  /** Null for a P4 device session (Phase D W29: `session.token_id` is null, `device_id` set). */
+  tokenId: uuidSchema.nullable(),
   tier: packageTierSchema,
   state: sessionStateSchema,
   consentState: consentStateSchema,
@@ -331,6 +363,16 @@ export const sessionCreatedSchema = msg('session.created', {
   recordingMode: z.enum(RECORDING_MODES).optional(),
   /** Phase C section 8.3: P3 sessions only (both copies), the org's pinned playbook manifest. */
   agent: sessionAgentSchema.optional(),
+  /** Phase D section 3.5 step 4: P4 only, the device and its identity public key (rule 3.5b attestation). */
+  device: z
+    .object({
+      id: uuidSchema,
+      name: z.string(),
+      keyId: z.string().regex(/^[0-9a-f]{16}$/),
+      publicKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    })
+    .optional(),
+  unattended: z.boolean().optional(),
   ...optionalIce,
 });
 export const consentOkSchema = msg('consent.ok', {

@@ -1,6 +1,7 @@
 /** Tenancy and identity tables (contracts section 4.2): org, user, technician_seat, auth_session, login_attempt. */
 import { sql } from 'drizzle-orm';
 import { boolean, char, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { DEFAULT_UNATTENDED_POLICY } from '@indiansassist/shared';
 import { packageTierEnum, recordingModeEnum, regionEnum, userRoleEnum, userStatusEnum } from './enums.js';
 
 /** `timestamp(..., { withTimezone: true, mode: 'date' })` as section 4 requires. */
@@ -40,6 +41,14 @@ export const org = pgTable(
     recordingMode: recordingModeEnum('recording_mode').notNull().default('assist_only'),
     /** Phase C section 1.3 step 7: the console's security-code gate before control (agent policy). */
     requireSasConfirm: boolean('require_sas_confirm').notNull().default(true),
+    // Phase D sections 6.1, 7.1, rule 8.2d.
+    wakerMeshEnabled: boolean('waker_mesh_enabled').notNull().default(true),
+    fleetScopingEnabled: boolean('fleet_scoping_enabled').notNull().default(false),
+    /** The org default `UnattendedPolicy` (full). */
+    unattendedPolicy: jsonb('unattended_policy')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({ ...DEFAULT_UNATTENDED_POLICY }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -66,6 +75,8 @@ export const user = pgTable(
     inviteTokenHash: char('invite_token_hash', { length: 64 }),
     inviteExpiresAt: tstz('invite_expires_at'),
     lastLoginAt: tstz('last_login_at'),
+    /** Phase D section 7.1: the device groups of a technician under fleet scoping (null / [] = none). */
+    deviceGroupIds: uuid('device_group_ids').array(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

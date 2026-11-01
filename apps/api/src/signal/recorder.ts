@@ -5,6 +5,7 @@
  * (`recording.server_stopped`) and the `session.recording { source: 'server' }` pushes to the Desk and the Assist.
  */
 import {
+  isNativeTier,
   isRegionServed,
   LIMITS,
   REGIONS,
@@ -60,7 +61,7 @@ export async function handleRecorderHello(hub: SignalHub, conn: Conn, msg: Signa
 
 /** Tiers the server recorder captures (A.2 M5 amended by Phase C section 9 R2, W23). */
 export function recordedTier(tier: Live['tier']): boolean {
-  return tier === 'p1_browser' || tier === 'p3_portable';
+  return tier === 'p1_browser' || isNativeTier(tier);
 }
 
 /**
@@ -71,7 +72,7 @@ export function recordedTier(tier: Live['tier']): boolean {
  */
 export function recordableSession(live: Live): boolean {
   if (!recordedTier(live.tier)) return false;
-  return live.tier !== 'p3_portable' || live.deskRecorder;
+  return !isNativeTier(live.tier) || live.deskRecorder;
 }
 
 /** An `active` recordable session whose policy asks for the server recorder and that has none (section 6 A1). */

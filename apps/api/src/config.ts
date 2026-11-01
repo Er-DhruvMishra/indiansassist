@@ -121,6 +121,18 @@ const envSchema = z.object({
   AGENT_ANDROID_APP_URL: str(''),
   /** Dev only: a placeholder file served as every Windows build when AGENT_DIST_DIR has no manifest ('' = off). */
   AGENT_DEV_STUB: z.string().optional(),
+  // Phase D (docs/specs/phase-d-contracts.md sections 6.4d, 8.2c, 9.8, 13.5, 16.1)
+  AGENT_MSI_DIST_DIR: str('./data/agent-msi'),
+  /** 32 bytes hex, optionally `<keyId>:<hex>`; encrypts device MACs at rest (rule 8.2c). Dev: persisted under ./data. */
+  FLEET_DATA_KEY: str(''),
+  VAULT_ADDR: str(''),
+  VAULT_ROLE_ID: str(''),
+  VAULT_SECRET_ID: str(''),
+  MAIL_DRIVER: z.enum(['log', 'smtp']).optional().default('log'),
+  SMTP_URL: str(''),
+  MAIL_FROM: str('IndiansAssist <no-reply@localhost>'),
+  DEVICE_HELLO_RATE: int(500),
+  WAKE_CONFIRM_SEC: int(LIMITS.wakeConfirmSec),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -173,6 +185,12 @@ export type Config = {
   recorderToken: string;
   /** Phase C: agent builds (`manifest.json` + files), the minimum agent version and the Android store link. */
   agent: { distDir: string; minVersion: string; androidAppUrl: string | null; devStub: string | null };
+  /** Phase D: the fleet data key (MACs at rest), branded MSI artifacts, wake confirmation window, hello rate. */
+  fleet: { dataKey: Buffer; dataKeyId: string; msiDistDir: string; wakeConfirmSec: number; deviceHelloRate: number };
+  /** Phase D rule 6.4d: the consent-receipt mailer. */
+  mail: { driver: 'log' | 'smtp'; smtpUrl: string; from: string };
+  /** Phase D rule 9.8: the credential vault (OpenBao / Vault AppRole); '' addr = not configured. */
+  vault: { addr: string; roleId: string; secretId: string };
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
   dataDir: string;
@@ -291,6 +309,17 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
   if (!AGENT_VERSION_RE.test(e.AGENT_MIN_VERSION)) problems.push('AGENT_MIN_VERSION must be MAJOR.MINOR.PATCH');
   if (e.AGENT_ANDROID_APP_URL !== '' && !/^https:\/\//.test(e.AGENT_ANDROID_APP_URL) && production)
     problems.push('AGENT_ANDROID_APP_URL must be https: in production');
+  // Phase D rule 8.2c: the fleet data key (dev: generated and persisted like the other dev secrets).
+  let fleetKeyRaw = e.FLEET_DATA_KEY;
+  if (fleetKeyRaw === '') {
+    if (production) problems.push('FLEET_DATA_KEY is required in production');
+    fleetKeyRaw = readOrCreateSecret(resolve(dataDir, 'fleet-data.key'), () => randomBytes(32).toString('hex'), (s) => HEX64.test(s), persist);
+  }
+  const fleetKeyMatch = /^(?:([A-Za-z0-9_-]{1,16}):)?([0-9a-fA-F]{64})$/.exec(fleetKeyRaw);
+  if (!fleetKeyMatch) problems.push('FLEET_DATA_KEY must be 64 hex chars, optionally prefixed with "<keyId>:"');
+  if (e.MAIL_DRIVER === 'smtp' && e.SMTP_URL === '') problems.push('SMTP_URL is required with MAIL_DRIVER=smtp');
+  if (e.VAULT_ADDR !== '' && (e.VAULT_ROLE_ID === '' || e.VAULT_SECRET_ID === ''))
+    problems.push('VAULT_ROLE_ID and VAULT_SECRET_ID are required with VAULT_ADDR');
   if (problems.length > 0) throw new ConfigError(`refusing to boot: ${problems.join('; ')}`);
 
   const suffixes = splitUrlList(e.ICE_OWN_HOST_SUFFIXES);
@@ -357,6 +386,15 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
       androidAppUrl: e.AGENT_ANDROID_APP_URL !== '' ? e.AGENT_ANDROID_APP_URL : null,
       devStub: production || devStubRaw === '' ? null : abs(devStubRaw),
     },
+    fleet: {
+      dataKey: Buffer.from(fleetKeyMatch![2]!, 'hex'),
+      dataKeyId: fleetKeyMatch![1] ?? 'k1',
+      msiDistDir: abs(e.AGENT_MSI_DIST_DIR),
+      wakeConfirmSec: e.WAKE_CONFIRM_SEC > 0 ? e.WAKE_CONFIRM_SEC : LIMITS.wakeConfirmSec,
+      deviceHelloRate: e.DEVICE_HELLO_RATE > 0 ? e.DEVICE_HELLO_RATE : 500,
+    },
+    mail: { driver: e.MAIL_DRIVER, smtpUrl: e.SMTP_URL, from: e.MAIL_FROM },
+    vault: { addr: e.VAULT_ADDR.replace(/\/+$/, ''), roleId: e.VAULT_ROLE_ID, secretId: e.VAULT_SECRET_ID },
     repoRoot,
     dataDir,
   };

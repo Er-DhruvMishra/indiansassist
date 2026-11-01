@@ -15,7 +15,10 @@ export type CreateSessionInput = Pick<
   'orgId' | 'tokenId' | 'assistUserId' | 'deskRef' | 'tier' | 'region' | 'nodeId'
 > &
   Partial<
-    Pick<NewSessionRow, 'id' | 'deskLabel' | 'deskUserAgent' | 'resumeKeyHash' | 'knockedAt' | 'knockExpiresAt' | 'deskClient'>
+    Pick<
+      NewSessionRow,
+      'id' | 'deskLabel' | 'deskUserAgent' | 'resumeKeyHash' | 'knockedAt' | 'knockExpiresAt' | 'deskClient' | 'deviceId' | 'unattended' | 'unattendedPolicy' | 'recordingMode'
+    >
   >;
 
 /** Creates a `knocked` session; `knock_expires_at` defaults to `knocked_at + 120 s`. */
@@ -255,6 +258,8 @@ export type ListSessionsQuery = PageQuery & {
   to?: Date;
   /** `own` scope: sessions where assist_user_id = user OR token.created_by = user (section 2.3). */
   ownUserId?: string;
+  /** Phase D: sessions of one device. */
+  deviceId?: string;
 };
 
 /** Sessions of an org, newest first (`created_at desc, id desc`). */
@@ -272,6 +277,7 @@ export async function listSessionsByOrg(
     const ownTokens = exec.select({ id: token.id }).from(token).where(eq(token.createdBy, q.ownUserId));
     conds.push(or(eq(session.assistUserId, q.ownUserId), inArray(session.tokenId, ownTokens))!);
   }
+  if (q.deviceId) conds.push(eq(session.deviceId, q.deviceId));
   const after = timeIdAfter(session.createdAt, session.id, q.cursor, 'desc');
   if (after) conds.push(after);
   const rows = await exec

@@ -82,6 +82,7 @@ fn source_wire(src: TokenSource) -> &'static str {
         TokenSource::Filename => "filename",
         TokenSource::Clipboard => "clipboard",
         TokenSource::Manual => "manual",
+        TokenSource::Service => "service",
     }
 }
 

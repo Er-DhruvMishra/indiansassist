@@ -38,6 +38,13 @@ export const residencyReportSchema = z.object({
   agentSessions: z.number().int().nonnegative().optional(),
   elevationGrants: z.number().int().nonnegative().optional(),
   playbookRuns: z.number().int().nonnegative().optional(),
+  /** Phase D section 7.2: fleet counts (always sent by the api; optional so earlier fixtures parse). */
+  devices: z.number().int().nonnegative().optional(),
+  onlineDevices: z.number().int().nonnegative().optional(),
+  unattendedSessions30d: z.number().int().nonnegative().optional(),
+  wakeAttempts30d: z.number().int().nonnegative().optional(),
+  deviceActions30d: z.number().int().nonnegative().optional(),
+  amtPlainHttpDevices: z.number().int().nonnegative().optional(),
   retention: z.object({
     auditEntries: z.literal('append-only, never deleted'),
     piiInChain: z.literal('hashed with a per-org pepper; pepper destruction is the erasure mechanism (Phase E)'),

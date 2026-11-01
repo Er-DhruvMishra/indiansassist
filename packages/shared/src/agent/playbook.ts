@@ -165,6 +165,26 @@ const description = z
   .transform((s) => sanitiseText(s, 500));
 const timeoutSec = z.number().int().min(1).max(LIMITS.playbookTimeoutMaxSec);
 
+/**
+ * Phase D rule 9.8: a vault reference of a playbook (org_admin only). The api reads `path` (relative to the org's
+ * vault prefix) at dispatch and seals the value into the child's environment variable `env`. At most 8.
+ */
+export const PLAYBOOK_VAULT_ENV_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
+export const playbookVaultRefSchema = z.strictObject({
+  env: z.string().regex(PLAYBOOK_VAULT_ENV_RE, 'an upper-case environment variable name'),
+  path: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'a relative vault path')
+    .refine((p) => !p.split('/').includes('..'), 'no .. segments'),
+});
+export type PlaybookVaultRef = z.infer<typeof playbookVaultRefSchema>;
+export const playbookVaultRefsSchema = z
+  .array(playbookVaultRefSchema)
+  .max(8)
+  .refine((r) => new Set(r.map((x) => x.env)).size === r.length, 'env names must be unique');
+
 /** `Playbook` wire (section 8.2); `body` only for roles that may read bodies. */
 export const playbookSchema = z.object({
   id: uuid,
@@ -177,6 +197,8 @@ export const playbookSchema = z.object({
   enabled: z.boolean(),
   bodyHash: hex(64),
   body: z.string().optional(),
+  /** Phase D rule 9.8 (absent = none). */
+  vaultRefs: playbookVaultRefsSchema.optional(),
   createdBy: z.object({ id: uuid, name: z.string() }).nullable(),
   createdAt: iso,
   updatedAt: iso,
@@ -193,6 +215,7 @@ export const playbookCreateSchema = z.strictObject({
   parameters: playbookParamsSchema.optional(),
   timeoutSec: timeoutSec.optional(),
   enabled: z.boolean().optional(),
+  vaultRefs: playbookVaultRefsSchema.optional(),
 });
 export type PlaybookCreate = z.output<typeof playbookCreateSchema>;
 
@@ -205,6 +228,7 @@ export const playbookPatchSchema = z.strictObject({
   parameters: playbookParamsSchema.optional(),
   timeoutSec: timeoutSec.optional(),
   enabled: z.boolean().optional(),
+  vaultRefs: playbookVaultRefsSchema.nullable().optional(),
 });
 export type PlaybookPatch = z.output<typeof playbookPatchSchema>;
 
@@ -227,6 +251,8 @@ export const playbookManifestSchema = z.strictObject({
   parameters: z.array(playbookParamSchema),
   timeoutSec: z.number().int(),
   bodyHash: hex(64),
+  /** Phase D rule 9.8: the env names only (never a path); such a playbook runs only as a device action. */
+  vaultRefs: z.array(z.strictObject({ env: z.string().regex(PLAYBOOK_VAULT_ENV_RE) })).max(8).optional(),
 });
 export type PlaybookManifest = z.infer<typeof playbookManifestSchema>;
 export const sessionAgentSchema = z.strictObject({

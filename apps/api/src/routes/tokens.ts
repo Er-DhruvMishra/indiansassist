@@ -84,6 +84,8 @@ export async function tokenRoutes(app: FastifyInstance, ctx: AppContext): Promis
         nonce: signed.payload.nonce,
         issuedAt: new Date(iat * 1000),
         expiresAt: new Date(exp * 1000),
+        // Phase D section 2.1: the enrollment capacity (other types keep the default 1).
+        ...(body.typ === 'enrollment' ? { maxDevices: body.maxDevices ?? 1 } : {}),
       });
       await writeAudit(ctx, tx, p.org, {
         actor: userActor(p.user),

@@ -44,7 +44,8 @@
     "sidecar",
     "filename",
     "clipboard",
-    "manual"
+    "manual",
+    "service"
   ],
   "playbookInterpreters": [
     "powershell",
@@ -135,6 +136,7 @@
     "clipboard.set",
     "os.input_lock",
     "os.privacy_screen",
+    "os.sas",
     "level.request",
     "elevation.request",
     "playbook.run",
@@ -152,6 +154,7 @@
     "clipboard.set": "control",
     "os.input_lock": "elevated",
     "os.privacy_screen": "elevated",
+    "os.sas": "elevated",
     "level.request": "view",
     "elevation.request": "control",
     "playbook.run": "control",
@@ -173,7 +176,8 @@
     "agent_level",
     "clipboard",
     "elevation",
-    "input_blocked"
+    "input_blocked",
+    "device_attest"
   ],
   "wsCloseHandedOver": 4411,
   "androidCapabilities": {

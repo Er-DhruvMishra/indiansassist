@@ -11,6 +11,7 @@ import {
   hostToHash,
   isAgentConsentLevel,
   isConsentLevel,
+  isNativeTier,
   type AgentConsentLevel,
   LIMITS,
   sanitiseFileName,
@@ -67,7 +68,7 @@ export async function sessionEventRoutes(app: FastifyInstance, ctx: AppContext):
     if (body.action === 'recording.started') return recordingStarted(ctx, p, session, reply);
     requireReachedActive(session);
     if (body.action === 'file.sent' || body.action === 'file.received') return fileEvent(ctx, p, session, body, reply);
-    if (session.tier === 'p3_portable') return p3Report(ctx, p, session, body, reply);
+    if (isNativeTier(session.tier)) return p3Report(ctx, p, session, body, reply);
     return consoleReport(ctx, p, session, body, reply);
   });
 }

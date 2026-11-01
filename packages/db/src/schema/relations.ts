@@ -5,7 +5,7 @@ import { sessionFile } from './files.js';
 import { authSession, org, technicianSeat, user } from './org.js';
 import { integration, recording } from './recording.js';
 import { session, sessionHost, sessionParticipant } from './session.js';
-import { device, token } from './token.js';
+import { device, deviceGroup, token } from './token.js';
 
 export const orgRelations = relations(org, ({ many }) => ({
   users: many(user),
@@ -45,6 +45,12 @@ export const tokenRelations = relations(token, ({ one, many }) => ({
 export const deviceRelations = relations(device, ({ one }) => ({
   org: one(org, { fields: [device.orgId], references: [org.id] }),
   enrolledByToken: one(token, { fields: [device.enrolledByTokenId], references: [token.id] }),
+  group: one(deviceGroup, { fields: [device.groupId], references: [deviceGroup.id] }),
+}));
+
+export const deviceGroupRelations = relations(deviceGroup, ({ one, many }) => ({
+  org: one(org, { fields: [deviceGroup.orgId], references: [org.id] }),
+  devices: many(device),
 }));
 
 export const sessionRelations = relations(session, ({ one, many }) => ({

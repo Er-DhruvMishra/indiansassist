@@ -40,6 +40,7 @@ import {
 } from './messages.js';
 import { authorizeSession, refuse } from './relay.js';
 import { ensureAgentManifest } from './agent-manifest.js';
+import { ensureP4Device } from '../fleet/session-hooks.js';
 
 const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 
@@ -85,6 +86,7 @@ export async function handleAssistHello(hub: SignalHub, conn: Conn, msg: SignalO
     .from(sessionTable)
     .where(and(eq(sessionTable.orgId, p.org.id), eq(sessionTable.state, 'knocked')));
   for (const s of knocked) {
+    if (!s.tokenId) continue;
     const tok = await findTokenByTid(ctx.db, s.tokenId);
     if (!tok || !canActOnToken(p.user, tok)) continue;
     const creator = refOf(await userRefs(ctx.db, [tok.createdBy]), tok.createdBy);
@@ -100,7 +102,7 @@ export async function handleAssistHello(hub: SignalHub, conn: Conn, msg: SignalO
 async function knockTarget(hub: SignalHub, conn: Conn, sessionId: string, t: string, reId?: string) {
   const p = conn.principal!;
   const s = await getSession(hub.ctx.db, sessionId);
-  const tok = s && s.orgId === p.org.id ? await findTokenByTid(hub.ctx.db, s.tokenId) : null;
+  const tok = s && s.orgId === p.org.id && s.tokenId ? await findTokenByTid(hub.ctx.db, s.tokenId) : null;
   if (!s || !tok || !canActOnToken(p.user, tok)) {
     await refuse(hub, conn, sessionId, t, reId);
     return null;
@@ -195,6 +197,9 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
   const hadLive = hub.live.has(s0.id);
   const live = ensureLive(hub, s0);
   const previousConnId = live.assistConnId;
+  // Phase D section 3.5: the console attaches to a REST-opened device session with assist.resume; that first
+  // attach is not a resume (no `session.resumed`).
+  const firstP4Attach = live.p4 !== null && !live.p4.assistAttached && previousConnId === null;
   live.assistConnId = conn.id;
   cancelGrace(hub, s0.id, 'assist');
   try {
@@ -202,12 +207,13 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
       const locked = await lockSession(tx, s0.id); // session row before its participant rows (lock order, F1)
       if (!locked || locked.state === 'ended') throw new SessionAlreadyEndedError('ended');
       await replaceParticipant(tx, { sessionId: s0.id, role: 'assist', userId: p.user.id, label: p.user.name, connectionId: conn.id });
-      await writeAudit(ctx, tx, org, {
-        sessionId: s0.id,
-        actor: systemActor,
-        action: 'session.resumed',
-        data: { side: 'assist', fromState: s0.state, toState: s0.state },
-      });
+      if (!firstP4Attach)
+        await writeAudit(ctx, tx, org, {
+          sessionId: s0.id,
+          actor: systemActor,
+          action: 'session.resumed',
+          data: { side: 'assist', fromState: s0.state, toState: s0.state },
+        });
       await updateSession(tx, s0.id, { nodeId: ctx.config.nodeId });
     });
   } catch (err) {
@@ -220,7 +226,9 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
   }
   const s = (await getSession(ctx.db, s0.id))!;
   ensureLive(hub, s);
+  if (live.p4) live.p4.assistAttached = true;
   await ensureAgentManifest(hub, live, s);
+  await ensureP4Device(hub, live);
   conn.send({ ...sessionCreatedMsg(hub, s, org, { id: p.user.id, name: p.user.name }, 'assist'), ...re(msg.id) });
   if (live.recorder.joined) conn.send({ t: 'session.recording', sessionId: s.id, recording: true, source: 'server' });
   scheduleIceRefresh(hub, live, 'assist');

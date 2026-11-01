@@ -14,6 +14,7 @@ import { isoOrNull, iso } from '../lib/time.js';
 import { endSessionQuietly, type EndedSession } from '../services/session-end.js';
 import { clearTimer, clearTimers, setTimer, type Conn, type Live } from './conn.js';
 import { onRecorderClosed, recorderOnEnded } from './recorder.js';
+import { protectionsReleased } from '../fleet/session-hooks.js';
 import type { SignalHub } from './hub.js';
 
 const KNOCK_CLOSED_BY: Partial<Record<SessionEndReason, string>> = {
@@ -53,11 +54,14 @@ export async function onConnClosed(hub: SignalHub, conn: Conn): Promise<void> {
   if (conn.side === 'recorder') return onRecorderClosed(hub, conn);
   if (conn.side === 'desk' && conn.desk) {
     const sid = conn.desk.sessionId;
+    const workerOnly = Boolean(conn.desk.deviceId);
     const live = sid ? hub.live.get(sid) : undefined;
     if (live && live.state !== 'ended' && live.deskConnId === conn.id) {
       live.deskConnId = null;
+      // Phase D rule 5.4d: the worker died with input lock / privacy screen on; the OS released them with it.
+      if (live.p4) await protectionsReleased(hub, live);
       startDeskGrace(hub, live);
-    } else if (!sid) {
+    } else if (!sid && !workerOnly) {
       await ctx.presence.clearTokenWaiting(conn.desk.tokenId, conn.id);
       await notifyTokenPresence(hub, conn.desk.tokenId);
     }
@@ -130,7 +134,7 @@ export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promi
     clearTimers(live);
     setTimer(live, 'evict', ctx.timing.eventGraceMs, () => hub.live.delete(s.id));
   }
-  await ctx.presence.setTokenSession(s.tokenId, null);
+  if (s.tokenId) await ctx.presence.setTokenSession(s.tokenId, null);
   const names = await userRefs(ctx.db, [s.assistUserId]);
   const msg = {
     t: 'session.ended',
@@ -153,7 +157,7 @@ export async function onSessionEnded(hub: SignalHub, ended: EndedSession): Promi
   if (live) await recorderOnEnded(hub, live, msg);
   // No live entry here: the sockets of this session (if any) are piped from nodes whose owner is gone.
   if (!live) hub.bridge.endedWithoutOwner(s.id, msg);
-  if (ended.previousState === 'knocked') {
+  if (ended.previousState === 'knocked' && s.tokenId) {
     const tok = await findTokenByTid(ctx.db, s.tokenId);
     if (tok) {
       const closed = { t: 'knock.closed', sessionId: s.id, by: KNOCK_CLOSED_BY[reason] ?? 'ended' };

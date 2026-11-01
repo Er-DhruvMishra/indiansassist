@@ -1,6 +1,6 @@
 /** REST schemas: tokens and public lookup (contracts 3.2, 6.7). */
 import { z } from 'zod';
-import { TOKEN_LIFETIMES, type PackageTier, type TokenType } from '../enums.js';
+import { LIMITS, TOKEN_LIFETIMES, type PackageTier, type TokenType } from '../enums.js';
 import { sanitiseText, SANITISE_LIMITS } from '../audit/sanitise.js';
 import {
   hexColorSchema,
@@ -31,8 +31,12 @@ export const createTokenRequestSchema = z
       .max(1000)
       .transform((s) => sanitiseText(s, SANITISE_LIMITS.label))
       .optional(),
+    /** Phase D section 2.1: how many devices an enrollment token may enrol (default 1); enrollment only. */
+    maxDevices: z.number().int().min(1).max(LIMITS.enrollMaxDevices).optional(),
   })
   .superRefine((v, ctx) => {
+    if (v.maxDevices !== undefined && v.typ !== 'enrollment')
+      ctx.addIssue({ code: 'custom', message: 'maxDevices is only allowed with enrollment', path: ['maxDevices'] });
     if (v.ttlMinutes !== undefined && v.ttlDays !== undefined) {
       ctx.addIssue({ code: 'custom', message: 'give ttlMinutes or ttlDays, not both', path: ['ttlDays'] });
       return;
@@ -85,6 +89,9 @@ export const tokenSchema = z.object({
   deniedCount: z.number().int().nonnegative(),
   joinUrl: z.string(),
   joinHost: z.string(),
+  /** Phase D section 2.1: enrollment tokens only. */
+  maxDevices: z.number().int().positive().optional(),
+  devicesEnrolled: z.number().int().nonnegative().optional(),
 });
 
 export const tokensPageSchema = pageSchema(tokenSchema);

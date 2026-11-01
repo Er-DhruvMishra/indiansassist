@@ -46,6 +46,7 @@ import { HubApi } from './hub-api.js';
 import { onConnClosed } from './lifecycle.js';
 import { handleChatMessage, handleSessionEnd, handleWebrtc } from './relay.js';
 import { handleRecorderHello, handleRecorderJoin, handleRecorderLeave } from './recorder.js';
+import { DeviceHub } from './device.js';
 
 type Handler = (hub: SignalHub, conn: Conn, msg: never) => Promise<void>;
 
@@ -104,6 +105,8 @@ export class SignalHub extends HubApi {
   /** `signal.forbidden` budget per principal (SEC-05). */
   readonly forbidden = new ForbiddenGuard();
   readonly bridge: Bridge;
+  /** Phase D section 3.4: the `/signal/device` sockets of the installed services. */
+  readonly devices: DeviceHub;
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   private tickTimer: NodeJS.Timeout | null = null;
   private app: FastifyInstance | null = null;
@@ -111,6 +114,7 @@ export class SignalHub extends HubApi {
   constructor(readonly ctx: AppContext) {
     super();
     this.bridge = new Bridge(this);
+    this.devices = new DeviceHub(this);
   }
 
   /** Subscribes the bridge channels (multi-node presence only); awaited by buildApp before serving. */
@@ -138,6 +142,8 @@ export class SignalHub extends HubApi {
 
   private async onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const path = (req.url ?? '').split('?')[0];
+    // Phase D W44: the installed service connects on its own upgrade path; `/signal` is unchanged.
+    if (path === '/signal/device') return this.devices.onUpgrade(req, socket, head, this.clientIp(req));
     if (path !== '/signal') return reject(socket, 404, 'Not Found');
     const origin = req.headers['origin'];
     // Y21: the web origin, or a listed extension origin (Desk messages only, never a cookie principal). Phase C
@@ -275,6 +281,7 @@ export class SignalHub extends HubApi {
     runAuthChecks(this, now);
     closeExpiredWaitingDesks(this, now);
     this.bridge.tick(now);
+    this.devices.tick(now);
     this.forbidden.prune(now);
     for (const c of this.conns.values()) {
       if (c.closed) continue;
@@ -350,6 +357,7 @@ export class SignalHub extends HubApi {
   async close(): Promise<void> {
     if (this.tickTimer) clearInterval(this.tickTimer);
     await this.bridge.stop();
+    await this.devices.close();
     for (const l of this.live.values()) for (const t of l.timers.values()) clearTimeout(t);
     this.live.clear();
     for (const c of this.conns.values()) {

@@ -39,7 +39,8 @@ export type TokenStatus = (typeof TOKEN_STATUSES)[number];
 export const TOKEN_LIFETIMES = {
   one_time: { defaultMin: 15, maxMin: 60 },
   timed: { defaultMin: 60, maxMin: 480 },
-  enrollment: { defaultDays: 7, maxDays: 30 },
+  // Phase D section 2.1: 180 d maximum so a staged GPO rollout keeps enrolling late machines.
+  enrollment: { defaultDays: 7, maxDays: 180 },
 } as const;
 
 export const SESSION_STATES = ['knocked', 'accepted', 'consent_pending', 'active', 'ended'] as const;
@@ -63,6 +64,10 @@ export const SESSION_END_REASONS = [
   'assist_ended',
   'token_revoked',
   'error',
+  // Phase D section 6.3: a local approval declined / unanswered, the unattended cap reached, the device disabled.
+  'consent_required',
+  'policy_timeout',
+  'device_disabled',
 ] as const;
 export type SessionEndReason = (typeof SESSION_END_REASONS)[number];
 
@@ -70,7 +75,8 @@ export type SessionEndReason = (typeof SESSION_END_REASONS)[number];
 export const PARTICIPANT_ROLES = ['assist', 'desk', 'supervisor', 'recorder'] as const;
 export type ParticipantRole = (typeof PARTICIPANT_ROLES)[number];
 
-export const ACTOR_TYPES = ['user', 'desk', 'system'] as const;
+/** `device` (Phase D conventions): events a device attests with its identity-key signature. */
+export const ACTOR_TYPES = ['user', 'desk', 'system', 'device'] as const;
 export type ActorType = (typeof ACTOR_TYPES)[number];
 
 export const RECORDING_STATUSES = ['uploading', 'stored', 'failed'] as const;
@@ -126,7 +132,8 @@ export type CheckpointKind = (typeof CHECKPOINT_KINDS)[number];
 export const INTEGRATION_TYPES = ['zoho_desk', 'servicenow', 'jira', 'freshdesk'] as const;
 export type IntegrationType = (typeof INTEGRATION_TYPES)[number];
 
-export const DEVICE_STATUSES = ['enrolled', 'disabled'] as const;
+/** Phase D rule 3.7: `superseded` (re-enrolled), `retired` (soft delete), `deregistered` (signed uninstall). */
+export const DEVICE_STATUSES = ['enrolled', 'disabled', 'superseded', 'retired', 'deregistered'] as const;
 export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
 
 /** The two live participants of a Phase A session (chat `from`, `session.resumed.side`). */
@@ -263,6 +270,23 @@ export const LIMITS = {
   playbookParamsMax: 16,
   fileMaxBytesNative: 2_147_483_648,
   monitorsMax: 16,
+  // Phase D section 13.1 additions.
+  workerCredentialTtlSec: 120,
+  enrollMaxDevices: 10_000,
+  deviceDisabledRetrySec: 3600,
+  deviceQueueDrainMax: 100,
+  wakeConfirmSec: 120,
+  tamperSilentGraceSec: 900,
+  enrollConfigMaxBytes: 16_384,
+  deviceActionTtlDays: 7,
+  deviceActionOutputMaxBytes: 1_048_576,
+  maxUnattendedMinutesCap: 1440,
+  localApprovalTimeoutSec: 60,
+  receiptDigestMinutes: 60,
+  amtSolMaxMinutes: 30,
+  deviceTagsMax: 32,
+  deviceGroupsPerOrgMax: 500,
+  fleetPageMax: 200,
 } as const;
 
 export const DEFAULT_ANNOT_COLOR = '#f59e0b';
@@ -296,6 +320,8 @@ export const WS_CLOSE = {
   rateLimited: 4429,
   // Phase C section 7.2: the user instance replaced by the elevated hand-over child.
   handedOver: 4411,
+  // Phase D section 3.4: `device_unauthenticated` and `device_disabled` on `/signal/device`.
+  deviceUnauthenticated: 4412,
 } as const;
 export type WsCloseCode = (typeof WS_CLOSE)[keyof typeof WS_CLOSE];
 
@@ -393,3 +419,5 @@ export const RRWEB_RECORDING_MIME = 'application/x-ia-rrweb+jsonl';
 
 // Phase C (docs/specs/phase-c-contracts.md section 13.1): the P3 enumerations live in enums-p3.ts.
 export * from './enums-p3.js';
+// Phase D (docs/specs/phase-d-contracts.md section 13.1): the P4 enumerations live in enums-p4.ts.
+export * from './enums-p4.js';

@@ -1,7 +1,8 @@
 /** Every pgEnum and table in one module: the drizzle-kit `schema` entry point (drizzle.config.ts). */
 export * from './enums.js';
 export { org, user, technicianSeat, authSession, loginAttempt } from './org.js';
-export { token, device } from './token.js';
+export { token, device, deviceGroup } from './token.js';
+export { deviceAction, wakeAttempt, amtSol } from './fleet.js';
 export { session, sessionParticipant, sessionHost } from './session.js';
 export { auditEntry, auditCheckpoint } from './audit.js';
 export { sessionFile } from './files.js';

@@ -27,6 +27,8 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | nginx | BSD-2-Clause | TLS termination, reverse proxy, static web | self-hosted service |
 | ioredis | MIT | Valkey client (redis presence driver) | in use (Phase A, multi-node) |
 | @aws-sdk/client-s3, @aws-sdk/s3-request-presigner | Apache-2.0 | s3 storage driver | in use (Phase A) |
+| nodemailer 8 | MIT-0 | `smtp` driver of the consent-receipt mailer (`apps/api/src/mail`, Phase D rule 6.4d); the default `log` driver needs nothing | in use (Phase D, api) |
+| OpenBao (or HashiCorp Vault) | MPL-2.0 (OpenBao; run only as an unmodified separate service over its HTTP API, nothing linked or copied; the api's client is plain `fetch`) | credential vault for AMT admin credentials and privileged-playbook secrets, read by the api only (Phase D rule 9.8, W37/W40) | self-hosted service, optional |
 | rrweb 2.1.7 (exact pin) with rrweb-snapshot, rrdom, @rrweb/types, @rrweb/utils, mitt, @xstate/fsm, base64-arraybuffer | MIT (all) | P2 DOM mirroring: replay in the Assist console's replayer frame (`apps/web`); `record()` in the extension capture script (`apps/extension`, bundled into `content.js`) | in use (Phase B, web and extension) |
 | @types/chrome 0.3.4 (+ @types/har-format) | MIT | extension API typings (`apps/extension`, dev only, not shipped) | in use (dev, Phase B) |
 | eslint-plugin-no-unsanitized 4.1.5 | MPL-2.0 (unmodified dev tool, nothing copied into our code, not shipped) | bans `innerHTML` and friends in `apps/extension` (section 12.1) | in use (dev, Phase B) |

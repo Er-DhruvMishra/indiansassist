@@ -41,6 +41,7 @@ export function toUser(u: UserRow): User {
     status: u.status,
     createdAt: iso(u.createdAt),
     lastLoginAt: isoOrNull(u.lastLoginAt),
+    deviceGroupIds: u.deviceGroupIds ?? null,
   };
 }
 
@@ -53,6 +54,8 @@ export function toOrg(o: OrgRow): Org {
     planTier: o.planTier,
     branding: { ...(o.branding ?? {}) },
     createdAt: iso(o.createdAt),
+    fleetScopingEnabled: o.fleetScopingEnabled,
+    wakerMeshEnabled: o.wakerMeshEnabled,
   };
 }
 
@@ -114,6 +117,8 @@ export function toToken(t: TokenRow, createdBy: UserRef, webOrigin: string, stat
     deniedCount: t.deniedCount,
     joinUrl: joinUrlOf(webOrigin, compactOf(t)),
     joinHost: new URL(webOrigin).host,
+    // Phase D section 2.1: enrollment tokens only.
+    ...(t.typ === 'enrollment' ? { maxDevices: t.maxDevices, devicesEnrolled: t.devicesEnrolled } : {}),
   };
 }
 
@@ -135,6 +140,8 @@ export function toSession(s: SessionRow, refs: SessionRefs): Session {
   return {
     id: s.id,
     tokenId: s.tokenId,
+    deviceId: s.deviceId ?? null,
+    unattended: s.unattended ?? null,
     tokenCreatedBy: refs.tokenCreatedBy,
     assist: refs.assist,
     deskLabel: s.deskLabel ?? null,

@@ -8,6 +8,8 @@ import { retireDeskCodes } from '../lib/desk-codes.js';
 import { ensureAgentManifest } from './agent-manifest.js';
 import { checkNativeGrant, pushAgentConsent } from './desk-p3.js';
 import { handoverHello } from './handover-hello.js';
+import { workerHello } from '../fleet/worker.js';
+import { p4ConsentEntries, p4ConsentRevokeReason, p4OnActive } from '../fleet/session-hooks.js';
 import {
   findOpenSessionByToken,
   findTokenByTid,
@@ -51,6 +53,8 @@ export const EXPECTED_CLIENT: Partial<Record<PackageTier, 'web' | 'extension' | 
   p1_browser: 'web',
   p2_extension: 'extension',
   p3_portable: 'native',
+  // Phase D section 16.2: the P4 desktop worker is native; it joins with a worker credential (a p4 token never joins).
+  p4_installed: 'native',
 };
 
 /** `a < b` for MAJOR.MINOR.PATCH (a pre-release suffix sorts below its release). */
@@ -75,8 +79,10 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     conn.error('rate_limited', 'too many attempts', msg.id, { retryAfterSec: lim.retryAfterSec });
     return conn.close(WS_CLOSE.rateLimited, 'rate limited');
   }
+  // Phase D section 4.2: the P4 desktop worker presents a single-use worker credential instead of a token.
+  if (msg.workerCredential !== undefined) return workerHello(hub, conn, msg);
   const native = msg.client?.kind === 'native';
-  const v = await verifyTokenInput(ctx, msg.token, {
+  const v = await verifyTokenInput(ctx, msg.token!, {
     ip: conn.ip,
     ...(msg.resumeKey ? { resumeKey: msg.resumeKey } : {}),
     ...(msg.handover ? { handover: msg.handover } : {}),
@@ -89,7 +95,8 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
   }
   const tok = v.token;
   // Tier gate (Phase B 2.4): p1 needs a web client, p2 the extension; p3 / p4 / enrollment stay unsupported.
-  const expectedClient = tok.typ === 'enrollment' ? null : EXPECTED_CLIENT[tok.tier];
+  // Phase D section 2.1: a p4_installed / enrollment token still answers join_unsupported (devices use /signal/device).
+  const expectedClient = tok.typ === 'enrollment' || tok.tier === 'p4_installed' ? null : EXPECTED_CLIENT[tok.tier];
   if (!expectedClient || (msg.client?.kind ?? 'web') !== expectedClient) {
     conn.error('join_unsupported', 'this code needs a different IndiansAssist client', msg.id, {
       tier: tok.tier,
@@ -243,6 +250,7 @@ function tokenGone(conn: Conn, status: string, reId: string | undefined): void {
 
 export async function handleDeskPoll(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.poll'>): Promise<void> {
   const d = conn.desk!;
+  if (d.deviceId) return conn.error('bad_state', 'a desktop worker does not poll', msg.id);
   const tok = await findTokenByTid(hub.ctx.db, d.tokenId);
   const technicianOnline = tok ? await hub.techOnline(tok) : false;
   const live = d.sessionId ? hub.live.get(d.sessionId) : undefined;
@@ -267,6 +275,7 @@ export async function handleDeskPoll(hub: SignalHub, conn: Conn, msg: SignalOf<'
 export async function handleDeskKnock(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.knock'>): Promise<void> {
   const { ctx } = hub;
   const d = conn.desk!;
+  if (d.deviceId) return conn.error('bad_state', 'a desktop worker does not knock', msg.id);
   const live = d.sessionId ? hub.live.get(d.sessionId) : undefined;
   if (live && live.state !== 'ended') return conn.error('bad_state', 'this Desk already has a live session', msg.id);
   const tok = await findTokenByTid(ctx.db, d.tokenId);
@@ -308,7 +317,7 @@ export async function handleDeskConsent(hub: SignalHub, conn: Conn, msg: SignalO
     if (!nat.ok) return conn.error('bad_payload', nat.message, msg.id);
     const ag = nat.agent;
     const surface = msg.surface ?? 'unknown';
-    const tok = await findTokenByTid(ctx.db, s.tokenId);
+    const tok = s.tokenId ? await findTokenByTid(ctx.db, s.tokenId) : null;
     const c = ext.consent;
     await ctx.db.transaction(async (tx) => {
       const r = await transitionSession(tx, s.id, 'active', {
@@ -327,6 +336,8 @@ export async function handleDeskConsent(hub: SignalHub, conn: Conn, msg: SignalO
         data: ag ? { surface: 'monitor', level: ag.level, monitors: ag.monitors, clipboard: ag.clipboard } : { surface, ...(c ?? {}) },
       });
       await writeAudit(ctx, tx, org, { sessionId: s.id, actor: systemActor, action: 'session.started', data: { path: r.path } });
+      // Phase D section 6.3: an unattended P4 session chains `session.unattended_started` when it reaches active.
+      if (s.deviceId) await p4ConsentEntries(hub, tx, org, live, s, msg.approvedBy);
     });
     live.state = 'active';
     live.consent = c;
@@ -340,13 +351,15 @@ export async function handleDeskConsent(hub: SignalHub, conn: Conn, msg: SignalO
     else assistConn?.send({ t: 'consent.changed', sessionId: s.id, state: 'granted', surface, ...(c ?? {}) });
     scheduleIceRefresh(hub, live, 'desk');
     await onSessionActive(hub, live);
+    if (live.p4) p4OnActive(hub, live);
     return;
   }
   // Section 7.4: consent can be revoked only once it was asked for (consent_pending) or given (active).
   if (s.state !== 'consent_pending' && s.state !== 'active')
     return conn.error('bad_state', `cannot revoke consent in ${s.state}`, msg.id);
   await endSessionFlow(ctx, s.id, {
-    reason: 'consent_revoked',
+    // Phase D section 6.2: a P4 local approval / consent declined (or left unanswered) ends `consent_required`.
+    reason: s.deviceId ? p4ConsentRevokeReason(s) : 'consent_revoked',
     actor: deskActor(s.deskRef),
     from: ['consent_pending', 'active'],
     before: async (tx, o) => {

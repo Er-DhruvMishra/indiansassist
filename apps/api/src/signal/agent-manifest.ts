@@ -4,7 +4,7 @@
  * when trimmed). Loaded once per live session and kept as `live.manifest`: both `session.created` copies carry it,
  * and the run endpoint refuses a body whose hash differs from the pinned one (`409 playbook_changed`).
  */
-import { LIMITS, utf8Encode, type PlaybookManifest } from '@indiansassist/shared';
+import { isNativeTier, LIMITS, utf8Encode, type PlaybookManifest } from '@indiansassist/shared';
 import { listManifestPlaybooks, pinSessionPlaybooks, type SessionRow } from '@indiansassist/db';
 import type { Live, LiveManifest } from './conn.js';
 import type { SignalHub } from './hub.js';
@@ -43,8 +43,11 @@ function toEntry(r: {
   parameters: unknown;
   timeoutSec: number;
   bodySha256: string;
+  vaultRefs?: { env: string; path: string }[] | null;
 }): PlaybookManifest {
   return {
+    // Phase D rule 9.8: env names only (never a path).
+    ...(r.vaultRefs && r.vaultRefs.length > 0 ? { vaultRefs: r.vaultRefs.map((v) => ({ env: v.env })) } : {}),
     id: r.id,
     name: r.name,
     description: r.description,
@@ -62,7 +65,7 @@ function toEntry(r: {
  * owner (section 8.3, F6).
  */
 export async function ensureAgentManifest(hub: SignalHub, live: Live, s: SessionRow): Promise<void> {
-  if (s.tier !== 'p3_portable' || live.manifest) return;
+  if (!isNativeTier(s.tier) || live.manifest) return;
   const rows = await listManifestPlaybooks(hub.ctx.db, s.orgId, interpretersOf(s), LIMITS.playbookCatalogueMax + 1);
   live.manifest ??= buildManifest(rows);
   if (s.playbookPins === null) await pinSessionPlaybooks(hub.ctx.db, s.id, Object.fromEntries(live.manifest.hashes));

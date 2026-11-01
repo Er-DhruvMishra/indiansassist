@@ -7,6 +7,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import {
+  isNativeTier,
   lintPlaybookBody,
   opIdFor,
   playbookCreateSchema,
@@ -54,6 +55,7 @@ export function toPlaybook(r: PlaybookRow, createdBy: UserRef | null, withBody: 
     enabled: r.enabled,
     bodyHash: r.bodySha256,
     ...(withBody ? { body: r.body } : {}),
+    ...(r.vaultRefs && r.vaultRefs.length > 0 ? { vaultRefs: r.vaultRefs } : {}),
     createdBy,
     createdAt: iso(r.createdAt),
     updatedAt: iso(r.updatedAt),
@@ -107,6 +109,7 @@ export async function playbookRoutes(app: FastifyInstance, ctx: AppContext): Pro
           parameters: body.parameters ?? [],
           timeoutSec: body.timeoutSec ?? 120,
           enabled: body.enabled ?? true,
+          vaultRefs: body.vaultRefs && body.vaultRefs.length > 0 ? body.vaultRefs : null,
           createdBy: p.user.id,
         });
         await writeAudit(ctx, tx, p.org, {
@@ -159,13 +162,15 @@ export async function playbookRoutes(app: FastifyInstance, ctx: AppContext): Pro
     const { session } = await scopedSession(ctx, p, req.params.id, { write: true });
     requireSessionAssist(p, session);
     const body = parseOr400(playbookRunRequestSchema, req.body);
-    if (session.tier !== 'p3_portable' || session.state !== 'active') fail('bad_state', 'playbooks run in an active P3 session');
+    if (!isNativeTier(session.tier) || session.state !== 'active') fail('bad_state', 'playbooks run in an active P3 session');
     // C12: rate-limit before the DB load and the (regex) validation, so one request cannot stall the node first.
     const lim = await ctx.limiter.hit(`playbook-run:${session.id}`, 10, 60_000);
     if (!lim.allowed) fail('rate_limited', 'too many playbook runs', { retryAfterSec: lim.retryAfterSec });
     const pb = await getPlaybookScoped(ctx.db, req.params.playbookId, session.orgId);
     if (!pb) fail('not_found', 'playbook not found');
     if (!pb.enabled) fail('playbook_disabled', 'this playbook is disabled');
+    // Phase D rule 9.8: a vault-backed playbook runs only as a device action (secrets are sealed at dispatch).
+    if (pb.vaultRefs && pb.vaultRefs.length > 0) fail('bad_state', 'this playbook uses vault secrets and runs only as a device action');
     // F6: the pinned hashes are persisted on the session (ensureAgentManifest), so the check holds on any node; the
     // owner node's live manifest is an equivalent fallback for the moment before the pin row is observed.
     const pinned = session.playbookPins?.[pb.id] ?? ctx.hub.live.get(session.id)?.manifest?.hashes.get(pb.id);

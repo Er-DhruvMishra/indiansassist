@@ -4,13 +4,14 @@
  * `elevated`, which only a hand-over sets), `desk.consent_clipboard` and `desk.consent_monitors`, each audited and
  * mirrored to the Assist as `consent.changed`.
  */
-import { isAgentConsentLevel, type AgentConsentLevel, type PackageTier, type SignalOf } from '@indiansassist/shared';
+import { isAgentConsentLevel, isNativeTier, type AgentConsentLevel, type PackageTier, type SignalOf } from '@indiansassist/shared';
 import { getSession, updateSession, type SessionRow } from '@indiansassist/db';
 import { deskActor, writeAudit } from '../lib/audit.js';
 import { agentOfRow, type Conn, type Live, type LiveAgent } from './conn.js';
 import type { SignalHub } from './hub.js';
 import { orgOf } from './messages.js';
 import { authorizeSession } from './relay.js';
+import { p4PrivilegedMode } from '../fleet/session-hooks.js';
 
 type NativeGrant = SignalOf<'desk.consent'>['native'];
 
@@ -20,7 +21,7 @@ export function checkNativeGrant(
   surface: string | undefined,
   native: NativeGrant,
 ): { ok: true; agent: LiveAgent | null } | { ok: false; message: string } {
-  if (tier !== 'p3_portable')
+  if (!isNativeTier(tier))
     return native === undefined ? { ok: true, agent: null } : { ok: false, message: 'native consent is only valid in P3 sessions' };
   if (!native) return { ok: false, message: 'a P3 session needs native: { level, monitors, clipboard }' };
   if (surface !== 'monitor') return { ok: false, message: 'a P3 session shares monitors (surface: monitor)' };
@@ -52,7 +53,7 @@ async function activeP3(hub: SignalHub, conn: Conn, sessionId: string, t: string
     conn.error('bad_state', `${t} needs an active session`, reId);
     return null;
   }
-  if (s.tier !== 'p3_portable') {
+  if (!isNativeTier(s.tier)) {
     conn.error('bad_state', `${t} exists in P3 sessions only`, reId);
     return null;
   }
@@ -66,6 +67,8 @@ export async function p3ConsentLevel(hub: SignalHub, conn: Conn, msg: SignalOf<'
   const a = await activeP3(hub, conn, msg.sessionId, msg.t, msg.id);
   if (!a) return;
   const { live, s, agent } = a;
+  // Phase D rule 5.2b: a P4 worker raises the level to `elevated` in place (privileged mode, no relaunch).
+  if (s.tier === 'p4_installed' && msg.level === 'elevated') return p4PrivilegedMode(hub, conn, live, s, agent, msg);
   if (!isAgentConsentLevel(msg.level) || msg.level === 'elevated')
     return conn.error('bad_payload', 'a P3 Desk sets view or control; elevated is reached only through elevation', msg.id);
   const to: AgentConsentLevel = msg.level;

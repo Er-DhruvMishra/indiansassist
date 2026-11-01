@@ -7,6 +7,9 @@ import {
   ACTOR_TYPES,
   CHECKPOINT_KINDS,
   CONSENT_STATES,
+  DEVICE_ACTION_KINDS,
+  DEVICE_ACTION_STATES,
+  DEVICE_PLATFORMS,
   ELEVATION_LEVELS,
   MIRROR_SCOPES,
   DEVICE_STATUSES,
@@ -23,10 +26,13 @@ import {
   SESSION_PATHS,
   SESSION_STATES,
   STORED_CONSENT_LEVELS,
+  TAMPER_STATES,
   TOKEN_STATUSES,
   TOKEN_TYPES,
   USER_ROLES,
   USER_STATUSES,
+  WAKE_METHODS,
+  WAKE_STATES,
 } from '@indiansassist/shared';
 
 export const regionEnum = pgEnum('region', REGIONS);
@@ -56,3 +62,10 @@ export const recordingSourceEnum = pgEnum('recording_source', RECORDING_SOURCES)
 // Phase C (docs/specs/phase-c-contracts.md section 13.2)
 export const playbookInterpreterEnum = pgEnum('playbook_interpreter', PLAYBOOK_INTERPRETERS);
 export const elevationLevelEnum = pgEnum('elevation_level', ELEVATION_LEVELS);
+// Phase D (docs/specs/phase-d-contracts.md section 13.2)
+export const devicePlatformEnum = pgEnum('device_platform', DEVICE_PLATFORMS);
+export const deviceActionKindEnum = pgEnum('device_action_kind', DEVICE_ACTION_KINDS);
+export const deviceActionStateEnum = pgEnum('device_action_state', DEVICE_ACTION_STATES);
+export const wakeMethodEnum = pgEnum('wake_method', WAKE_METHODS);
+export const wakeStateEnum = pgEnum('wake_state', WAKE_STATES);
+export const tamperStateEnum = pgEnum('tamper_state', TAMPER_STATES);

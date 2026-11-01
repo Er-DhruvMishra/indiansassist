@@ -20,11 +20,14 @@ export function refOf(map: Map<string, UserRef>, id: string): UserRef {
 /** Wire sessions with tokenCreatedBy, assist and recordingId resolved in three queries. */
 export async function hydrateSessions(exec: Executor, rows: SessionRow[]): Promise<Session[]> {
   if (rows.length === 0) return [];
-  const tokenIds = [...new Set(rows.map((r) => r.tokenId))];
-  const toks = await exec
-    .select({ id: tokenTable.id, createdBy: tokenTable.createdBy })
-    .from(tokenTable)
-    .where(inArray(tokenTable.id, tokenIds));
+  const tokenIds = [...new Set(rows.map((r) => r.tokenId).filter((t): t is string => t !== null))];
+  const toks =
+    tokenIds.length === 0
+      ? []
+      : await exec
+          .select({ id: tokenTable.id, createdBy: tokenTable.createdBy })
+          .from(tokenTable)
+          .where(inArray(tokenTable.id, tokenIds));
   const creatorOf = new Map(toks.map((t) => [t.id, t.createdBy]));
   const recs = await exec
     .select({ id: recording.id, sessionId: recording.sessionId, recordedBy: recording.recordedBy })
@@ -35,7 +38,7 @@ export async function hydrateSessions(exec: Executor, rows: SessionRow[]): Promi
   const names = await userRefs(exec, [...rows.map((r) => r.assistUserId), ...toks.map((t) => t.createdBy)]);
   return rows.map((r) =>
     toSession(r, {
-      tokenCreatedBy: refOf(names, creatorOf.get(r.tokenId) ?? r.assistUserId),
+      tokenCreatedBy: refOf(names, (r.tokenId ? creatorOf.get(r.tokenId) : undefined) ?? r.assistUserId),
       assist: refOf(names, r.assistUserId),
       recordingId: recOf.get(r.id) ?? null,
       serverRecordingId: serverRecOf.get(r.id) ?? null,

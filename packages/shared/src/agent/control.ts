@@ -77,6 +77,8 @@ export const AGENT_CONTROL_ARGS = {
   }),
   'os.input_lock': z.strictObject({ locked: z.boolean() }),
   'os.privacy_screen': z.strictObject({ on: z.boolean() }),
+  /** Phase D section 5.4: Ctrl+Alt+Del through the service's `SendSAS` (P3 answers `not_supported { message: 'phase_d' }`). */
+  'os.sas': z.strictObject({}),
   // B shape reused; `level` accepts both families, the agent answers `bad_args` for anything but `control`.
   'level.request': z.strictObject({ level: z.string().min(1).max(32), reason: z.string().max(500).optional() }),
   'elevation.request': z.strictObject({ reason: z.string().min(1).max(500) }),
@@ -107,6 +109,7 @@ const MIN_LEVEL: Record<AgentControlOp, AgentConsentLevel> = {
   'clipboard.set': 'control',
   'os.input_lock': 'elevated',
   'os.privacy_screen': 'elevated',
+  'os.sas': 'elevated',
   'level.request': 'view',
   'elevation.request': 'control',
   'playbook.run': 'control',
@@ -153,6 +156,8 @@ export const AGENT_CONTROL_EVENT_KINDS = [
   'clipboard',
   'elevation',
   'input_blocked',
+  // Phase D rule 3.5b: the device-key attestation of the SAS of an auto-granted P4 session.
+  'device_attest',
 ] as const;
 const ev = <K extends string, S extends z.ZodRawShape>(kind: K, shape: S) =>
   z.strictObject({ t: z.literal('ctl.event'), kind: z.literal(kind), ts, ...shape });
@@ -175,6 +180,10 @@ export const agentControlEventSchema = z.discriminatedUnion('kind', [
     cause: z.string().max(64).optional(),
   }),
   ev('input_blocked', { cause: z.enum(['uipi', 'secure_desktop', 'secure_window']), monitorId: monitorId.optional() }),
+  ev('device_attest', {
+    gen: z.number().int().min(0).max(65535),
+    sig: z.string().regex(/^[A-Za-z0-9_-]{86}$/, 'base64url Ed25519 signature'),
+  }),
 ]);
 
 /** Section 3.8: the `control.input` kind an op is aggregated under (null: not a `control.input` op). */

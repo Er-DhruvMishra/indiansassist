@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   internalRecordingMetaSchema,
+  isNativeTier,
   isRegionServed,
   LIMITS,
   recorderActor,
@@ -41,7 +42,7 @@ async function uploadableSession(ctx: AppContext, meta: InternalRecordingMeta): 
   const s = await getSession(ctx.db, meta.sessionId);
   if (!s || !isRegionServed(s.region, ctx.config.servedRegions)) fail('not_found', 'session not found');
   if (s.startedAt === null) fail('forbidden', 'the session never reached active (no consent was given)');
-  if ((s.tier !== 'p1_browser' && s.tier !== 'p3_portable') || !serverRecords(s.recordingMode))
+  if ((s.tier !== 'p1_browser' && !isNativeTier(s.tier)) || !serverRecords(s.recordingMode))
     fail('forbidden', 'server recording is not enabled for this session');
   const q = ctx.config.recordingQuota;
   if (s.endedAt && Date.now() > s.endedAt.getTime() + q.uploadWindowSec * 1000)

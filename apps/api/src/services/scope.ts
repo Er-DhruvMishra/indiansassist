@@ -3,7 +3,7 @@
  * cross-org objects are `404 not_found`; same-org objects outside a technician's `own` scope are `403 forbidden`.
  * `own` for sessions = `assist_user_id` is the caller OR `token.created_by` is the caller.
  */
-import { assistMayRecord } from '@indiansassist/shared';
+import { assistMayRecord, isNativeTier } from '@indiansassist/shared';
 import { findTokenByTid, getSession, type SessionRow, type TokenRow } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
@@ -23,15 +23,16 @@ export async function scopedSession(
   p: Principal,
   id: string,
   opts: ScopeOpts = {},
-): Promise<{ session: SessionRow; token: TokenRow }> {
+): Promise<{ session: SessionRow; token: TokenRow | null }> {
   const s = UUID_RE.test(id) ? await getSession(ctx.db, id) : null;
   if (!s || s.orgId !== p.org.id) fail('not_found', 'session not found');
-  const tok = await findTokenByTid(ctx.db, s.tokenId);
-  if (!tok) fail('not_found', 'session not found');
+  // Phase D W29: a P4 device session has no token; `own` is then the technician who opened it.
+  const tok = s.tokenId ? await findTokenByTid(ctx.db, s.tokenId) : null;
+  if (!tok && !s.deviceId) fail('not_found', 'session not found');
   const role = p.user.role;
   if (role === 'observer' && (!opts.allowObserver || opts.write)) fail('forbidden', 'your role cannot do this');
   if (role === 'auditor' && opts.write) fail('forbidden', 'read-only role');
-  if (role === 'technician' && s.assistUserId !== p.user.id && tok.createdBy !== p.user.id)
+  if (role === 'technician' && s.assistUserId !== p.user.id && tok?.createdBy !== p.user.id)
     fail('forbidden', 'not your session');
   return { session: s, token: tok };
 }
@@ -57,7 +58,7 @@ export function requireReachedActive(s: SessionRow): void {
  */
 export function assistMayRecordSession(s: Pick<SessionRow, 'tier' | 'recordingMode'>): boolean {
   // Phase C section 9 R1: the P3 console records the remote video exactly as P1.
-  return s.tier === 'p1_browser' || s.tier === 'p3_portable' ? assistMayRecord(s.recordingMode) : s.recordingMode !== 'off';
+  return s.tier === 'p1_browser' || isNativeTier(s.tier) ? assistMayRecord(s.recordingMode) : s.recordingMode !== 'off';
 }
 
 export function requireAssistMayRecord(s: Pick<SessionRow, 'tier' | 'recordingMode'>): void {

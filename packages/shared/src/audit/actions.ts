@@ -26,10 +26,12 @@ import { sanitiseText, SANITISE_LIMITS } from './sanitise.js';
 import { P2_AUDIT_ACTIONS, P2_CHAIN_SCHEMAS } from './actions-p2.js';
 import { A2_AUDIT_ACTIONS, A2_CHAIN_SCHEMAS, recordingFailedDataSchema, recordingStoredDataSchema } from './actions-a2.js';
 import { P3_AUDIT_ACTIONS, P3_CHAIN_SCHEMAS } from './actions-p3.js';
+import { P4_AUDIT_ACTIONS, P4_CHAIN_SCHEMAS } from './actions-p4.js';
 
 export * from './actions-p2.js';
 export * from './actions-a2.js';
 export * from './actions-p3.js';
+export * from './actions-p4.js';
 
 export const AUDIT_ACTIONS = [
   'auth.signup',
@@ -70,6 +72,8 @@ export const AUDIT_ACTIONS = [
   ...A2_AUDIT_ACTIONS,
   // Phase C (docs/specs/phase-c-contracts.md sections 3.8, 7.5, 8.5)
   ...P3_AUDIT_ACTIONS,
+  // Phase D (docs/specs/phase-d-contracts.md section 13.3)
+  ...P4_AUDIT_ACTIONS,
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -126,8 +130,20 @@ const SCHEMAS = {
   'org.branding_updated': z.strictObject({ fields: z.array(text(100)) }),
   'token.created': z.strictObject({ tokenId: id, tier, typ: z.enum(TOKEN_TYPES), expiresAt: iso }),
   'token.revoked': z.strictObject({ tokenId: id, reason: z.enum(TOKEN_REVOKE_REASONS) }),
-  'session.knock': z.strictObject({ tokenId: id, deskLabelHash: hash, userAgentHash: hash }),
-  'session.accepted': z.strictObject({ tokenId: id, onBehalfOf: id.nullable() }),
+  // Phase D section 13.3: the P4 branches (a device session has no token; the device is the credential).
+  'session.knock': z.union([
+    z.strictObject({ tokenId: id, deskLabelHash: hash, userAgentHash: hash }),
+    z.strictObject({ deviceId: id, keyId: z.string().regex(/^[0-9a-f]{16}$/, 'expected a 16-hex-char key id') }),
+  ]),
+  'session.accepted': z.union([
+    z.strictObject({ tokenId: id, onBehalfOf: id.nullable() }),
+    z.strictObject({
+      deviceId: id,
+      unattended: z.boolean(),
+      reason: text(SANITISE_LIMITS.reason).nullable(),
+      onBehalfOf: z.null(),
+    }),
+  ]),
   'session.denied': z.strictObject({ tokenId: id, revokeToken: z.boolean() }),
   // `level`, `scope`, `backstage`: present for P2 sessions only (Phase B Y5); `level` (P3 family), `monitors`,
   // `clipboard`: present for P3 sessions only (Phase C section 3.8).
@@ -193,6 +209,7 @@ const SCHEMAS = {
   ...P2_CHAIN_SCHEMAS,
   ...A2_CHAIN_SCHEMAS,
   ...P3_CHAIN_SCHEMAS,
+  ...P4_CHAIN_SCHEMAS,
 } satisfies Record<AuditAction, z.ZodType>;
 
 export type AuditDataSchemas = typeof SCHEMAS;

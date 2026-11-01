@@ -1,6 +1,6 @@
 /** Live support sessions and their participants (contracts section 4.2: session, session_participant). */
 import { sql } from 'drizzle-orm';
-import { boolean, char, index, integer, jsonb, pgTable, text, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, char, check, index, integer, jsonb, pgTable, text, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import {
   consentLevelEnum,
   consentStateEnum,
@@ -15,7 +15,7 @@ import {
   sessionStateEnum,
 } from './enums.js';
 import { createdAt, org, tstz, updatedAt, user } from './org.js';
-import { token } from './token.js';
+import { device, token } from './token.js';
 
 export const session = pgTable(
   'session',
@@ -24,9 +24,8 @@ export const session = pgTable(
     orgId: uuid('org_id')
       .notNull()
       .references(() => org.id),
-    tokenId: uuid('token_id')
-      .notNull()
-      .references(() => token.id),
+    /** Null for a P4 device session (Phase D W29); CHECK token_id or device_id. */
+    tokenId: uuid('token_id').references(() => token.id),
     assistUserId: uuid('assist_user_id')
       .notNull()
       .references(() => user.id),
@@ -72,10 +71,20 @@ export const session = pgTable(
     // Phase C section 8.3 (F6): the manifest hashes pinned at the first `session.created` (playbook id -> body hash),
     // written once by ensureAgentManifest so the `playbook_changed` check works on any node, not just the owner.
     playbookPins: jsonb('playbook_pins').$type<Record<string, string>>(),
+    // Phase D section 13.2: the device of a P4 session, whether it was unattended and the effective policy at open.
+    deviceId: uuid('device_id').references(() => device.id),
+    unattended: boolean('unattended'),
+    unattendedPolicy: jsonb('unattended_policy').$type<Record<string, unknown>>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
+    check('session_token_or_device', sql`token_id is not null or device_id is not null`),
+    index('session_device_id_idx').on(t.deviceId),
+    // Rule 3.5a: one live session per device.
+    uniqueIndex('session_device_open_unique')
+      .on(t.deviceId)
+      .where(sql`state <> 'ended' and device_id is not null`),
     index('session_org_created_idx').on(t.orgId, t.createdAt.desc()),
     index('session_token_id_idx').on(t.tokenId),
     // At most one non-ended session per token (contracts 3.2 / 7.3 `token_busy`), enforced by the database so two

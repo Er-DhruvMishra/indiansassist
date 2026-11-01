@@ -28,6 +28,7 @@ import { writeCheckpoint } from './services/audit-service.js';
 import { deleteRecording } from './services/recording-delete.js';
 import { deleteParts, failRecording } from './services/recording-service.js';
 import { endSessionQuietly } from './services/session-end.js';
+import { fleetSweep } from './fleet/sweep.js';
 
 const HOUR_MS = 60 * 60_000;
 /** Lease TTL: three missed passes before another node takes over. */
@@ -69,6 +70,8 @@ export class Sweeper {
       await this.expiredUploads();
       await this.retention();
       await this.expiredHandovers();
+      // Phase D: action expiry, held-queue re-dispatch, wake confirmation, SOL cap, silent devices.
+      await fleetSweep(this.ctx).catch((err: unknown) => this.ctx.log.error({ err }, 'fleet sweep failed'));
       if (opts.forcePeriodic || Date.now() - this.lastPeriodic >= HOUR_MS) {
         this.lastPeriodic = Date.now();
         await this.periodicCheckpoints();

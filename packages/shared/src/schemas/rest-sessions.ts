@@ -49,7 +49,11 @@ import { pageSchema } from './rest-core.js';
 
 export const sessionSchema = z.object({
   id: uuidSchema,
-  tokenId: uuidSchema,
+  /** Null for a P4 device session (Phase D W29). */
+  tokenId: uuidSchema.nullable(),
+  /** Phase D: the device of a P4 session (absent / null otherwise). */
+  deviceId: uuidSchema.nullable().optional(),
+  unattended: z.boolean().nullable().optional(),
   tokenCreatedBy: userRefSchema,
   assist: userRefSchema,
   deskLabel: z.string().nullable(),

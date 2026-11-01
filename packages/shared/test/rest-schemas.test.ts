@@ -205,6 +205,10 @@ describe('contract example payloads (REST)', () => {
       assist_ended: 2,
       token_revoked: 0,
       error: 0,
+      // Phase D section 6.3 (the api sends every reason)
+      consent_required: 0,
+      policy_timeout: 0,
+      device_disabled: 0,
     };
     expect(
       sessionStatsResponseSchema.parse({
@@ -269,7 +273,12 @@ describe('request schemas', () => {
     expect(ok({ tier: 'p1_browser', typ: 'timed', ttlMinutes: 480 })).toBe(true);
     expect(ok({ tier: 'p1_browser', typ: 'timed', ttlMinutes: 481 })).toBe(false);
     expect(ok({ tier: 'p4_installed', typ: 'enrollment', ttlDays: 30 })).toBe(true);
-    expect(ok({ tier: 'p4_installed', typ: 'enrollment', ttlDays: 31 })).toBe(false);
+    // Phase D section 2.1: the enrollment maximum is 180 days; maxDevices only with enrollment.
+    expect(ok({ tier: 'p4_installed', typ: 'enrollment', ttlDays: 180 })).toBe(true);
+    expect(ok({ tier: 'p4_installed', typ: 'enrollment', ttlDays: 181 })).toBe(false);
+    expect(ok({ tier: 'p4_installed', typ: 'enrollment', maxDevices: 500 })).toBe(true);
+    expect(ok({ tier: 'p4_installed', typ: 'enrollment', maxDevices: 10001 })).toBe(false);
+    expect(ok({ tier: 'p3_portable', typ: 'one_time', maxDevices: 2 })).toBe(false);
     expect(ok({ tier: 'p4_installed', typ: 'enrollment', ttlMinutes: 10 })).toBe(false);
     expect(ok({ tier: 'p1_browser', typ: 'one_time', ttlDays: 1 })).toBe(false);
     expect(ok({ tier: 'p1_browser', typ: 'one_time', ttlMinutes: 5, ttlDays: 1 })).toBe(false);

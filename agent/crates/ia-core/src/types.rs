@@ -55,16 +55,19 @@ pub enum TokenSource {
     Filename,
     Clipboard,
     Manual,
+    /// Phase D: the desktop worker's single-use credential, delivered by the service.
+    Service,
 }
 
 impl TokenSource {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Arg,
         Self::Deeplink,
         Self::Sidecar,
         Self::Filename,
         Self::Clipboard,
         Self::Manual,
+        Self::Service,
     ];
 }
 

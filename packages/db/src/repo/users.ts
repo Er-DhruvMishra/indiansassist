@@ -22,7 +22,7 @@ export type CreateUserInput = {
 export type UserPatch = Partial<
   Pick<
     UserRow,
-    'name' | 'role' | 'status' | 'passwordHash' | 'authRef' | 'inviteTokenHash' | 'inviteExpiresAt' | 'lastLoginAt'
+    'name' | 'role' | 'status' | 'passwordHash' | 'authRef' | 'inviteTokenHash' | 'inviteExpiresAt' | 'lastLoginAt' | 'deviceGroupIds'
   >
 >;
 

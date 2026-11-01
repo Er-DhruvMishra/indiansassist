@@ -5,7 +5,7 @@
  * `consent.changed` to the Assist). The server cannot see the data channel, so it enforces the cap on what the Desk
  * grants and records every change; the extension refuses ops above the level.
  */
-import { effectiveMaxLevel, isConsentLevel, levelAtLeast, type PackageTier, type SignalOf } from '@indiansassist/shared';
+import { effectiveMaxLevel, isConsentLevel, isNativeTier, levelAtLeast, type PackageTier, type SignalOf } from '@indiansassist/shared';
 import { getSession, updateSession } from '@indiansassist/db';
 import { deskActor, writeAudit } from '../lib/audit.js';
 import type { Conn, Live, LiveConsent } from './conn.js';
@@ -64,7 +64,7 @@ const re = (id: string | undefined) => (id !== undefined ? { re: id } : {});
 export async function handleDeskConsentLevel(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.consent_level'>): Promise<void> {
   const { ctx } = hub;
   // Phase C section 3.4 family rule: a P3 session's levels are handled by desk-p3.ts.
-  if (hub.live.get(msg.sessionId)?.tier === 'p3_portable') return p3ConsentLevel(hub, conn, msg);
+  if (isNativeTier(hub.live.get(msg.sessionId)?.tier)) return p3ConsentLevel(hub, conn, msg);
   const a = await activeP2(hub, conn, msg.sessionId, msg.t, msg.id);
   if (!a) return;
   const { live, s, consent } = a;

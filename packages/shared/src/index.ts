@@ -40,3 +40,14 @@ export * from './agent/capabilities.js';
 export * from './agent/sec-handshake.js';
 export * from './agent/download.js';
 export * from './agent/playbook.js';
+// Phase D (docs/specs/phase-d-contracts.md section 13.1)
+export * from './fleet/device.js';
+export * from './fleet/policy.js';
+export * from './fleet/actions.js';
+export * from './fleet/wake.js';
+export * from './fleet/tamper.js';
+export * from './fleet/receipt.js';
+export * from './fleet/signing.js';
+export * from './fleet/seal.js';
+export * from './schemas/signal-device.js';
+export * from './schemas/rest-fleet.js';

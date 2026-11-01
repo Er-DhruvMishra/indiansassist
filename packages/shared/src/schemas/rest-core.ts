@@ -77,6 +77,8 @@ export const userSchema = z.object({
   status: userStatusSchema,
   createdAt: isoTimestampSchema,
   lastLoginAt: isoTimestampSchema.nullable(),
+  /** Phase D section 7.1: the device groups a technician is scoped to (null / [] = none when fleet scoping is on). */
+  deviceGroupIds: z.array(uuidSchema).nullable().optional(),
 });
 
 export const brandingSchema = z.object({
@@ -94,6 +96,9 @@ export const orgSchema = z.object({
   planTier: packageTierSchema,
   branding: brandingSchema,
   createdAt: isoTimestampSchema,
+  /** Phase D section 7.1 / rule 8.2d (always sent by the api; optional so earlier fixtures parse). */
+  fleetScopingEnabled: z.boolean().optional(),
+  wakerMeshEnabled: z.boolean().optional(),
 });
 
 export const seatSchema = z.object({

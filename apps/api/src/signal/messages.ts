@@ -1,5 +1,5 @@
 /** Builders for server -> client signaling messages (contracts section 7.3) and session timers. */
-import { iceRefreshDelayMs, mergePolicy, sanitiseText, SANITISE_LIMITS, type ExtensionPolicy } from '@indiansassist/shared';
+import { iceRefreshDelayMs, isNativeTier, mergePolicy, sanitiseText, SANITISE_LIMITS, type ExtensionPolicy } from '@indiansassist/shared';
 import { getOrg, getSession, type OrgRow, type SessionRow, type TokenRow } from '@indiansassist/db';
 import { buildIceServers } from '../lib/ice.js';
 import { brandingPublic, type UserRef } from '../lib/mappers.js';
@@ -78,11 +78,18 @@ export function sessionCreatedMsg(
     polite: side === 'assist',
     recordingMode: s.recordingMode ?? 'assist_only',
     ...(s.tier === 'p2_extension' ? { extension: { policy: hub.live.get(s.id)?.policy ?? policyOf(org) } } : {}),
-    // Phase C section 8.3: both copies of a P3 session carry the pinned manifest (loaded by ensureAgentManifest).
-    ...(s.tier === 'p3_portable' ? { agent: hub.live.get(s.id)?.manifest?.msg ?? { playbooks: [] } } : {}),
+    // Phase C section 8.3: both copies of a native session carry the pinned manifest (loaded by ensureAgentManifest).
+    ...(isNativeTier(s.tier) ? { agent: hub.live.get(s.id)?.manifest?.msg ?? { playbooks: [] } } : {}),
+    // Phase D section 3.5 step 4: a P4 session carries the device (identity key for rule 3.5b) and `unattended`.
+    ...(s.deviceId ? p4CreatedFields(hub, s) : {}),
   };
   if (side === 'desk') return base;
   return { ...base, ...buildIceServers(hub.ctx.config, `user:${assist.id}`) };
+}
+
+function p4CreatedFields(hub: SignalHub, s: SessionRow): Record<string, unknown> {
+  const d = hub.live.get(s.id)?.p4?.device ?? null;
+  return { ...(d ? { device: d } : {}), unattended: s.unattended === true };
 }
 
 export function deskIce(hub: SignalHub, sessionId: string): Record<string, unknown> {

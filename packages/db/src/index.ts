@@ -20,4 +20,6 @@ export * from './repo/recordings.js';
 export * from './repo/session-hosts.js';
 export * from './repo/playbooks.js';
 export * from './repo/handovers.js';
+export * from './repo/devices.js';
+export * from './repo/fleet.js';
 export * from './seed.js';

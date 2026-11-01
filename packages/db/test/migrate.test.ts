@@ -25,6 +25,12 @@ import {
   TOKEN_TYPES,
   USER_ROLES,
   USER_STATUSES,
+  DEVICE_ACTION_KINDS,
+  DEVICE_ACTION_STATES,
+  DEVICE_PLATFORMS,
+  TAMPER_STATES,
+  WAKE_METHODS,
+  WAKE_STATES,
 } from '@indiansassist/shared';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -44,10 +50,13 @@ import {
 import { freshDb } from './helpers.js';
 
 const TABLES = [
+  'amt_sol',
   'audit_checkpoint',
   'audit_entry',
   'auth_session',
   'device',
+  'device_action',
+  'device_group',
   'elevation_handover',
   'integration',
   'login_attempt',
@@ -62,6 +71,7 @@ const TABLES = [
   'technician_seat',
   'token',
   'user',
+  'wake_attempt',
 ];
 
 const ENUMS: Record<string, readonly string[]> = {
@@ -88,6 +98,12 @@ const ENUMS: Record<string, readonly string[]> = {
   mirror_scope: MIRROR_SCOPES,
   recording_mode: RECORDING_MODES,
   recording_source: RECORDING_SOURCES,
+  device_platform: DEVICE_PLATFORMS,
+  device_action_kind: DEVICE_ACTION_KINDS,
+  device_action_state: DEVICE_ACTION_STATES,
+  wake_method: WAKE_METHODS,
+  wake_state: WAKE_STATES,
+  tamper_state: TAMPER_STATES,
 };
 
 describe('migrations', () => {
@@ -137,10 +153,10 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(7);
+    expect(rows[0]!.n).toBe(8);
   });
 
-  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C and playbook-pins migrations', () => {
+  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C, playbook-pins and Phase D migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
@@ -152,6 +168,7 @@ describe('migrations', () => {
       '0004_recorder',
       '0005_phase_c',
       '0006_playbook_pins',
+      '0007_phase_d',
     ]);
   });
 

@@ -8,6 +8,7 @@ import type { AppContext } from '../context.js';
 import type { EndedSession } from '../services/session-end.js';
 import { refreshUserSockets } from './auth-watch.js';
 import type { Bridge } from './bridge.js';
+import type { DeviceHub } from './device.js';
 import type { Conn, Live, RelayCounters } from './conn.js';
 import type { SignalHub } from './hub.js';
 import { onSessionEnded, onTokenRevoked, sessionEndedFrame } from './lifecycle.js';
@@ -17,6 +18,7 @@ export abstract class HubApi {
   abstract readonly conns: Map<string, Conn>;
   abstract readonly live: Map<string, Live>;
   abstract readonly bridge: Bridge;
+  abstract readonly devices: DeviceHub;
   abstract conn(id: string | null | undefined): Conn | null;
 
   private get hub(): SignalHub {
@@ -60,6 +62,16 @@ export abstract class HubApi {
     if (!r || !r.started || r.stopped || r.connId === null || r.recorderId === null) return null;
     r.stopped = true;
     return r.recorderId;
+  }
+
+  /** Phase D section 8: an S->A push to every Assist socket of a user, on every node (`device.woke`, `amt.sol.data`). */
+  toUser(userId: string, frame: Record<string, unknown>): void {
+    this.toUserLocal(userId, frame);
+    this.bridge.broadcast({ e: 'user-frame', userId, frame });
+  }
+
+  toUserLocal(userId: string, frame: Record<string, unknown>): void {
+    for (const c of this.conns.values()) if (c.side === 'assist' && !c.closed && c.principal?.user.id === userId) c.send(frame);
   }
 
   tokenRevoked(tokenId: string): void {

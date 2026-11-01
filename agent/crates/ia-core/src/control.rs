@@ -21,6 +21,7 @@ pub const AGENT_CONTROL_OPS: &[&str] = &[
     "clipboard.set",
     "os.input_lock",
     "os.privacy_screen",
+    "os.sas",
     "level.request",
     "elevation.request",
     "playbook.run",
@@ -47,6 +48,7 @@ pub const AGENT_CONTROL_EVENT_KINDS: &[&str] = &[
     "clipboard",
     "elevation",
     "input_blocked",
+    "device_attest",
 ];
 
 /// Whether `op` is one of the native ops (anything else: `not_supported`).
@@ -60,7 +62,7 @@ pub fn agent_min_level_for(op: &str, requires_elevation: bool) -> Option<AgentCo
     use AgentConsentLevel::*;
     Some(match op {
         "os.monitors" | "os.monitor.select" | "os.quality" | "level.request" => View,
-        "os.input_lock" | "os.privacy_screen" => Elevated,
+        "os.input_lock" | "os.privacy_screen" | "os.sas" => Elevated,
         "playbook.run" if requires_elevation => Elevated,
         "os.pointer" | "os.scroll" | "os.key" | "os.text" | "os.nav" | "clipboard.set"
         | "elevation.request" | "playbook.run" | "playbook.cancel" => Control,

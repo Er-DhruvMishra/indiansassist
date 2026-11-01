@@ -57,7 +57,17 @@ export const STORED_CONSENT_LEVELS = ['view', 'tab_control', 'in_page', 'deep_co
 export type StoredConsentLevel = (typeof STORED_CONSENT_LEVELS)[number];
 /** Which consent-level family a tier uses (section 3.4): compare levels only after branching on this. */
 export function consentLevelFamily(tier: PackageTier): 'p2' | 'p3' {
-  return tier === 'p3_portable' ? 'p3' : 'p2';
+  return isNativeTier(tier) ? 'p3' : 'p2';
+}
+
+/**
+ * Phase D principle P1: the tiers whose Desk is a native agent (the portable P3 agent, or the P4 service's desktop
+ * worker). Every "native agent session" branch tests this; the portable download / join / desk-code flows stay
+ * `p3_portable`-only.
+ */
+export const NATIVE_TIERS = ['p3_portable', 'p4_installed'] as const satisfies readonly PackageTier[];
+export function isNativeTier(tier: PackageTier | null | undefined): tier is (typeof NATIVE_TIERS)[number] {
+  return tier === 'p3_portable' || tier === 'p4_installed';
 }
 
 /** Phase C sections 3.1-8 enumerations, mirrored by `ia_core::types` and the Kotlin host. */
@@ -85,7 +95,8 @@ export const VIDEO_ENCODERS = ['vp8', 'vp9', 'h264', 'av1'] as const;
 export type VideoEncoder = (typeof VIDEO_ENCODERS)[number];
 export const QUALITY_PRESETS = ['auto', 'sharp', 'smooth', 'floor'] as const;
 export type QualityPreset = (typeof QUALITY_PRESETS)[number];
-export const TOKEN_SOURCES = ['arg', 'deeplink', 'sidecar', 'filename', 'clipboard', 'manual'] as const;
+/** `service` (Phase D section 4.2): the P4 desktop worker's credential handed over by the installed service. */
+export const TOKEN_SOURCES = ['arg', 'deeplink', 'sidecar', 'filename', 'clipboard', 'manual', 'service'] as const;
 export type TokenSource = (typeof TOKEN_SOURCES)[number];
 export const PLAYBOOK_INTERPRETERS = ['powershell', 'cmd', 'sh'] as const;
 export type PlaybookInterpreter = (typeof PLAYBOOK_INTERPRETERS)[number];

@@ -6,6 +6,10 @@ export const API_ERROR_STATUS = {
   token_malformed: 400,
   token_bad_signature: 400,
   invalid_token_type: 400,
+  // Phase D sections 3.2, 3.8
+  invalid_enroll_config: 400,
+  invalid_group: 400,
+  device_bad_signature: 400,
   tier_not_licensed: 400,
   upload_incomplete: 400,
   last_org_admin: 400,
@@ -13,10 +17,15 @@ export const API_ERROR_STATUS = {
   invalid_credentials: 401,
   invite_invalid: 401,
   reauth_required: 401,
+  /** Phase D section 7.2: a bad deregister signature, stale `ts` or reused nonce. */
+  device_unauthenticated: 401,
   forbidden: 403,
   /** Phase C section 8.2: a `requiresElevation` playbook on a session below `elevated`. */
   elevation_required: 403,
   csrf_failed: 403,
+  /** Phase D sections 3.4, 4.2. */
+  device_disabled: 403,
+  capability_mismatch: 403,
   not_found: 404,
   token_not_found: 404,
   email_taken: 409,
@@ -29,6 +38,17 @@ export const API_ERROR_STATUS = {
   playbook_name_taken: 409,
   playbook_disabled: 409,
   playbook_changed: 409,
+  // Phase D sections 3.5, 6.2, 8.4, 9.9
+  device_offline: 409,
+  device_busy: 409,
+  nobody_present: 409,
+  unattended_denied: 409,
+  approval_required: 409,
+  outside_policy_window: 409,
+  recorder_required: 409,
+  prelogin_not_permitted: 409,
+  amt_unavailable: 409,
+  policy_forbidden: 409,
   token_gone: 410,
   link_expired: 410,
   /** Phase B Y26: the recording's object was deleted (manual or retention). */
@@ -41,6 +61,8 @@ export const API_ERROR_STATUS = {
   internal: 500,
   /** Phase C section 2.2: no agent build for the platform / arch on this node. */
   download_unavailable: 503,
+  /** Phase D rule 9.8: the credential vault is not configured or unreachable. */
+  vault_unavailable: 503,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_STATUS;
@@ -65,6 +87,12 @@ export const SIGNAL_ERROR_CODES = [
   'relay_closed',
   'payload_too_large',
   'rate_limited',
+  // Phase D sections 3.4, 3.8, 4.2: `/signal/device` auth and the worker credential.
+  'unauthenticated',
+  'device_unauthenticated',
+  'device_disabled',
+  'device_bad_signature',
+  'capability_mismatch',
 ] as const;
 export type SignalErrorCode = (typeof SIGNAL_ERROR_CODES)[number];
 

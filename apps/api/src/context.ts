@@ -8,6 +8,7 @@ import type { Config } from './config.js';
 import type { KeySet } from './lib/keys.js';
 import type { Metrics } from './lib/metrics.js';
 import type { Limiter, ShortCodeBudget } from './limiter.js';
+import type { Mailer } from './mail/mailer.js';
 import type { AgentDist } from './services/agent-dist.js';
 import type { SignalHub } from './signal/hub.js';
 
@@ -60,4 +61,6 @@ export type AppContext = {
   agentDist: AgentDist;
   /** Set right after construction; REST routes push WS events through it. */
   hub: SignalHub;
+  /** Phase D rule 6.4d: the consent-receipt mailer. */
+  mailer: Mailer;
 };

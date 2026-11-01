@@ -92,6 +92,9 @@ importers:
       ioredis:
         specifier: 5.11.1
         version: 5.11.1
+      nodemailer:
+        specifier: ^8.0.11
+        version: 8.0.11
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -2200,6 +2203,10 @@ packages:
   node-gyp-build@4.8.4:
     resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
     hasBin: true
+
+  nodemailer@8.0.11:
+    resolution: {integrity: sha512-nrO/pDAUKl+wXX+lx16tDLbnm0fW6sK/x8mgohaCpg+CdCEl482bD4tCuAZk2DyliruiNTIZxRCoWkDqJEnAiA==}
+    engines: {node: '>=6.0.0'}
 
   nwsapi@2.2.28:
     resolution: {integrity: sha512-IlVB7OS7qrOsVYlpnFIkETjMwT9jwvmocJmmM+GZU/PAB3uGi9Ezd7vcWhWBUnSc0ya4ppmQITOyP1ez9gg8cg==}
@@ -4430,6 +4437,8 @@ snapshots:
   node-addon-api@8.9.2: {}
 
   node-gyp-build@4.8.4: {}
+
+  nodemailer@8.0.11: {}
 
   nwsapi@2.2.28: {}
 

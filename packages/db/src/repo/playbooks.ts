@@ -27,11 +27,13 @@ export type PlaybookInput = {
   parameters?: unknown[];
   timeoutSec?: number;
   enabled?: boolean;
+  /** Phase D rule 9.8. */
+  vaultRefs?: { env: string; path: string }[] | null;
   createdBy: string | null;
 };
 
 export type PlaybookPatchInput = Partial<
-  Pick<PlaybookRow, 'name' | 'description' | 'interpreter' | 'body' | 'requiresElevation' | 'parameters' | 'timeoutSec' | 'enabled'>
+  Pick<PlaybookRow, 'name' | 'description' | 'interpreter' | 'body' | 'requiresElevation' | 'parameters' | 'timeoutSec' | 'enabled' | 'vaultRefs'>
 >;
 
 async function nameSafe<T>(fn: () => Promise<T>): Promise<T> {

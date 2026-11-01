@@ -7,8 +7,12 @@ import { randomUUID } from 'node:crypto';
 import {
   isAgentConsentLevel,
   isConsentLevel,
+  isNativeTier,
   LIMITS,
   type AgentConsentLevel,
+  type ApprovedBy,
+  type ConsentDecision,
+  type UnattendedPolicy,
   type ConsentLevel,
   type DeskClient,
   type ElevationLevel,
@@ -26,7 +30,10 @@ import type { Principal } from '../plugins/auth.js';
 import { TokenBucket } from '../limiter.js';
 
 export type DeskInfo = {
+  /** The token of the Desk; `device:<deviceId>` for the P4 desktop worker (Phase D section 4.2, no token). */
   tokenId: string;
+  /** Phase D: the device whose desktop worker this socket is (null / absent for every token Desk). */
+  deviceId?: string | null;
   orgId: string;
   via: 'compact' | 'short_code' | 'desk_code';
   /** `desk.hello.deskLabel`, the fallback for `desk.knock.deskLabel`. */
@@ -179,6 +186,27 @@ export type LiveManifest = {
   hashes: Map<string, string>;
 };
 
+/** Phase D: the P4 part of a live device session (section 3.5, 5.4, 6.2). */
+export type LiveP4 = {
+  deviceId: string;
+  /** `session.created.device` (rule 3.5b); null until loaded. */
+  device: { id: string; name: string; keyId: string; publicKey: string } | null;
+  unattended: boolean;
+  /** The section 6.2 decision pushed in `device.session_open` (null when unknown on this node). */
+  decision: ConsentDecision | null;
+  reason: string | null;
+  policy: UnattendedPolicy | null;
+  /** The worker's last reported input-lock / privacy-screen state (rule 5.4d). */
+  inputLock: boolean;
+  privacyScreen: boolean;
+  /** The worker key generation of the last credential (rebuilds increment it). */
+  gen: number;
+  /** The first Assist attach of a REST-opened session writes no `session.resumed`. */
+  assistAttached: boolean;
+  /** Who authorised the unattended session (set at active). */
+  approvedBy: ApprovedBy | null;
+};
+
 /** Server recorder state of a live session (Phase A.2 section 6). */
 export type LiveRecorder = {
   /** Open assignment: the socket asked to join, its deadline, sockets already tried this activation. */
@@ -198,7 +226,10 @@ export type LiveRecorder = {
 export type Live = {
   id: string;
   orgId: string;
-  tokenId: string;
+  /** Null for a P4 device session. */
+  tokenId: string | null;
+  /** Phase D: set for a P4 device session. */
+  p4: LiveP4 | null;
   tier: PackageTier;
   state: SessionState;
   path: SessionPath;
@@ -243,7 +274,10 @@ export type Live = {
 type LiveSource = {
   id: string;
   orgId: string;
-  tokenId: string;
+  tokenId: string | null;
+  deviceId?: string | null;
+  unattended?: boolean | null;
+  unattendedPolicy?: unknown;
   tier: PackageTier;
   state: SessionState;
   path: SessionPath;
@@ -274,7 +308,7 @@ export function consentOfRow(s: LiveSource): LiveConsent | null {
 
 /** The P3 consent of a session row, or null (Phase C section 3.4 family rule: only P3 levels are read here). */
 export function agentOfRow(s: LiveSource): LiveAgent | null {
-  if (s.tier !== 'p3_portable' || !isAgentConsentLevel(s.consentLevel)) return null;
+  if (!isNativeTier(s.tier) || !isAgentConsentLevel(s.consentLevel)) return null;
   return {
     level: s.consentLevel,
     monitors: s.consentMonitors ?? 1,
@@ -288,6 +322,21 @@ export function newLive(s: LiveSource): Live {
     id: s.id,
     orgId: s.orgId,
     tokenId: s.tokenId,
+    p4: s.deviceId
+      ? {
+          deviceId: s.deviceId,
+          device: null,
+          unattended: s.unattended === true,
+          decision: null,
+          reason: null,
+          policy: (s.unattendedPolicy as UnattendedPolicy | null | undefined) ?? null,
+          inputLock: false,
+          privacyScreen: false,
+          gen: 0,
+          assistAttached: false,
+          approvedBy: null,
+        }
+      : null,
     tier: s.tier,
     state: s.state,
     path: s.path,

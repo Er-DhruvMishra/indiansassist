@@ -128,6 +128,8 @@ export const ASSIST_EVENT_P3_DATA = {
         .nullable(),
       gen: z.number().int().nonnegative().max(65535),
       skipped: z.literal(true).optional(),
+      /** Phase D rule 3.5b: `device_key` = the device-key attestation of an auto-granted P4 session (absent = `read_out`). */
+      method: z.enum(['read_out', 'device_key']).optional(),
     })
     .refine((d) => (d.sas === null) === (d.skipped === true), 'a skipped confirmation has sas null, a typed one a code'),
 } as const;
@@ -151,7 +153,13 @@ export const P3_CHAIN_SCHEMAS = {
   'sec.verified': ASSIST_EVENT_P3_DATA['sec.verified'],
   'sec.failed': same['sec.failed'],
   'elevation.handover_minted': z.strictObject({ opId, expiresAt: z.string().transform((s) => sanitiseText(s, 40)) }),
-  'elevation.granted': z.strictObject({ opId, elevation: z.literal('admin'), claimed: z.literal(true) }),
+  // Phase D rule 5.2b: `mode: 'service'` = P4 in-place privileged mode (absent = `handover`).
+  'elevation.granted': z.strictObject({
+    opId,
+    elevation: z.literal('admin'),
+    claimed: z.literal(true),
+    mode: z.enum(['handover', 'service']).optional(),
+  }),
   'elevation.denied': DESK_EVENT_P3_DATA['elevation.denied'],
   'elevation.failed': DESK_EVENT_P3_DATA['elevation.failed'],
   'a11y.state': DESK_EVENT_P3_DATA['a11y.state'],

@@ -5,6 +5,7 @@ import { utf8Encode } from '../encoding.js';
 import * as m from './signal-messages.js';
 import * as r from './signal-recorder.js';
 import * as p3 from './signal-messages-p3.js';
+import * as p4 from './signal-device.js';
 
 /** Every signaling message, each `t` exactly once. */
 export const signalMessageSchema = z.discriminatedUnion('t', [
@@ -61,6 +62,10 @@ export const signalMessageSchema = z.discriminatedUnion('t', [
   r.recorderAssignSchema,
   r.recorderJoinedSchema,
   r.recorderPauseSchema,
+  // Phase D section 8: S->A pushes on /signal.
+  p4.deviceWokeSchema,
+  p4.deviceWakeFailedSchema,
+  p4.amtSolDataAssistSchema,
 ]);
 export type SignalMessage = z.infer<typeof signalMessageSchema>;
 export type SignalType = SignalMessage['t'];
@@ -134,6 +139,9 @@ export const serverSignalMessageSchema = z.discriminatedUnion('t', [
   r.recorderAssignSchema,
   r.recorderJoinedSchema,
   r.recorderPauseSchema,
+  p4.deviceWokeSchema,
+  p4.deviceWakeFailedSchema,
+  p4.amtSolDataAssistSchema,
 ]);
 export type ServerSignalMessage = z.infer<typeof serverSignalMessageSchema>;
 

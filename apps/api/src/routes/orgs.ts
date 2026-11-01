@@ -5,6 +5,12 @@ import {
   countAgentSessionsSince,
   countElevationGrantsSince,
   countPlaybookRunsSince,
+  countAmtPlainHttpDevices,
+  countDeviceActionsSince,
+  countDevices,
+  countUnattendedSessionsSince,
+  countWakeAttemptsSince,
+  listEnrolledDevices,
   getLatestCheckpoint,
   getOrgChainTail,
   recording,
@@ -22,6 +28,7 @@ import { thirdPartyIceHosts } from '../lib/ice.js';
 import { toOrg } from '../lib/mappers.js';
 import { parseOr400 } from '../lib/validate.js';
 import { authenticate } from '../plugins/auth.js';
+import { onlineSet } from '../fleet/common.js';
 
 const BRANDING_KEYS = ['displayName', 'logoData', 'accentColor', 'supportEmail'] as const;
 
@@ -109,6 +116,13 @@ export async function orgRoutes(app: FastifyInstance, ctx: AppContext): Promise<
       agentSessions: await countAgentSessionsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
       elevationGrants: await countElevationGrantsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
       playbookRuns: await countPlaybookRunsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
+      // Phase D section 7.2: fleet counts.
+      devices: await countDevices(ctx.db, org.id, { excludeRetired: true }),
+      onlineDevices: (await onlineSet(ctx, (await listEnrolledDevices(ctx.db, org.id)).map((d) => d.id))).size,
+      unattendedSessions30d: await countUnattendedSessionsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
+      wakeAttempts30d: await countWakeAttemptsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
+      deviceActions30d: await countDeviceActionsSince(ctx.db, org.id, new Date(Date.now() - 30 * 86_400_000)),
+      amtPlainHttpDevices: await countAmtPlainHttpDevices(ctx.db, org.id),
       chain: {
         length: tail?.seq ?? 0,
         tail: tail?.hash ?? null,

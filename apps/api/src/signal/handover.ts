@@ -53,7 +53,7 @@ export async function handleDeskElevation(hub: SignalHub, conn: Conn, msg: Signa
     (client.capabilities?.features ?? []).includes('elevation') &&
     agent !== null &&
     agentLevelAtLeast(agent.level, 'control');
-  if (!ok || !s) return conn.error('bad_state', 'elevation needs an active P3 Windows session at control level', msg.id);
+  if (!ok || !s || !s.tokenId) return conn.error('bad_state', 'elevation needs an active P3 Windows session at control level', msg.id);
   const since = new Date(Date.now() - 10 * 60_000);
   if ((await countHandoversSince(ctx.db, s.id, since)) >= LIMITS.handoverMintsPer10Min) {
     ctx.metrics.rateLimited.inc();

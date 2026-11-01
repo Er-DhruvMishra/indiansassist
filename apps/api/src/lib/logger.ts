@@ -89,7 +89,7 @@ export function serializeErrorWithoutMessages(err: unknown): SerializedError {
 }
 
 /** Request paths whose bodies are never logged in any form (SEC-07). */
-export const CREDENTIAL_ROUTE_RE = /^\/api\/v1\/(auth|tokens)(\/|$)/;
+export const CREDENTIAL_ROUTE_RE = /^\/api\/v1\/(auth|tokens|devices\/enroll)(\/|$)/;
 
 export const REDACT_PATHS = [
   'body',
@@ -127,6 +127,20 @@ export const REDACT_PATHS = [
   '*.msg',
   '*.value',
   '*.host',
+  // Phase D section 14: device keys and proofs, MACs, sealed secrets, worker credentials, enrollment config.
+  '*.privkey',
+  '*.macEnc',
+  '*.wakeMac',
+  '*.targetMacSealed',
+  '*.credSealed',
+  '*.secrets',
+  '*.sealed',
+  '*.workerCredential',
+  '*.deviceKeyProof',
+  '*.enrollConfig',
+  '*.secret',
+  '*.vaultToken',
+  '*.serverChallenge',
 ];
 
 export function pathOnly(url: string | undefined): string {

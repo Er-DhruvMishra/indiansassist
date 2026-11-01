@@ -17,6 +17,7 @@ import {
 import type { AppContext } from '../context.js';
 import { writeAudit, type Actor } from '../lib/audit.js';
 import { relayUsed } from '../signal/relay-p2.js';
+import { onDeviceSessionEnded } from '../fleet/receipts.js';
 
 export type EndOptions = {
   reason: SessionEndReason;
@@ -89,6 +90,9 @@ export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: E
   const out: EndedSession = { session: fresh, previousState: result.previousState, org: result.org };
   if (opts.beforePush) await opts.beforePush(out);
   await ctx.hub.sessionEnded(out);
+  // Phase D section 6.4: the receipt of a device session (to the device, mailed when unattended).
+  if (out.session.deviceId)
+    await onDeviceSessionEnded(ctx, out).catch((err: unknown) => ctx.log.warn({ err, sessionId }, 'device receipt failed'));
   return out;
 }
 
