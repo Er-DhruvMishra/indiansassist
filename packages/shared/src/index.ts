@@ -49,5 +49,6 @@ export * from './fleet/tamper.js';
 export * from './fleet/receipt.js';
 export * from './fleet/signing.js';
 export * from './fleet/seal.js';
+export * from './fleet/installer.js';
 export * from './schemas/signal-device.js';
 export * from './schemas/rest-fleet.js';

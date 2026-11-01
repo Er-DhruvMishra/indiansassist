@@ -99,6 +99,12 @@ export type CreateTokenBody = {
   ttlMinutes?: number;
   ttlDays?: number;
   label?: string;
+  /**
+   * Phase D section 2.1: how many devices one enrollment token may enrol (1..`LIMITS.enrollMaxDevices`, default 1).
+   * Only valid with `typ: 'enrollment'`; the server refuses it on any other type. One transform with a
+   * many-device token is what makes the section 12.1 fleet rollout one job instead of one per machine.
+   */
+  maxDevices?: number;
 };
 
 export const tokensApi = {

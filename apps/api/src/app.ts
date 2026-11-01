@@ -39,6 +39,7 @@ import { tokenRoutes } from './routes/tokens.js';
 import { userRoutes } from './routes/users.js';
 import { SignalHub } from './signal/hub.js';
 import { AgentDist } from './services/agent-dist.js';
+import { InstallerDist } from './services/installer-dist.js';
 import { downloadRoutes } from './routes/download.js';
 import { playbookRoutes } from './routes/playbooks.js';
 import { deviceRoutes } from './fleet/routes-devices.js';
@@ -105,11 +106,14 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
     timing: { ...DEFAULT_TIMING, ...opts.timing },
     version: packageVersion(),
     agentDist: new AgentDist(config),
+    installerDist: new InstallerDist(config),
     hub: null as unknown as SignalHub,
     mailer: buildMailer(config, app.log),
   };
   ctx.agentDist.load();
   if (ctx.agentDist.lastError) app.log.info({ reason: ctx.agentDist.lastError }, 'no agent builds served by this node');
+  ctx.installerDist.load();
+  if (ctx.installerDist.lastError) app.log.info({ reason: ctx.installerDist.lastError }, 'no installer served by this node');
   ctx.hub = new SignalHub(ctx);
 
   registerErrorHandlers(app);

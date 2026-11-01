@@ -1,7 +1,8 @@
 /**
  * `UnattendedPolicyEditor` client rules (docs/specs/phase-d-contracts.md sections 6.1, 13.4): the field checks the
  * editor runs before it will save, the warnings on dangerous combinations, and the patch a group or device override
- * is reduced to (only the keys that differ from what it inherits, so an override stays a difference and not a copy).
+ * is reduced to (the keys set on that object, so an override stays a difference and not a frozen copy; `diffPolicy`
+ * is the fallback when the stored override is not at hand).
  */
 import {
   LIMITS,
@@ -149,6 +150,23 @@ export function overriddenKeys(base: UnattendedPolicy, value: UnattendedPolicy):
 export function diffPolicy(base: UnattendedPolicy, value: UnattendedPolicy): UnattendedPolicyPatch {
   const patch: Record<string, unknown> = {};
   for (const k of overriddenKeys(base, value)) patch[k] = value[k];
+  return patch as UnattendedPolicyPatch;
+}
+
+/**
+ * The keys a stored override actually sets (`device.unattended_policy`, `device_group.default_policy`), in section 6.1
+ * order. Read from the patch itself, so a key deliberately set to the value it would have inherited still reads as
+ * "set here" instead of disappearing into a diff.
+ */
+export function overrideKeys(patch: UnattendedPolicyPatch | null | undefined): PolicyKey[] {
+  if (!patch) return [];
+  return POLICY_KEYS.filter((k) => (patch as Record<string, unknown>)[k] !== undefined);
+}
+
+/** `keys` of `value` as an `UnattendedPolicyPatch` (what the editor saves: exactly the keys set on this object). */
+export function patchFromKeys(value: UnattendedPolicy, keys: readonly PolicyKey[]): UnattendedPolicyPatch {
+  const patch: Record<string, unknown> = {};
+  for (const k of POLICY_KEYS) if (keys.includes(k)) patch[k] = value[k];
   return patch as UnattendedPolicyPatch;
 }
 

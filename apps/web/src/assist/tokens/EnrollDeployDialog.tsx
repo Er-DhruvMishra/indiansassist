@@ -1,8 +1,9 @@
 /**
  * "Install and enroll" for one enrollment token (Phase D section 13.4 tokens-page row, 12.1 channels): the group
- * selector, the signed `enroll.iaconfig` download from `GET /devices/enroll-config` (org_admin), and the GPO /
- * Intune copy-paste snippets of that same signed config. The value is a secret, so it is copied, not shown, until
- * the technician asks to see it.
+ * selector, the signed `enroll.iaconfig` download from `GET /devices/enroll-config` (org_admin), the branded
+ * installer itself when this server has one (`GET /download/installer`, offered per architecture and audited against
+ * this token), and the GPO / Intune copy-paste snippets of that same signed config. The value is a secret, so it is
+ * copied, not shown, until the technician asks to see it.
  */
 import { useState } from 'react';
 import type { Token } from '@indiansassist/shared';
@@ -12,7 +13,7 @@ import { Alert, Button, Field, Select, Spinner } from '../../components/ui';
 import { useAsync } from '../../hooks/useAsync';
 import { saveText } from '../../lib/agentApi';
 import { errorMessage } from '../../lib/api';
-import { deviceGroupsApi } from '../../lib/fleetApi';
+import { deviceGroupsApi, installerApi } from '../../lib/fleetApi';
 import { ENROLL_SECRET_TEXT, enrollConfigApi, enrollmentUsage, gpoSnippet, iaEnrollValue, intuneSnippet, MSI_FILE_NAME } from './enroll';
 
 export function EnrollDeployDialog({
@@ -32,6 +33,9 @@ export function EnrollDeployDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const groups = useAsync(async () => (open ? (await deviceGroupsApi.list()).items : []), [open]);
+  // Section 13.4: the installer is offered only when this node actually serves one. A node that serves none answers
+  // `builds: []`, and a node too old to know the route answers 404; both mean "not available", never a broken link.
+  const installer = useAsync(async () => (open ? await installerApi.manifest().catch(() => null) : null), [open]);
 
   const close = () => {
     setConfig(null);
@@ -56,6 +60,7 @@ export function EnrollDeployDialog({
   };
 
   const usage = token ? enrollmentUsage(token) : null;
+  const builds = [...(installer.data?.builds ?? [])].sort((a, b) => a.arch.localeCompare(b.arch));
   const iaEnroll = config ? iaEnrollValue(config) : null;
   const gpo = iaEnroll ? gpoSnippet(iaEnroll, orgName) : null;
   const intune = iaEnroll ? intuneSnippet(iaEnroll) : null;
@@ -101,11 +106,40 @@ export function EnrollDeployDialog({
           </div>
           {config && iaEnroll && gpo && intune && (
             <div className="flex flex-col gap-3">
-              <p className="text-sm">
-                Step 1: take the signed base installer <span className="font-mono text-xs">{MSI_FILE_NAME}</span> from your
-                release share. This server does not serve the MSI itself. Step 2: hand it the config below, as a transform
-                (GPO) or as the <span className="font-mono text-xs">IA_ENROLL</span> property (Intune, msiexec).
-              </p>
+              {builds.length === 0 ? (
+                <p className="text-sm">
+                  Step 1: take the signed base installer <span className="font-mono text-xs">{MSI_FILE_NAME}</span> from your
+                  release share. This server does not serve the MSI itself. Step 2: hand it the config below, as a transform
+                  (GPO) or as the <span className="font-mono text-xs">IA_ENROLL</span> property (Intune, msiexec).
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm">
+                    Step 1: download the signed base installer for the architecture you are deploying. Step 2: hand it the
+                    config below, as a transform (GPO) or as the <span className="font-mono text-xs">IA_ENROLL</span>{' '}
+                    property (Intune, msiexec). The installer carries no organisation of its own: the config does.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2" data-testid="installer-downloads">
+                    {builds.map((b) => (
+                      <a
+                        key={b.arch}
+                        href={installerApi.url(b.arch, token.id)}
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-slate-400 bg-white px-4 text-sm font-medium text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-500 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+                      >
+                        {`Download the installer (${b.arch}, ${b.version})`}
+                      </a>
+                    ))}
+                  </div>
+                  {builds.some((b) => !b.signed) && (
+                    <Alert tone="amber">
+                      {`This server serves an unsigned build (${builds
+                        .filter((b) => !b.signed)
+                        .map((b) => b.arch)
+                        .join(', ')}). Do not deploy it: a release installer is Authenticode-signed, and the service checks the signer at runtime.`}
+                    </Alert>
+                  )}
+                </>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="secondary" onClick={() => saveText(config, 'enroll.iaconfig')}>
                   Download enroll.iaconfig

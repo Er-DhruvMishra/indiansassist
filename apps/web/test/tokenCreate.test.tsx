@@ -15,6 +15,12 @@ const me: AuthResponse = {
 
 const auth: AuthValue = { status: 'authenticated', me, error: null, setMe: () => {}, refresh: () => {}, logout: async () => {} };
 
+/** Phase D: an enrollment token needs a p4_installed seat before the tier (and so the type) can be chosen. */
+const p4Auth: AuthValue = {
+  ...auth,
+  me: { ...me, org: { ...me.org, planTier: 'p4_installed' }, seat: { ...me.seat!, tier: 'p4_installed' } },
+};
+
 const COMPACT = 'ia1.3f9a1c2b4d5e6f70.eyJ2IjoxfQ.c2ln';
 const JOIN_URL = `http://localhost:5173/join#t=${COMPACT}`;
 
@@ -62,10 +68,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderPage() {
+function renderPage(value: AuthValue = auth) {
   return render(
     <MemoryRouter>
-      <StaticAuthProvider value={auth}>
+      <StaticAuthProvider value={value}>
         <TokensPage />
       </StaticAuthProvider>
     </MemoryRouter>,
@@ -127,6 +133,55 @@ describe('token create flow', () => {
     expect(within(dialog).getByText('Enter 1 to 60 minutes.')).toBeTruthy();
     expect((within(dialog).getByRole('button', { name: 'Create token' }) as HTMLButtonElement).disabled).toBe(true);
     expect(calls.some((c) => c.init.method === 'POST')).toBe(false);
+  });
+
+  it('offers the device limit for an enrollment token only, checks it against the shared limit, and sends it (section 2.1)', async () => {
+    const user = userEvent.setup();
+    renderPage(p4Auth);
+    await screen.findByText(/No tokens yet/);
+    await user.click(screen.getByRole('button', { name: 'Create token' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create a support token' });
+    const label = 'Devices this token may enroll';
+    // An attended token has no device limit, and the enrollment type is not even offered below p4_installed.
+    expect(within(dialog).queryByLabelText(label)).toBeNull();
+    expect(within(dialog).queryByLabelText(/^Enrollment/)).toBeNull();
+
+    await user.selectOptions(within(dialog).getByLabelText('Package tier'), 'p4_installed');
+    await user.click(within(dialog).getByLabelText(/^Enrollment/));
+    const field = within(dialog).getByLabelText(label) as HTMLInputElement;
+    expect(field.value).toBe('1');
+
+    // Out of range is caught in the browser, before any call: the shared LIMITS.enrollMaxDevices is 10000.
+    await user.clear(field);
+    await user.type(field, '10001');
+    expect(within(dialog).getByText('Enter 1 to 10000 devices.')).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'Create token' }) as HTMLButtonElement).disabled).toBe(true);
+    await user.clear(field);
+    expect((within(dialog).getByRole('button', { name: 'Create token' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(calls.some((c) => c.init.method === 'POST')).toBe(false);
+
+    await user.type(field, '250');
+    await user.click(within(dialog).getByRole('button', { name: 'Create token' }));
+    const post = await waitFor(() => calls.find((c) => c.init.method === 'POST')!);
+    expect(JSON.parse(post.init.body as string)).toEqual({ tier: 'p4_installed', typ: 'enrollment', ttlDays: 7, maxDevices: 250 });
+  });
+
+  it('never sends a device limit with an attended token (the server refuses it there)', async () => {
+    const user = userEvent.setup();
+    renderPage(p4Auth);
+    await screen.findByText(/No tokens yet/);
+    await user.click(screen.getByRole('button', { name: 'Create token' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create a support token' });
+    await user.selectOptions(within(dialog).getByLabelText('Package tier'), 'p4_installed');
+    await user.click(within(dialog).getByLabelText(/^Enrollment/));
+    await user.clear(within(dialog).getByLabelText('Devices this token may enroll'));
+    await user.type(within(dialog).getByLabelText('Devices this token may enroll'), '40');
+    // Back to an attended type: the field goes away and its value is not sent.
+    await user.click(within(dialog).getByLabelText(/^One time/));
+    expect(within(dialog).queryByLabelText('Devices this token may enroll')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Create token' }));
+    const post = await waitFor(() => calls.find((c) => c.init.method === 'POST')!);
+    expect(JSON.parse(post.init.body as string)).toEqual({ tier: 'p4_installed', typ: 'one_time', ttlMinutes: 15 });
   });
 
   it('shows the API error inline when creation fails', async () => {

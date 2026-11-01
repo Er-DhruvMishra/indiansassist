@@ -13,6 +13,7 @@ import {
   type InteractiveState,
   type Region,
   type UnattendedPolicy,
+  type UnattendedPolicyPatch,
 } from '@indiansassist/shared';
 import { getDeviceGroupScoped, getOrg, type DeviceGroupRow, type DeviceRow, type OrgRow } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
@@ -150,6 +151,9 @@ export function toDevice(d: DeviceRow, online: boolean, opts: { withIp?: boolean
     agentVersion: d.agentVersion ?? null,
     serviceVersion: d.serviceVersion ?? null,
     groupId: d.groupId ?? null,
+    // Section 13.2 `device.unattended_policy`: the stored override as it stands, so the console shows what is set on
+    // the device itself rather than inferring it from the effective policy.
+    unattendedPolicy: (d.unattendedPolicy as UnattendedPolicyPatch | null) ?? null,
     tags: d.tags,
     capabilities: d.capabilities as Device['capabilities'],
     interactive: interactiveOf(d),

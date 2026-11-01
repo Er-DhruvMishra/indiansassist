@@ -23,8 +23,9 @@ import { DeviceGroupAdminPage } from '../src/assist/fleet/DeviceGroupAdminPage';
 import { FleetPage } from '../src/assist/fleet/FleetPage';
 import { UnattendedPolicyEditor } from '../src/assist/fleet/UnattendedPolicyEditor';
 import { WakePanel, applyWakeEvent, progressFromReply, type WakeEvent } from '../src/assist/fleet/WakePanel';
-import { allowedHoursProblems, diffPolicy, overriddenKeys, policyProblems, policyWarnings } from '../src/assist/fleet/policyRules';
-import { UnattendedBanner, UNATTENDED_TEXT } from '../src/assist/console/agent/UnattendedBanner';
+import { installerApi } from '../src/lib/fleetApi';
+import { allowedHoursProblems, diffPolicy, overriddenKeys, overrideKeys, patchFromKeys, policyProblems, policyWarnings } from '../src/assist/fleet/policyRules';
+import { UnattendedBanner, unattendedInfo, UNATTENDED_TEXT } from '../src/assist/console/agent/UnattendedBanner';
 import { StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
 import { IDS, ISO, jsonResponse } from './fakes';
 
@@ -89,6 +90,9 @@ const allowPolicy: UnattendedPolicy = { ...DEFAULT_UNATTENDED_POLICY, mode: 'all
 
 const detail: DeviceDetail = {
   ...device,
+  // Section 13.2: what this device overrides itself. `requireLocalApprovalWhenPresent` differs from the group default
+  // (`{ mode: 'allow' }`), `mode` does not: a diff would miss it, the stored override does not.
+  unattendedPolicy: { mode: 'allow', requireLocalApprovalWhenPresent: false },
   group: { id: GROUP_ID, name: 'Reception desks' },
   policy: allowPolicy,
   amt: device.amt,
@@ -285,6 +289,39 @@ describe('UnattendedPolicyEditor validation (section 6.1)', () => {
     expect(onSavePatch).toHaveBeenCalledWith({ mode: 'allow', allowLogonScreen: true });
   });
 
+  it('reads which keys are set here from the stored override, not from a diff (section 13.2)', async () => {
+    const onSavePatch = vi.fn();
+    // `recordingRequired: true` is also what this override inherits: only the stored patch can say it is set here.
+    render(
+      <UnattendedPolicyEditor
+        title="Policy override for this device"
+        mode="override"
+        value={DEFAULT_UNATTENDED_POLICY}
+        inherited={DEFAULT_UNATTENDED_POLICY}
+        override={{ recordingRequired: true }}
+        onSavePatch={onSavePatch}
+      />,
+    );
+    expect(screen.queryByText('Nothing is overridden here yet.', { exact: false })).toBeNull();
+    expect(screen.getByText('1 field overridden: Require recording.', { exact: false })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Save policy' }));
+    expect(onSavePatch).toHaveBeenCalledWith({ recordingRequired: true });
+    // A further edit adds its key; "Clear all overrides" sends an empty patch, so the device inherits everything again.
+    await userEvent.selectOptions(screen.getByLabelText('Unattended mode'), 'allow');
+    await userEvent.click(screen.getByRole('button', { name: 'Save policy' }));
+    expect(onSavePatch).toHaveBeenLastCalledWith({ mode: 'allow', recordingRequired: true });
+    await userEvent.click(screen.getByRole('button', { name: 'Clear all overrides' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save policy' }));
+    expect(onSavePatch).toHaveBeenLastCalledWith({});
+  });
+
+  it('overrideKeys and patchFromKeys keep an override that matches what it inherits', () => {
+    expect(overrideKeys({ recordingRequired: true, mode: 'allow' })).toEqual(['mode', 'recordingRequired']);
+    expect(overrideKeys(null)).toEqual([]);
+    expect(patchFromKeys(DEFAULT_UNATTENDED_POLICY, ['recordingRequired'])).toEqual({ recordingRequired: true });
+    expect(patchFromKeys(DEFAULT_UNATTENDED_POLICY, [])).toEqual({});
+  });
+
   it('the allowed-hours builder refuses a backwards window before it is saved', async () => {
     const onSaveFull = vi.fn();
     render(<UnattendedPolicyEditor title="Org policy" mode="full" value={DEFAULT_UNATTENDED_POLICY} onSaveFull={onSaveFull} />);
@@ -425,6 +462,28 @@ describe('the action queue (section 9, 13.4)', () => {
   });
 });
 
+describe('the branded installer download (sections 12.1, 13.4)', () => {
+  it('reads the manifest and builds a per-token download link, and says when nothing is configured', async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        seen.push(url);
+        return jsonResponse(200, { v: 1, builds: [{ arch: 'x64', version: '0.4.0', size: 10, sha256: 'a'.repeat(64), signed: true, minOs: '10.0.17763' }] });
+      }),
+    );
+    const m = await installerApi.manifest();
+    expect(seen[0]).toContain('/download/installer');
+    expect(m.builds[0]?.arch).toBe('x64');
+    // The link is a plain GET the browser can follow; the token it is audited against travels in the query.
+    expect(installerApi.url('x64', IDS.other)).toContain(`/download/installer/x64?tokenId=${IDS.other}`);
+    expect(installerApi.url('arm64', IDS.other)).toContain('/download/installer/arm64?');
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { v: 1, builds: [] })));
+    expect((await installerApi.manifest()).builds).toEqual([]);
+  });
+});
+
 describe('an unattended session is labelled as such (sections 6.2, 13.4)', () => {
   it('names the unattended banner, the authorisation and the forced recording', () => {
     render(<UnattendedBanner info={{ unattended: true, deviceName: 'RECEPTION-01', policy: { ...allowPolicy, recordingRequired: true }, approvedBy: 'policy' }} />);
@@ -451,6 +510,49 @@ describe('an unattended session is labelled as such (sections 6.2, 13.4)', () =>
     renderWithRole('org_admin', <DeviceDetailPage />);
     const table = await screen.findByRole('table', { name: 'Recent sessions on this device' });
     expect(within(table).getByText('Unattended')).toBeTruthy();
+  });
+
+  it('the device page names the fields set on the device itself, not a diff of the effective policy', async () => {
+    stubFleetFetch();
+    renderWithRole('org_admin', <DeviceDetailPage />);
+    const line = await screen.findByTestId('device-override');
+    expect(line.textContent).toBe('Set on this device: Unattended mode, Ask for approval when someone is at the device.');
+  });
+
+  it('the console shows the session policy snapshot, not the device policy as it stands now (sections 6.2, 13.2)', () => {
+    const snapshot: UnattendedPolicy = { ...allowPolicy, maxUnattendedMinutes: 15, recordingRequired: false };
+    const info = unattendedInfo({
+      deviceId: DEVICE_ID,
+      deviceName: 'RECEPTION-01',
+      unattended: true,
+      policySnapshot: snapshot,
+      devicePolicy: { ...allowPolicy, maxUnattendedMinutes: 999, recordingRequired: true },
+      approvedBy: 'policy',
+    });
+    expect(info?.policy).toBe(snapshot);
+    expect(info?.approvedBy).toBe('policy');
+    render(<UnattendedBanner info={info!} />);
+    expect(screen.getByText(/This policy does not force a recording/)).toBeTruthy();
+    // Without a snapshot (a session opened before it was exposed) the device's effective policy is still the fallback.
+    expect(unattendedInfo({ deviceId: DEVICE_ID, deviceName: 'x', unattended: true, devicePolicy: allowPolicy })?.policy).toBe(allowPolicy);
+    // Not a device session: nothing to show.
+    expect(unattendedInfo({ deviceId: null, deviceName: 'x', unattended: null })).toBeUndefined();
+  });
+
+  it('the rule 6.2a push raises the arrival banner the console already had', () => {
+    const push = { t: 'session.local_user_arrived', sessionId: IDS.session, decision: 'continue', levelDroppedTo: 'view' } as const;
+    const info = unattendedInfo({
+      deviceId: DEVICE_ID,
+      deviceName: 'RECEPTION-01',
+      unattended: true,
+      policySnapshot: allowPolicy,
+      approvedBy: 'policy',
+      arrival: { decision: push.decision, levelDroppedTo: push.levelDroppedTo },
+    });
+    expect(info).toMatchObject({ userArrived: true, levelDroppedToView: true });
+    render(<UnattendedBanner info={info!} />);
+    expect(screen.getByText('Someone is now at the device.')).toBeTruthy();
+    expect(screen.getByText(/dropped to view only/)).toBeTruthy();
   });
 
   it('the connect panel requires a reason for an unattended session and sends it', async () => {

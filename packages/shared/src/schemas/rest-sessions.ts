@@ -1,6 +1,7 @@
 /** REST schemas: sessions, audit, recordings, ICE, residency (contracts 6.3, 6.8-6.11). */
 import { z } from 'zod';
 import {
+  APPROVED_BY,
   DESK_BROWSERS,
   ELEVATION_LEVELS,
   DESK_CLIENT_KINDS,
@@ -21,6 +22,7 @@ import {
   type AssistEventP3Action,
 } from '../audit/actions-p3.js';
 import { agentCapabilitiesSchema } from '../agent/capabilities.js';
+import { unattendedPolicySchema } from '../fleet/policy.js';
 import {
   actorTypeSchema,
   consentStateSchema,
@@ -54,6 +56,14 @@ export const sessionSchema = z.object({
   /** Phase D: the device of a P4 session (absent / null otherwise). */
   deviceId: uuidSchema.nullable().optional(),
   unattended: z.boolean().nullable().optional(),
+  /**
+   * Phase D sections 6.2 / 13.2: the effective `UnattendedPolicy` snapshotted when this session opened
+   * (`session.unattended_policy`), not the device's policy as it stands now, and who authorised an unattended entry
+   * (`session.unattended_started.approvedBy`, null until consent). Both null outside a P4 session. Additive: always
+   * sent by the api, optional so earlier fixtures still parse.
+   */
+  policySnapshot: unattendedPolicySchema.nullable().optional(),
+  approvedBy: z.enum(APPROVED_BY).nullable().optional(),
   tokenCreatedBy: userRefSchema,
   assist: userRefSchema,
   deskLabel: z.string().nullable(),

@@ -1,5 +1,5 @@
 /** Builders for server -> client signaling messages (contracts section 7.3) and session timers. */
-import { iceRefreshDelayMs, isNativeTier, mergePolicy, sanitiseText, SANITISE_LIMITS, type ExtensionPolicy } from '@indiansassist/shared';
+import { iceRefreshDelayMs, isNativeTier, mergePolicy, sanitiseText, SANITISE_LIMITS, type ExtensionPolicy, type UnattendedPolicy } from '@indiansassist/shared';
 import { getOrg, getSession, type OrgRow, type SessionRow, type TokenRow } from '@indiansassist/db';
 import { buildIceServers } from '../lib/ice.js';
 import { brandingPublic, type UserRef } from '../lib/mappers.js';
@@ -87,9 +87,20 @@ export function sessionCreatedMsg(
   return { ...base, ...buildIceServers(hub.ctx.config, `user:${assist.id}`) };
 }
 
+/**
+ * Phase D sections 3.5 step 4, 6.2: the device (rule 3.5b), `unattended`, the policy this session was opened under
+ * (`session.unattended_policy`, preferred from the live snapshot) and who authorised it once consent decided.
+ */
 function p4CreatedFields(hub: SignalHub, s: SessionRow): Record<string, unknown> {
-  const d = hub.live.get(s.id)?.p4?.device ?? null;
-  return { ...(d ? { device: d } : {}), unattended: s.unattended === true };
+  const p4 = hub.live.get(s.id)?.p4 ?? null;
+  const d = p4?.device ?? null;
+  const policy = p4?.policy ?? ((s.unattendedPolicy as UnattendedPolicy | null) ?? null);
+  return {
+    ...(d ? { device: d } : {}),
+    unattended: s.unattended === true,
+    ...(policy ? { policySnapshot: policy } : {}),
+    ...(p4?.approvedBy ? { approvedBy: p4.approvedBy } : {}),
+  };
 }
 
 export function deskIce(hub: SignalHub, sessionId: string): Record<string, unknown> {

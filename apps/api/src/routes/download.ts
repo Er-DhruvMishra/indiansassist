@@ -10,24 +10,31 @@ import { randomBytes } from 'node:crypto';
 import {
   agentFileName,
   downloadPrepareSchema,
+  INSTALLER_ARCHES,
+  installerDownloadQuerySchema,
   isRegionServed,
   LIMITS,
   sha256Hex,
   type AgentArch,
   type AgentPlatform,
   type DownloadPrepareReply,
+  type InstallerArch,
+  type InstallerManifest,
   type Region,
 } from '@indiansassist/shared';
-import { getOrg } from '@indiansassist/db';
+import { findTokenByTid, getOrg } from '@indiansassist/db';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
-import { systemActor, writeAudit } from '../lib/audit.js';
+import { systemActor, userActor, writeAudit } from '../lib/audit.js';
 import { mintDeskCode } from '../lib/desk-codes.js';
 import { iso } from '../lib/time.js';
 import { parseOr400 } from '../lib/validate.js';
 import { limits } from '../plugins/security.js';
 import { verifyTokenInput } from '../services/token-verify.js';
+import { requireFleetRole } from '../fleet/scope.js';
+import { authenticate } from '../plugins/auth.js';
+import { effectiveStatus } from '../lib/mappers.js';
 
 type Grant = {
   tokenId: string;
@@ -173,7 +180,61 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
     return reply.send(createReadStream(build.path, { start, end }));
   };
 
+  // ---------- the branded installer (Phase D sections 12.1, 12.2, 13.4) ----------
+
+  app.get('/api/v1/download/installer', async (req, reply): Promise<InstallerManifest> => {
+    const p = await authenticate(ctx, req);
+    requireFleetRole(p, 'admin');
+    reply.header('Cache-Control', 'no-store');
+    return ctx.installerDist.manifest();
+  });
+
+  const serveInstaller = async (req: FastifyRequest<{ Params: { arch: string } }>, reply: FastifyReply, head: boolean) => {
+    const p = await authenticate(ctx, req);
+    requireFleetRole(p, 'admin');
+    const arch = (INSTALLER_ARCHES as readonly string[]).includes(req.params.arch) ? (req.params.arch as InstallerArch) : null;
+    if (!arch) fail('not_found', 'unknown installer arch');
+    const q = parseOr400(installerDownloadQuerySchema, req.query);
+    // The download is audited against the enrollment token whose config the rollout will carry (section 12.1).
+    const tok = await findTokenByTid(ctx.db, q.tokenId);
+    if (!tok || tok.orgId !== p.org.id) fail('not_found', 'token not found');
+    if (tok.typ !== 'enrollment' || tok.tier !== 'p4_installed') fail('invalid_token_type', 'the installer is served for a p4_installed enrollment token');
+    const status = effectiveStatus(tok);
+    if (status !== 'active') fail('token_gone', `token is ${status}`, { status });
+    const build = ctx.installerDist.find(arch);
+    if (!build) fail('download_unavailable', 'no installer for this architecture is available on this server');
+    const range = parseRange(req.headers['range'], build.size);
+    if (range === 'bad') {
+      reply.header('Content-Range', `bytes */${build.size}`);
+      return reply.status(416).send();
+    }
+    reply
+      .header('Content-Type', 'application/x-msi')
+      .header('Content-Disposition', `attachment; filename="${build.file}"`)
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Cache-Control', 'private, no-store')
+      .header('Content-Security-Policy', "sandbox; default-src 'none'")
+      .header('Accept-Ranges', 'bytes');
+    // As the Phase C route: HEAD is free, and a served download chains one entry (the whole file, or its first range).
+    if (!head && (range === null || range.start === 0))
+      await writeAudit(ctx, ctx.db, p.org, {
+        sessionId: null,
+        actor: userActor(p.user),
+        action: 'download.served',
+        data: { tokenId: tok.id, platform: 'windows', arch: build.arch, version: build.version, sha256: build.sha256 },
+      });
+    const start = range?.start ?? 0;
+    const end = range?.end ?? build.size - 1;
+    reply.header('Content-Length', String(build.size === 0 ? 0 : end - start + 1));
+    if (range) reply.header('Content-Range', `bytes ${start}-${end}/${build.size}`);
+    reply.status(range ? 206 : 200);
+    if (head || build.size === 0) return reply.send();
+    return reply.send(createReadStream(build.path, { start, end }));
+  };
+
   // HEAD first: Fastify's automatic HEAD sibling of a GET route would otherwise count as a use.
   app.head<{ Params: { grant: string } }>('/api/v1/download/:grant', (req, reply) => serve(req, reply, true));
   app.get<{ Params: { grant: string } }>('/api/v1/download/:grant', (req, reply) => serve(req, reply, false));
+  app.head<{ Params: { arch: string } }>('/api/v1/download/installer/:arch', (req, reply) => serveInstaller(req, reply, true));
+  app.get<{ Params: { arch: string } }>('/api/v1/download/installer/:arch', (req, reply) => serveInstaller(req, reply, false));
 }

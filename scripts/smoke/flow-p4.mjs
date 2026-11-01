@@ -1,7 +1,8 @@
 // Phase D smoke flow (docs/specs/phase-d-contracts.md section 15.3 `smoke:p4`), server side only, no browser and no
 // media: Node ws clients play two installed services (a target device and its LAN waker peer) and the target's
 // desktop worker. Enrollment with a region-signed enroll.iaconfig, the signed /signal/device challenge, an unattended
-// session reaching active with session.unattended_started chained and a valid device_attest, a queued action
+// session reaching active with session.unattended_started chained (its policy snapshot and approvedBy readable back
+// on REST and in session.created) and a valid device_attest, the rule 6.2a arrival push to the console, a queued action
 // delivered on reconnect with its signed result chained, a wake whose waker opens the sealed MAC and confirms, a
 // device.tamper producing tamper.alert, the signed deregister, and the org chain verified.
 
@@ -259,6 +260,9 @@ export async function p4Steps(run, ctx) {
     eq(created.tier, 'p4_installed', 'tier');
     eq(created.tokenId, null, 'a device session has no token');
     eq(created.unattended, true, 'unattended');
+    // Sections 6.2 / 13.2: the console learns the policy this session opened under, not the device's current policy.
+    eq(created.policySnapshot?.mode, 'allow', 'session.created.policySnapshot.mode');
+    eq(created.policySnapshot?.recordingRequired, false, 'session.created.policySnapshot is the effective snapshot');
     eq(created.device?.publicKey, state.A.publicKey, 'session.created.device.publicKey');
     eq(s().kidOf(s().base64urlDecode(created.device.publicKey)), created.device.keyId, 'kidOf(publicKey) === keyId');
     state.created = created;
@@ -301,6 +305,14 @@ export async function p4Steps(run, ctx) {
     eq(by('session.unattended_started')?.data.approvedBy, 'policy', 'session.unattended_started approvedBy');
     eq(by('session.unattended_started')?.data.reason, 'smoke: patch the print spooler', 'typed reason chained');
     eq(by('sec.verified')?.data.method, 'device_key', 'sec.verified method');
+    // Section 6.3 exposed on REST: the snapshot and who authorised it, on the session and in the device's history.
+    const rest = await api.expect('GET', `/api/v1/sessions/${state.sessionId}`);
+    eq(rest.approvedBy, 'policy', 'GET /sessions/:id approvedBy');
+    eq(rest.policySnapshot?.mode, 'allow', 'GET /sessions/:id policySnapshot');
+    const dev = await api.expect('GET', `/api/v1/devices/${state.A.deviceId}`);
+    const recent = dev.recentSessions.find((x) => x.id === state.sessionId);
+    eq(recent?.approvedBy, 'policy', 'device detail recentSessions approvedBy');
+    eq(recent?.policySnapshot?.mode, 'allow', 'device detail recentSessions policySnapshot');
     const v = verifySessionAudit(s(), audit.items, { orgId: state.org.id, sessionId: state.sessionId, region: state.region, requiredActions: ['session.knock', 'session.accepted', 'session.started', 'session.unattended_started'] });
     check(v.ok, `session chain: ${v.problems.join('; ')}`);
     return `SAS ${sas} attested by the device key`;
@@ -313,6 +325,13 @@ export async function p4Steps(run, ctx) {
     eq((await assist.reply('consent.changed', T)).level, 'elevated', 'console learns elevated');
     worker.send({ t: 'desk.event', sessionId: state.sessionId, action: 'input.lock_changed', data: { locked: true, cause: 'technician' } });
     await worker.reply('event.ok', T);
+    // Rule 6.2a: someone sits down mid-session; the console is told, not left to find out at the receipt.
+    worker.send({ t: 'desk.event', sessionId: state.sessionId, action: 'session.local_user_arrived', data: { decision: 'continue', levelDroppedTo: 'view' } });
+    await worker.reply('event.ok', T);
+    const arrived = assertServerFrame(s(), await assist.next('session.local_user_arrived', T));
+    eq(arrived.sessionId, state.sessionId, 'session.local_user_arrived sessionId');
+    eq(arrived.decision, 'continue', 'session.local_user_arrived decision');
+    eq(arrived.levelDroppedTo, 'view', 'session.local_user_arrived levelDroppedTo');
     assist.send({ t: 'session.end', sessionId: state.sessionId, note: 'smoke done' });
     eq((await assist.reply('session.ended', T)).endReason, 'assist_ended', 'session.ended');
     const rc = assertDeviceFrame(s(), await state.A.ws.next('device.receipt', T));
@@ -320,6 +339,7 @@ export async function p4Steps(run, ctx) {
     eq(rc.receipt.approvedBy, 'policy', 'receipt approvedBy');
     eq(rc.receipt.elevation.granted, true, 'receipt elevation');
     eq(rc.receipt.inputLock.length, 1, 'receipt input lock window');
+    eq(rc.receipt.localUserArrived.length, 1, 'receipt records the arrival');
     const audit = await api.expect('GET', `/api/v1/sessions/${state.sessionId}/audit`);
     eq(audit.items.find((e) => e.action === 'elevation.granted')?.data.mode, 'service', 'elevation.granted mode');
     const sent = audit.items.filter((e) => e.action === 'consent.receipt_sent').map((e) => e.data.channel).sort();
@@ -405,6 +425,17 @@ export async function p4Steps(run, ctx) {
   await run.step('P4: fleet list, residency counts, org chain verified server-side', async () => {
     const list = await api.expect('GET', '/api/v1/devices?online=true');
     check(list.items.some((d) => d.id === state.A.deviceId), 'device A is listed as online');
+    // Section 13.2: a device's own override is readable back, so the console shows "set here" rather than guessing.
+    const path = `/api/v1/devices/${state.A.deviceId}`;
+    eq((await api.expect('GET', path)).unattendedPolicy, null, 'no override to begin with');
+    const override = { maxUnattendedMinutes: 20, recordingRequired: false };
+    const patched = (await api.expect('PATCH', path, { unattendedPolicy: override })).unattendedPolicy;
+    eq(Object.keys(patched ?? {}).sort().join(','), 'maxUnattendedMinutes,recordingRequired', 'PATCH returns exactly the stored keys');
+    const after = await api.expect('GET', path);
+    eq(after.unattendedPolicy?.maxUnattendedMinutes, 20, 'GET /devices/:id carries the stored override');
+    eq(after.unattendedPolicy?.recordingRequired, false, 'GET /devices/:id carries every stored key');
+    eq(after.policy.maxUnattendedMinutes, 20, 'the effective policy still merges it');
+    eq((await api.expect('PATCH', path, { unattendedPolicy: null })).unattendedPolicy, null, 'the override is cleared, not emptied');
     const res = await api.expect('GET', '/api/v1/orgs/current/residency');
     eq(res.devices, 2, 'residency devices');
     check(res.unattendedSessions30d >= 1 && res.wakeAttempts30d >= 1 && res.deviceActions30d >= 1, 'residency fleet counts');

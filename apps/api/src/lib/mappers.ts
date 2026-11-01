@@ -5,6 +5,7 @@ import {
   formatShortCode,
   TOKEN_PREFIX,
   utf8Encode,
+  type ApprovedBy,
   type AuditEntry,
   type Org,
   type Recording,
@@ -14,6 +15,7 @@ import {
   type Token,
   type TokenPayload,
   type TokenStatus,
+  type UnattendedPolicy,
   type User,
 } from '@indiansassist/shared';
 import {
@@ -128,6 +130,8 @@ export type SessionRefs = {
   recordingId: string | null;
   /** Phase A.2 M4. */
   serverRecordingId?: string | null;
+  /** Phase D section 6.3: `session.unattended_started.approvedBy` from the chain (null for every other session). */
+  approvedBy?: ApprovedBy | null;
 };
 
 const SURFACES = new Set(['monitor', 'window', 'browser', 'unknown']);
@@ -142,6 +146,9 @@ export function toSession(s: SessionRow, refs: SessionRefs): Session {
     tokenId: s.tokenId,
     deviceId: s.deviceId ?? null,
     unattended: s.unattended ?? null,
+    // Phase D sections 6.2 / 13.2: the policy this session was opened under, and who authorised an unattended entry.
+    policySnapshot: (s.unattendedPolicy as UnattendedPolicy | null) ?? null,
+    approvedBy: refs.approvedBy ?? null,
     tokenCreatedBy: refs.tokenCreatedBy,
     assist: refs.assist,
     deskLabel: s.deskLabel ?? null,

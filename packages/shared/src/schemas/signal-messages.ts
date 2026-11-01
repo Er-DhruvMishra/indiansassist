@@ -49,6 +49,7 @@ import { controlMessageSchema } from '../extension/control.js';
 import { DESK_EVENT_DATA, DESK_EVENT_P2_ACTIONS, DESK_EVENT_REASON_ACTIONS, opIdSchema } from '../audit/actions-p2.js';
 import { DESK_EVENT_P4_ACTIONS, DESK_EVENT_P4_DATA } from '../audit/actions-p4.js';
 import { APPROVED_BY } from '../enums.js';
+import { unattendedPolicySchema } from '../fleet/policy.js';
 
 const envelope = {
   id: z.string().max(64).optional(),
@@ -373,6 +374,13 @@ export const sessionCreatedSchema = msg('session.created', {
     })
     .optional(),
   unattended: z.boolean().optional(),
+  /**
+   * Phase D sections 6.2 / 13.2: the effective policy snapshotted when the session opened, and who authorised an
+   * unattended entry (absent until consent decided it). P4 only, so the console shows what was true at the time
+   * instead of the device's policy as it stands now.
+   */
+  policySnapshot: unattendedPolicySchema.optional(),
+  approvedBy: z.enum(APPROVED_BY).optional(),
   ...optionalIce,
 });
 export const consentOkSchema = msg('consent.ok', {

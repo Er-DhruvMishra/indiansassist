@@ -23,7 +23,12 @@ import {
   consentLevelFamily,
   deviceActionRequestSchema,
   deviceEnrollRequestSchema,
+  deviceSchema,
   deviceSessionRequestSchema,
+  installerDistManifestSchema,
+  installerDownloadQuerySchema,
+  installerFileName,
+  installerManifestSchema,
   isNativeTier,
   isPrivilegedAction,
   parseClientSignal,
@@ -33,6 +38,7 @@ import {
   parseSignalMessage,
   playbookCreateSchema,
   serviceCapabilitiesSchema,
+  sessionSummarySchema,
   signEnrollConfig,
   tamperEventSchema,
   verifyEnrollConfig,
@@ -196,6 +202,15 @@ describe('/signal/device unions (section 3.4)', () => {
     expect(parseServerSignal({ t: 'device.wake_failed', wakeId: U, deviceId: U2, cause: 'no_waker' }).ok).toBe(true);
     expect(parseClientSignal({ t: 'device.hello' }).ok).toBe(false);
   });
+  it('rule 6.2a: session.local_user_arrived is an S->A push, never a client frame', () => {
+    expect(parseServerSignal({ t: 'session.local_user_arrived', sessionId: U, decision: 'continue', levelDroppedTo: 'view' }).ok).toBe(true);
+    expect(parseServerSignal({ t: 'session.local_user_arrived', sessionId: U, decision: 'ended', levelDroppedTo: null }).ok).toBe(true);
+    // The same fields as the chained desk.event (section 13.3), and no other decision or level.
+    expect(parseServerSignal({ t: 'session.local_user_arrived', sessionId: U, decision: 'continue', levelDroppedTo: 'control' }).ok).toBe(false);
+    expect(parseServerSignal({ t: 'session.local_user_arrived', sessionId: U, decision: 'dismissed', levelDroppedTo: null }).ok).toBe(false);
+    expect(parseServerSignal({ t: 'session.local_user_arrived', sessionId: U, decision: 'continue' }).ok).toBe(false);
+    expect(parseClientSignal({ t: 'session.local_user_arrived', sessionId: U, decision: 'continue', levelDroppedTo: null }).ok).toBe(false);
+  });
 });
 
 describe('desk.hello / session.created (section 4.2, 3.5)', () => {
@@ -223,6 +238,113 @@ describe('desk.hello / session.created (section 4.2, 3.5)', () => {
       unattended: true,
     };
     expect(parseSignalMessage(msg).ok).toBe(true);
+  });
+  it('sections 6.2 / 13.2: session.created carries the policy snapshot and who authorised it (both optional)', () => {
+    const base = {
+      t: 'session.created',
+      sessionId: U,
+      tokenId: null,
+      tier: 'p4_installed',
+      state: 'active',
+      consentState: 'granted',
+      assist: { id: U2, name: 'T' },
+      desk: { label: 'PC' },
+      org: { displayName: 'O', accentColor: null, logoData: null },
+      polite: true,
+      unattended: true,
+    };
+    const full = parseSignalMessage({ ...base, policySnapshot: DEFAULT_UNATTENDED_POLICY, approvedBy: 'policy' });
+    expect(full.ok).toBe(true);
+    expect(full.ok && full.msg.t === 'session.created' && full.msg.policySnapshot?.mode).toBe('approval_only');
+    expect(full.ok && full.msg.t === 'session.created' && full.msg.approvedBy).toBe('policy');
+    // Additive: a pre-snapshot session.created still parses, and the snapshot is the full strict policy.
+    expect(parseSignalMessage(base).ok).toBe(true);
+    expect(parseSignalMessage({ ...base, approvedBy: 'someone' }).ok).toBe(false);
+    expect(parseSignalMessage({ ...base, policySnapshot: { mode: 'allow' } }).ok).toBe(false);
+  });
+});
+
+describe('the device override and the session policy snapshot (sections 6.2, 13.1a, 13.2)', () => {
+  const DEVICE = {
+    id: U,
+    name: 'RECEPTION-01',
+    platform: 'windows',
+    status: 'enrolled',
+    online: true,
+    keyId: '0123456789abcdef',
+    osVersion: null,
+    arch: null,
+    agentVersion: null,
+    serviceVersion: null,
+    groupId: null,
+    tags: [],
+    capabilities: CAPS,
+    interactive: null,
+    amt: null,
+    tamperState: 'ok',
+    lanSegmentHash: null,
+    notifyEmail: null,
+    lastSeenAt: null,
+    firstSeenAt: null,
+    enrolledAt: null,
+    lastIp: null,
+  };
+  it('Device carries the stored override as a patch, null, or (additively) not at all', () => {
+    expect(deviceSchema.parse({ ...DEVICE, unattendedPolicy: { mode: 'allow', maxUnattendedMinutes: 30 } }).unattendedPolicy).toEqual({
+      mode: 'allow',
+      maxUnattendedMinutes: 30,
+    });
+    expect(deviceSchema.parse({ ...DEVICE, unattendedPolicy: null }).unattendedPolicy).toBeNull();
+    expect(deviceSchema.parse(DEVICE).unattendedPolicy).toBeUndefined();
+    // It is an override (a patch), never a full policy with invented keys.
+    expect(deviceSchema.safeParse({ ...DEVICE, unattendedPolicy: { mode: 'sometimes' } }).success).toBe(false);
+    expect(deviceSchema.safeParse({ ...DEVICE, unattendedPolicy: { nope: true } }).success).toBe(false);
+  });
+  it('SessionSummary carries the snapshot and approvedBy of the session, not the device', () => {
+    const summary = {
+      id: U,
+      state: 'ended',
+      unattended: true,
+      policySnapshot: { ...DEFAULT_UNATTENDED_POLICY, mode: 'allow' },
+      approvedBy: 'auto_after_timeout',
+      assist: { id: U2, name: 'T' },
+      knockedAt: '2026-11-01T10:00:00.000Z',
+      startedAt: null,
+      endedAt: null,
+      endReason: null,
+    };
+    expect(sessionSummarySchema.parse(summary).policySnapshot?.mode).toBe('allow');
+    expect(sessionSummarySchema.parse(summary).approvedBy).toBe('auto_after_timeout');
+    const { policySnapshot: _p, approvedBy: _a, ...older } = summary;
+    expect(sessionSummarySchema.safeParse(older).success).toBe(true);
+    expect(sessionSummarySchema.safeParse({ ...summary, approvedBy: 'the_boss' }).success).toBe(false);
+  });
+});
+
+describe('the branded installer manifest (sections 12.1, 12.2, 13.4)', () => {
+  const BUILD = { arch: 'x64', version: '0.4.0', size: 12345, sha256: H, signed: true, minOs: '10.0.17763' };
+  it('file name, wire manifest and the dist manifest with its optional bare file name', () => {
+    expect(installerFileName('x64', '0.4.0')).toBe('IndiansAssist-Agent-0.4.0-windows-x64.msi');
+    expect(installerFileName('arm64', '1.0.0-rc.1')).toBe('IndiansAssist-Agent-1.0.0-rc.1-windows-arm64.msi');
+    expect(installerManifestSchema.parse({ v: 1, builds: [BUILD] }).builds[0]?.arch).toBe('x64');
+    // Nothing configured on this node is a valid answer, not an error.
+    expect(installerManifestSchema.parse({ v: 1, builds: [] }).builds).toEqual([]);
+    expect(installerDistManifestSchema.parse({ v: 1, builds: [{ ...BUILD, file: 'custom.msi' }] }).builds[0]?.file).toBe('custom.msi');
+    expect(installerDistManifestSchema.parse({ v: 1, builds: [BUILD] }).builds[0]?.file).toBeUndefined();
+  });
+  it('refuses a platform that is not a Windows arch, a bad version or a traversing file name', () => {
+    expect(installerManifestSchema.safeParse({ v: 1, builds: [{ ...BUILD, arch: 'universal' }] }).success).toBe(false);
+    expect(installerManifestSchema.safeParse({ v: 1, builds: [{ ...BUILD, version: 'latest' }] }).success).toBe(false);
+    expect(installerManifestSchema.safeParse({ v: 1, builds: [{ ...BUILD, sha256: 'abc' }] }).success).toBe(false);
+    // The wire manifest is strict: no `file` leaks the server's layout to the console.
+    expect(installerManifestSchema.safeParse({ v: 1, builds: [{ ...BUILD, file: 'a.msi' }] }).success).toBe(false);
+    expect(installerDistManifestSchema.safeParse({ v: 1, builds: [{ ...BUILD, file: '../escape.msi' }] }).success).toBe(false);
+    expect(installerDistManifestSchema.safeParse({ v: 1, builds: [{ ...BUILD, file: 'sub/dir.msi' }] }).success).toBe(false);
+  });
+  it('the download names the enrollment token it is audited against', () => {
+    expect(installerDownloadQuerySchema.safeParse({ tokenId: U }).success).toBe(true);
+    expect(installerDownloadQuerySchema.safeParse({}).success).toBe(false);
+    expect(installerDownloadQuerySchema.safeParse({ tokenId: 'not-a-uuid' }).success).toBe(false);
   });
 });
 

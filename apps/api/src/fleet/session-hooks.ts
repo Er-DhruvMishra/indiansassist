@@ -1,8 +1,9 @@
 /**
  * Phase D hooks into the C session paths (docs/specs/phase-d-contracts.md sections 3.5, 5.2b, 5.4, 6.2, 6.3):
  * `session.created.device`, `session.unattended_started` at active, the `maxUnattendedMinutes` cap, the declined local
- * approval (`consent_required`), in-place privileged mode, the P4 `desk.event` attestations and the
- * `session.protections_released` entry when the worker dies with input lock / privacy screen on.
+ * approval (`consent_required`), in-place privileged mode, the P4 `desk.event` attestations (and the rule 6.2a
+ * `session.local_user_arrived` push to the technician's console) and the `session.protections_released` entry when
+ * the worker dies with input lock / privacy screen on.
  */
 import {
   DESK_EVENT_P4_DATA,
@@ -124,6 +125,15 @@ export async function p4DeskEvent(hub: SignalHub, conn: Conn, live: Live, s: Ses
     if (action === 'privacy.screen_changed') live.p4.privacyScreen = data['on'] === true;
     // Rule 6.2a: the maxUnattendedMinutes clock pauses once a present user chose Continue.
     if (action === 'session.local_user_arrived' && data['decision'] === 'continue') clearTimer(live, 'policy-timeout');
+  }
+  // Rule 6.2a: the console learns at once that someone is now at the device, and whether the session dropped to view.
+  if (action === 'session.local_user_arrived') {
+    hub.conn(live.assistConnId)?.send({
+      t: 'session.local_user_arrived',
+      sessionId: s.id,
+      decision: data['decision'] as 'continue' | 'ended',
+      levelDroppedTo: data['levelDroppedTo'] === 'view' ? 'view' : null,
+    });
   }
   conn.send({ t: 'event.ok', ...re(msg.id), sessionId: s.id, entryId: entry.id });
 }

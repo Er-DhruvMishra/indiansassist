@@ -4,7 +4,7 @@
  * assignment, the org unattended and fleet policies and the enrollment config.
  */
 import { z } from 'zod';
-import { AMT_BOOT_TARGETS, DEVICE_ACTION_STATES, DEVICE_STATUSES, LIMITS, SESSION_END_REASONS, SESSION_STATES } from '../enums.js';
+import { AMT_BOOT_TARGETS, APPROVED_BY, DEVICE_ACTION_STATES, DEVICE_STATUSES, LIMITS, SESSION_END_REASONS, SESSION_STATES } from '../enums.js';
 import { sanitiseText } from '../audit/sanitise.js';
 import { emailSchema, isoTimestampSchema, userRefSchema, uuidSchema } from './common.js';
 import { b64u16Schema, b64u64Schema, deviceSchema, deviceTagsSchema } from '../fleet/device.js';
@@ -42,6 +42,9 @@ export const sessionSummarySchema = z.object({
   id: uuidSchema,
   state: z.enum(SESSION_STATES),
   unattended: z.boolean().nullable(),
+  /** Sections 6.2 / 13.2, as on the REST `Session`: the policy in force when this session opened, and who authorised it. */
+  policySnapshot: unattendedPolicySchema.nullable().optional(),
+  approvedBy: z.enum(APPROVED_BY).nullable().optional(),
   assist: userRefSchema,
   knockedAt: isoTimestampSchema,
   startedAt: isoTimestampSchema.nullable(),

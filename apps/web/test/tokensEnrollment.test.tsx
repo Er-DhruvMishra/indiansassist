@@ -1,13 +1,14 @@
 /**
  * The Phase D tokens-page additions (docs/specs/phase-d-contracts.md section 13.4, 12.1): an enrollment token shows
  * `devicesEnrolled / maxDevices` with its warnings, and only an org_admin can take the signed enrollment config
- * (`GET /devices/enroll-config`) and the GPO / Intune snippets, which are labelled as secrets.
+ * (`GET /devices/enroll-config`), the branded installer this server serves (`GET /download/installer`) and the
+ * GPO / Intune snippets, which are labelled as secrets.
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { base64urlEncode, utf8Encode, type AuthResponse, type DeviceGroup, type Token, type UserRole } from '@indiansassist/shared';
+import { base64urlEncode, utf8Encode, type AuthResponse, type DeviceGroup, type InstallerBuild, type Token, type UserRole } from '@indiansassist/shared';
 import { TokensPage } from '../src/assist/tokens/TokensPage';
 import { enrollmentUsage, nearExpiry, iaEnrollValue, NEAR_EXPIRY_MS } from '../src/assist/tokens/enroll';
 import { StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
@@ -72,17 +73,25 @@ const group: DeviceGroup = {
   updatedAt: ISO,
 };
 
+function build(over: Partial<InstallerBuild> = {}): InstallerBuild {
+  return { arch: 'x64', version: '0.4.0', size: 9_000_000, sha256: 'a'.repeat(64), signed: true, minOs: '10.0.17763', ...over };
+}
+
 type Call = { url: string; init: RequestInit };
 let calls: Call[];
 let tokens: Token[];
+/** What `GET /download/installer` answers; a node that serves no MSI answers `builds: []` (the default here). */
+let installerBuilds: InstallerBuild[];
 
 beforeEach(() => {
   calls = [];
   tokens = [enrollmentToken()];
+  installerBuilds = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: RequestInit = {}) => {
       calls.push({ url, init });
+      if (url.includes('/api/v1/download/installer')) return jsonResponse(200, { v: 1, builds: installerBuilds });
       if (url.includes('/api/v1/devices/enroll-config')) return jsonResponse(200, { iaconfig: IACONFIG });
       if (url.includes('/api/v1/orgs/current/device-groups')) return jsonResponse(200, { items: [group] });
       if (url.includes('/api/v1/tokens')) return jsonResponse(200, { items: tokens, nextCursor: null });
@@ -196,6 +205,49 @@ describe('tokens page: enrollment tokens (section 13.4)', () => {
       URL.createObjectURL = realCreate;
       URL.revokeObjectURL = realRevoke;
     }
+  });
+
+  it('offers the installer per architecture when this server serves one, as a per-token audited download', async () => {
+    installerBuilds = [build({ arch: 'arm64', version: '0.4.1' }), build()];
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await enrollRow()).getByRole('button', { name: 'Install and enroll' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Install and enroll devices with this token' });
+    await user.click(within(dialog).getByRole('button', { name: 'Get the signed enrollment config' }));
+    const downloads = await within(dialog).findByTestId('installer-downloads');
+    // One link per served arch, in a stable order, each carrying the token the server audits the download against.
+    const links = within(downloads).getAllByRole('link');
+    expect(links.map((a) => a.textContent)).toEqual(['Download the installer (arm64, 0.4.1)', 'Download the installer (x64, 0.4.0)']);
+    expect(links[0]!.getAttribute('href')).toBe(`http://localhost:4000/api/v1/download/installer/arm64?tokenId=${ENROLL_TOKEN_ID}`);
+    expect(links[1]!.getAttribute('href')).toBe(`http://localhost:4000/api/v1/download/installer/x64?tokenId=${ENROLL_TOKEN_ID}`);
+    // The old "fetch it from your release share" wording is gone, and the config is still the carrier of the org.
+    expect(within(dialog).queryByText(/does not serve the MSI itself/)).toBeNull();
+    expect(within(dialog).getByText(/The installer carries no organisation of its own/)).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Copy the IA_ENROLL value' })).toBeTruthy();
+  });
+
+  it('warns rather than hides when a served build is unsigned', async () => {
+    installerBuilds = [build(), build({ arch: 'arm64', signed: false })];
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await enrollRow()).getByRole('button', { name: 'Install and enroll' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Get the signed enrollment config' }));
+    await within(dialog).findByTestId('installer-downloads');
+    expect(within(dialog).getByText(/serves an unsigned build \(arm64\)/)).toBeTruthy();
+    expect(within(dialog).getByText(/Do not deploy it/)).toBeTruthy();
+  });
+
+  it('keeps the release-share wording and offers no link when this server serves no installer', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await enrollRow()).getByRole('button', { name: 'Install and enroll' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Get the signed enrollment config' }));
+    await within(dialog).findByRole('button', { name: 'Copy the IA_ENROLL value' });
+    expect(within(dialog).getByText(/does not serve the MSI itself/)).toBeTruthy();
+    expect(within(dialog).queryByTestId('installer-downloads')).toBeNull();
+    expect(within(dialog).queryByText(/unsigned build/)).toBeNull();
   });
 
   it('shows the refusal and keeps the snippets hidden when the server declines the config', async () => {

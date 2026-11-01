@@ -292,6 +292,7 @@ function GroupCard({
               mode="override"
               value={merged}
               inherited={orgDefault}
+              override={g.defaultPolicy}
               inheritedLabel="the organisation default"
               onSavePatch={(patch: UnattendedPolicyPatch) =>
                 void deviceGroupsApi

@@ -10,6 +10,7 @@ import type { Metrics } from './lib/metrics.js';
 import type { Limiter, ShortCodeBudget } from './limiter.js';
 import type { Mailer } from './mail/mailer.js';
 import type { AgentDist } from './services/agent-dist.js';
+import type { InstallerDist } from './services/installer-dist.js';
 import type { SignalHub } from './signal/hub.js';
 
 /** Signaling and session timers (contracts sections 7.2, 7.5); tests shorten them. */
@@ -59,6 +60,8 @@ export type AppContext = {
   version: string;
   /** Phase C section 2.2: agent builds served by this node. */
   agentDist: AgentDist;
+  /** Phase D sections 12.1, 13.4: branded Windows installers served by this node. */
+  installerDist: InstallerDist;
   /** Set right after construction; REST routes push WS events through it. */
   hub: SignalHub;
   /** Phase D rule 6.4d: the consent-receipt mailer. */

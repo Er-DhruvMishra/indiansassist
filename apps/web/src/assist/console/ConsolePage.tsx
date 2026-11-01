@@ -3,6 +3,7 @@
  * panel (still `knocked`), a read-only summary (someone else's live session, or a read-only role) and
  * the ended view. On reload the live console re-attaches with `assist.resume`.
  */
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { isNativeTier } from '@indiansassist/shared';
 import { useAuth } from '../../auth/AuthContext';
@@ -21,7 +22,7 @@ import { EndedView } from './EndedView';
 import { LiveConsole } from './LiveConsole';
 import { MirrorLiveConsole } from './mirror/MirrorConsole';
 import { AgentConsole } from './agent/AgentConsole';
-import type { UnattendedSessionInfo } from './agent/UnattendedBanner';
+import { unattendedInfo, type LocalUserArrival } from './agent/UnattendedBanner';
 
 export function ConsolePage() {
   usePageTitle('Session console');
@@ -33,7 +34,9 @@ export function ConsolePage() {
   const d = detail.data;
 
   // Phase D section 13.4: a P4 session names its device, so the console can say whether it is unattended and show the
-  // technician-visible policy state. The effective policy comes from `GET /devices/:id` (section 7.2).
+  // technician-visible policy state. Sections 6.2 / 13.2: the policy shown is the snapshot taken when the session
+  // opened (`session.created.policySnapshot`, or the REST session), so the banner says what was true at the time;
+  // `GET /devices/:id` (section 7.2) is only the fallback for a session opened before the snapshot was exposed.
   const deviceId = cached?.device?.id ?? d?.deviceId ?? null;
   const fleetRead = can(me?.user.role, 'fleet.read');
   const devicePolicy = useAsync(
@@ -41,13 +44,28 @@ export function ConsolePage() {
     [deviceId, fleetRead],
   );
   const unattended = cached?.unattended ?? d?.unattended ?? null;
-  const device: UnattendedSessionInfo | undefined = deviceId
-    ? {
-        unattended: unattended === true,
-        deviceName: cached?.device?.name ?? d?.deskLabel ?? 'this device',
-        policy: devicePolicy.data ?? null,
-      }
-    : undefined;
+
+  // Rule 6.2a: the server forwards the worker's report that someone sat down at the device, and whether the session
+  // dropped to view until they choose Continue.
+  const [arrival, setArrival] = useState<LocalUserArrival | null>(null);
+  const client = signal?.client ?? null;
+  useEffect(() => {
+    if (!client) return;
+    return client.on('session.local_user_arrived', (m) => {
+      if (m.sessionId !== id) return;
+      setArrival({ decision: m.decision, levelDroppedTo: m.levelDroppedTo });
+    });
+  }, [client, id]);
+
+  const device = unattendedInfo({
+    deviceId,
+    deviceName: cached?.device?.name ?? d?.deskLabel ?? 'this device',
+    unattended,
+    policySnapshot: cached?.policySnapshot ?? d?.policySnapshot,
+    devicePolicy: devicePolicy.data,
+    approvedBy: cached?.approvedBy ?? d?.approvedBy,
+    arrival,
+  });
 
   // Section 13.4: the kind of a device session is never left implicit, live, read-only or ended.
   const kindBadge = deviceId ? (

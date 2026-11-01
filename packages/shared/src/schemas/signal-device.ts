@@ -146,6 +146,16 @@ export const deviceWokeSchema = msg('device.woke', {
   elapsedMs: z.number().int().nonnegative(),
 });
 export const deviceWakeFailedSchema = msg('device.wake_failed', { wakeId: uuidSchema, deviceId: uuidSchema, cause: z.enum(WAKE_FAIL_CAUSES) });
+/**
+ * Rule 6.2a: the worker reported that someone sat down at the device during an unattended (or pre-login) session and
+ * what they chose. Same fields as the chained `desk.event session.local_user_arrived`, forwarded to the technician's
+ * console so it can raise the arrival card instead of finding out at the receipt.
+ */
+export const sessionLocalUserArrivedSchema = msg('session.local_user_arrived', {
+  sessionId: uuidSchema,
+  decision: z.enum(['continue', 'ended']),
+  levelDroppedTo: z.literal('view').nullable(),
+});
 export const amtSolDataAssistSchema = msg('amt.sol.data', { solId: uuidSchema, seq: z.number().int().nonnegative(), data: solData });
 
 // ---------- unions ----------

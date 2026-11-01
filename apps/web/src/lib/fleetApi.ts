@@ -1,7 +1,8 @@
 /**
  * Phase D fleet REST endpoints of the web app (docs/specs/phase-d-contracts.md section 7.2): the device list and
  * detail, the device admin actions, device sessions, wake, AMT, the action queue, device groups, technician group
- * assignment and the two org policies. Every reply is checked against the shared schema of `schemas/rest-fleet.ts`.
+ * assignment, the two org policies and the branded installer download (sections 12.1, 13.4). Every reply is checked
+ * against the shared schema of `schemas/rest-fleet.ts` or `fleet/installer.ts`.
  */
 import {
   deviceActionQueuedReplySchema,
@@ -13,6 +14,7 @@ import {
   deviceSessionReplySchema,
   devicesPageSchema,
   fleetPolicySchema,
+  installerManifestSchema,
   unattendedPolicySchema,
   userSchema,
   wakeReplySchema,
@@ -24,6 +26,8 @@ import {
   type DeviceGroup,
   type DevicePatch,
   type DeviceStatus,
+  type InstallerArch,
+  type InstallerManifest,
   type Page,
   type UnattendedPolicy,
   type UnattendedPolicyPatch,
@@ -32,6 +36,7 @@ import {
   type WakeReply,
 } from '@indiansassist/shared';
 import { z } from 'zod';
+import { API_BASE } from '../config';
 import { api, request } from './api';
 
 export type DeviceListQuery = {
@@ -111,6 +116,16 @@ export const deviceGroupsApi = {
   /** Section 7.1: `null` and `[]` both mean no devices once fleet scoping is on. */
   setUserGroups: (userId: string, groupIds: string[] | null) =>
     request<User>('PUT', `/orgs/current/users/${userId}/device-groups`, { body: { groupIds }, schema: userSchema }),
+};
+
+/**
+ * The branded installer this server serves (sections 12.1, 13.4). `manifest` says whether to offer the download at
+ * all (`builds: []` = nothing configured on this node); `url` is a plain authenticated GET, so the browser can follow
+ * it straight from a link and the server audits it as `download.served` against the enrollment token.
+ */
+export const installerApi = {
+  manifest: () => api.get<InstallerManifest>('/download/installer', { schema: installerManifestSchema }),
+  url: (arch: InstallerArch, tokenId: string) => `${API_BASE}/download/installer/${arch}?tokenId=${encodeURIComponent(tokenId)}`,
 };
 
 export const fleetPolicyApi = {

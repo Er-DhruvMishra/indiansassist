@@ -2,14 +2,24 @@
  * `UnattendedPolicyEditor` (docs/specs/phase-d-contracts.md sections 6.1, 13.4): every section 6.1 field with the safe
  * defaults of `DEFAULT_UNATTENDED_POLICY`, an allowed-hours builder, and clear warnings on dangerous combinations.
  * In `override` mode (a group default or a device override) the fields show what they inherit and the save sends only
- * the keys that differ, so an override stays a difference and never a frozen copy. Saving is audited by the server
+ * the keys set here, read from the stored override (`override`) when the caller has it, so an override stays a
+ * difference and never a frozen copy. Saving is audited by the server
  * (`org.policy_updated`, `device_group.updated`, `device.updated`).
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import { DEFAULT_UNATTENDED_POLICY, UNATTENDED_MODES, type AllowedHours, type UnattendedMode, type UnattendedPolicy, type UnattendedPolicyPatch } from '@indiansassist/shared';
 import { Alert, Button, Field, Input, Select } from '../../components/ui';
 import { dayName, UNATTENDED_MODE_TEXT } from './fleetText';
-import { POLICY_FIELD_LABELS, diffPolicy, overriddenKeys, policyProblems, policyWarnings, type PolicyKey } from './policyRules';
+import {
+  POLICY_FIELD_LABELS,
+  POLICY_KEYS,
+  overrideKeys,
+  overriddenKeys,
+  patchFromKeys,
+  policyProblems,
+  policyWarnings,
+  type PolicyKey,
+} from './policyRules';
 
 const BOOL_FIELDS = [
   'recordingRequired',
@@ -32,6 +42,11 @@ export type PolicyEditorProps = {
   mode: 'full' | 'override';
   /** What the override inherits when a key is not set (the org default, or org + group for a device). */
   inherited?: UnattendedPolicy;
+  /**
+   * The override as stored on this object (`device.unattended_policy`, `device_group.default_policy`). Given, it is
+   * the authority on which keys are set here; omitted, the editor falls back to diffing `value` against `inherited`.
+   */
+  override?: UnattendedPolicyPatch | null;
   inheritedLabel?: string;
   title: string;
   busy?: boolean;
@@ -44,6 +59,7 @@ export function UnattendedPolicyEditor({
   value,
   mode,
   inherited,
+  override,
   inheritedLabel = 'the organisation default',
   title,
   busy,
@@ -53,12 +69,19 @@ export function UnattendedPolicyEditor({
 }: PolicyEditorProps) {
   const base = inherited ?? DEFAULT_UNATTENDED_POLICY;
   const [p, setP] = useState<UnattendedPolicy>(value);
+  // The keys set on this object: from the stored override when the caller has it, else diffed from what it inherits.
+  const stored = useMemo(() => (override === undefined ? overriddenKeys(base, value) : overrideKeys(override)), [override, base, value]);
+  const [setHere, setSetHere] = useState<readonly PolicyKey[]>(stored);
   const [attempted, setAttempted] = useState(false);
   useEffect(() => setP(value), [value]);
-  const set = <K extends PolicyKey>(k: K, v: UnattendedPolicy[K]) => setP((o) => ({ ...o, [k]: v }));
+  useEffect(() => setSetHere(stored), [stored]);
+  const set = <K extends PolicyKey>(k: K, v: UnattendedPolicy[K]) => {
+    setP((o) => ({ ...o, [k]: v }));
+    setSetHere((o) => (o.includes(k) ? o : POLICY_KEYS.filter((x) => x === k || o.includes(x))));
+  };
   const problems = useMemo(() => policyProblems(p), [p]);
   const warnings = useMemo(() => policyWarnings(p), [p]);
-  const overridden = useMemo(() => (mode === 'override' ? overriddenKeys(base, p) : []), [mode, base, p]);
+  const overridden = useMemo(() => (mode === 'override' ? setHere : []), [mode, setHere]);
   const headingId = useId();
 
   const inheritNote = (k: PolicyKey) =>
@@ -68,7 +91,7 @@ export function UnattendedPolicyEditor({
     setAttempted(true);
     if (problems.length > 0) return;
     if (mode === 'full') onSaveFull?.(p);
-    else onSavePatch?.(diffPolicy(base, p));
+    else onSavePatch?.(patchFromKeys(p, setHere));
   };
 
   return (
@@ -202,7 +225,14 @@ export function UnattendedPolicyEditor({
           Save policy
         </Button>
         {mode === 'override' && overridden.length > 0 && (
-          <Button variant="secondary" onClick={() => setP(base)} disabled={busy}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setP(base);
+              setSetHere([]);
+            }}
+            disabled={busy}
+          >
             Clear all overrides
           </Button>
         )}

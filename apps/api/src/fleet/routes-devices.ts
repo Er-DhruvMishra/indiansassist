@@ -27,6 +27,7 @@ import {
   verifyEnrollConfig,
   wakeRequestSchema,
   type DeviceDetail,
+  type UnattendedPolicy,
 } from '@indiansassist/shared';
 import {
   countEnrollment,
@@ -52,7 +53,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
 import { systemActor, userActor, writeAudit, type Actor } from '../lib/audit.js';
-import { refOf, userRefs } from '../lib/lookup.js';
+import { approvedByOf, refOf, userRefs } from '../lib/lookup.js';
 import { compactOf, effectiveStatus } from '../lib/mappers.js';
 import { iso, isoOrNull } from '../lib/time.js';
 import { parseOr400 } from '../lib/validate.js';
@@ -237,6 +238,7 @@ export async function deviceRoutes(app: FastifyInstance, ctx: AppContext): Promi
     const group = await groupOf(ctx, d);
     const recent = await listRecentSessionsByDevice(ctx.db, d.id, 10);
     const names = await userRefs(ctx.db, recent.map((s) => s.assistUserId));
+    const approvals = await approvedByOf(ctx.db, recent);
     const base = toDevice(d, await isDeviceOnline(ctx, d.id), { withIp: withIp(p) });
     return {
       ...base,
@@ -247,6 +249,8 @@ export async function deviceRoutes(app: FastifyInstance, ctx: AppContext): Promi
         id: s.id,
         state: s.state,
         unattended: s.unattended ?? null,
+        policySnapshot: (s.unattendedPolicy as UnattendedPolicy | null) ?? null,
+        approvedBy: approvals.get(s.id) ?? null,
         assist: refOf(names, s.assistUserId),
         knockedAt: iso(s.knockedAt),
         startedAt: isoOrNull(s.startedAt),

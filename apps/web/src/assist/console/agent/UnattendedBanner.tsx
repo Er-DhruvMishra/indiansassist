@@ -21,6 +21,34 @@ export type UnattendedSessionInfo = {
   levelDroppedToView?: boolean;
 };
 
+/** Rule 6.2a, as the server pushes it (`session.local_user_arrived`). */
+export type LocalUserArrival = { decision: 'continue' | 'ended'; levelDroppedTo: 'view' | null };
+
+/**
+ * What the console shows for a device session (section 13.4), assembled in one place so the precedence is explicit:
+ * the policy and the authorisation come from the session itself (`session.created.policySnapshot` / the REST session,
+ * sections 6.2 and 13.2), and the device's current effective policy is only the fallback for a session opened before
+ * the snapshot was exposed. Rule 6.2a folds in the worker's arrival report.
+ */
+export function unattendedInfo(a: {
+  deviceId: string | null;
+  deviceName: string;
+  unattended: boolean | null;
+  policySnapshot?: UnattendedPolicy | null | undefined;
+  devicePolicy?: UnattendedPolicy | null | undefined;
+  approvedBy?: ApprovedBy | null | undefined;
+  arrival?: LocalUserArrival | null | undefined;
+}): UnattendedSessionInfo | undefined {
+  if (!a.deviceId) return undefined;
+  return {
+    unattended: a.unattended === true,
+    deviceName: a.deviceName,
+    policy: a.policySnapshot ?? a.devicePolicy ?? null,
+    approvedBy: a.approvedBy ?? null,
+    ...(a.arrival ? { userArrived: true, levelDroppedToView: a.arrival.levelDroppedTo === 'view' } : {}),
+  };
+}
+
 export const UNATTENDED_TEXT = 'No one is at this device — session is policy-authorised and recorded.';
 
 export function UnattendedBanner({ info }: { info: UnattendedSessionInfo }) {

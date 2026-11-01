@@ -1,10 +1,12 @@
 /**
  * Create token (contracts sections 3.2, 6.7, 12): tier (enum driven, capped by the caller's seat tier;
- * p1_browser and, from Phase B, p2_extension join), type, lifetime, label. On success shows the join link, a client-side QR, the
- * short code with the host it is valid on, and copy buttons.
+ * p1_browser and, from Phase B, p2_extension join), type, lifetime, label, and (enrollment only, Phase D section 2.1)
+ * how many devices the token may enroll. On success shows the join link, a client-side QR, the short code with the
+ * host it is valid on, and copy buttons.
  */
 import { useState, type FormEvent } from 'react';
 import {
+  LIMITS,
   PACKAGE_TIERS,
   TOKEN_LIFETIMES,
   tierWithin,
@@ -41,6 +43,9 @@ export function CreateTokenForm({
   const [typ, setTyp] = useState<TokenType>('one_time');
   const [minutes, setMinutes] = useState<string>(String(TOKEN_LIFETIMES.one_time.defaultMin));
   const [days, setDays] = useState<string>(String(TOKEN_LIFETIMES.enrollment.defaultDays));
+  // Phase D section 2.1: one enrollment token enrols this many devices (default 1), so section 12.1's single
+  // transform can serve a whole rollout wave instead of one token per machine.
+  const [maxDevices, setMaxDevices] = useState('1');
   const [label, setLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,6 +63,11 @@ export function CreateTokenForm({
     const m = Number(minutes);
     return Number.isInteger(m) && m >= 1 && m <= maxMin ? null : `Enter 1 to ${maxMin} minutes.`;
   })();
+  const maxDevicesError = (() => {
+    if (!enrollment) return null;
+    const n = Number(maxDevices);
+    return Number.isInteger(n) && n >= 1 && n <= LIMITS.enrollMaxDevices ? null : `Enter 1 to ${LIMITS.enrollMaxDevices} devices.`;
+  })();
 
   const onType = (t: TokenType) => {
     setTyp(t);
@@ -71,12 +81,12 @@ export function CreateTokenForm({
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (lifetimeError) return;
+    if (lifetimeError || maxDevicesError) return;
     setBusy(true);
     setError(null);
     try {
       const body = enrollment
-        ? { tier, typ, ttlDays: Number(days) }
+        ? { tier, typ, ttlDays: Number(days), maxDevices: Number(maxDevices) }
         : { tier, typ, ttlMinutes: Number(minutes) };
       const trimmed = label.trim();
       onCreated(await tokensApi.create(trimmed ? { ...body, label: trimmed } : body));
@@ -120,11 +130,31 @@ export function CreateTokenForm({
         )}
       </fieldset>
       {enrollment ? (
-        <Field label="Lifetime (days)" error={lifetimeError}>
-          {(p) => (
-            <Input id={p.id} aria-describedby={p.describedBy} aria-invalid={p.invalid} type="number" min={1} max={TOKEN_LIFETIMES.enrollment.maxDays} value={days} onChange={(e) => setDays(e.target.value)} />
-          )}
-        </Field>
+        <>
+          <Field label="Lifetime (days)" error={lifetimeError}>
+            {(p) => (
+              <Input id={p.id} aria-describedby={p.describedBy} aria-invalid={p.invalid} type="number" min={1} max={TOKEN_LIFETIMES.enrollment.maxDays} value={days} onChange={(e) => setDays(e.target.value)} />
+            )}
+          </Field>
+          <Field
+            label="Devices this token may enroll"
+            hint={`1 to ${LIMITS.enrollMaxDevices}. One transform or IA_ENROLL value then serves a whole rollout wave; the server refuses every enrollment past this many.`}
+            error={maxDevicesError}
+          >
+            {(p) => (
+              <Input
+                id={p.id}
+                aria-describedby={p.describedBy}
+                aria-invalid={p.invalid}
+                type="number"
+                min={1}
+                max={LIMITS.enrollMaxDevices}
+                value={maxDevices}
+                onChange={(e) => setMaxDevices(e.target.value)}
+              />
+            )}
+          </Field>
+        </>
       ) : (
         <Field label="Lifetime (minutes)" hint={`Maximum ${maxMin} minutes.`} error={lifetimeError}>
           {(p) => (
@@ -135,7 +165,7 @@ export function CreateTokenForm({
       <Field label="Label (optional)" hint="Shown to you and in the knock request, e.g. a ticket number.">
         {(p) => <Input id={p.id} aria-describedby={p.describedBy} maxLength={80} value={label} onChange={(e) => setLabel(e.target.value)} />}
       </Field>
-      <Button type="submit" disabled={busy || lifetimeError !== null}>
+      <Button type="submit" disabled={busy || lifetimeError !== null || maxDevicesError !== null}>
         {busy ? 'Creating...' : 'Create token'}
       </Button>
     </form>

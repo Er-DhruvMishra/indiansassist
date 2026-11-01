@@ -37,7 +37,7 @@ import {
   UNATTENDED_MODE_TEXT,
   unattendedModeTone,
 } from './fleetText';
-import { effectivePolicy } from './policyRules';
+import { effectivePolicy, overriddenKeys, overrideKeys, POLICY_FIELD_LABELS } from './policyRules';
 import { UnattendedPolicyEditor } from './UnattendedPolicyEditor';
 import { WakePanel, type SolLine, type WakeEvent } from './WakePanel';
 
@@ -92,6 +92,10 @@ export function DeviceDetailPage() {
   const tamper = tamperBadge(d.tamperState);
   const reported = (d.capabilities as { features?: unknown } | undefined)?.features;
   const features = Array.isArray(reported) ? (reported as string[]) : [];
+  // Section 13.2 `device.unattended_policy`: what this device overrides itself, as stored. An api that does not send
+  // the field yet falls back to diffing the effective policy against what the device inherits.
+  const deviceOverride =
+    d.unattendedPolicy === undefined ? (inherited ? overriddenKeys(inherited, d.policy) : []) : overrideKeys(d.unattendedPolicy);
 
   const act = async (what: string, fn: () => Promise<unknown>) => {
     setError(null);
@@ -189,6 +193,11 @@ export function DeviceDetailPage() {
             <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
               This is the organisation default, then the group default, then this device&apos;s own override. It governs sessions and device actions alike.
             </p>
+            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400" data-testid="device-override">
+              {deviceOverride.length === 0
+                ? 'Set on this device: nothing. Every field is inherited.'
+                : `Set on this device: ${deviceOverride.map((k) => POLICY_FIELD_LABELS[k]).join(', ')}.`}
+            </p>
           </Card>
 
           {canQueue && (
@@ -232,6 +241,7 @@ export function DeviceDetailPage() {
                 mode="override"
                 value={d.policy}
                 inherited={inherited}
+                override={d.unattendedPolicy}
                 inheritedLabel={d.group ? `the group "${d.group.name}"` : 'the organisation default'}
                 onSavePatch={(patch) =>
                   void act('The policy override was saved.', () => devicesApi.patch(d.id, { unattendedPolicy: emptyToNull(patch) }))

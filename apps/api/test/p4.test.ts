@@ -2,9 +2,11 @@
  * Phase D api (docs/specs/phase-d-contracts.md sections 3, 6.2, 7.1, 9): enrollment (signed config, possession proof,
  * the maxDevices race), `/signal/device` auth (Origin, forbidden hellos, bad signature / disabled -> 4412), the
  * section 6.2 refusals at `POST /devices/:id/sessions`, fleet RBAC with scoping on and off, cross-org 404, the worker
- * credential's capability subset, and the action `deny` gate.
+ * credential's capability subset, the action `deny` gate, and the branded installer download of sections 12.1 / 13.4.
  */
 import { randomBytes } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   base64urlDecode,
   base64urlEncode,
@@ -12,8 +14,11 @@ import {
   deviceSigInput,
   kexPublicKeyOf,
   kidOf,
+  installerFileName,
+  sha256Hex,
   signDeviceInput,
 } from '@indiansassist/shared';
+import { listAuditByOrgPaginated } from '@indiansassist/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { addMember, call, createToken, listen, makeApp, signup, SignalClient, type Account, type TestApp } from './helpers.js';
 
@@ -206,6 +211,43 @@ describe('phase D api', () => {
     expect(await worker.closed()).toBe(4403);
   });
 
+  it('the device override is readable back, and a session carries the policy it opened under', async () => {
+    const allowGroup = await group(admin, { mode: 'allow', recordingRequired: false });
+    const d = await enroll(admin, { groupId: allowGroup });
+    const before = await call(t.app, `/api/v1/devices/${d.deviceId}`, { cookie: admin.cookie });
+    expect(before.json()).toMatchObject({ unattendedPolicy: null, policy: { mode: 'allow', maxUnattendedMinutes: 120 } });
+    // Section 13.2: the override comes back exactly as stored, including a key set to what it would have inherited.
+    const override = { maxUnattendedMinutes: 15, recordingRequired: false };
+    const patched = await call(t.app, `/api/v1/devices/${d.deviceId}`, { method: 'PATCH', cookie: admin.cookie, body: { unattendedPolicy: override } });
+    expect(patched.statusCode, patched.body).toBe(200);
+    expect(patched.json()).toMatchObject({ unattendedPolicy: override });
+    const detail = await call(t.app, `/api/v1/devices/${d.deviceId}`, { cookie: admin.cookie });
+    expect(detail.json()).toMatchObject({ unattendedPolicy: override, policy: { mode: 'allow', maxUnattendedMinutes: 15, recordingRequired: false } });
+    expect((await call(t.app, '/api/v1/devices', { cookie: admin.cookie })).json()).toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ id: d.deviceId, unattendedPolicy: override })]),
+    });
+
+    const ws = await connect(d);
+    await ws.next('device.hello.ok');
+    const opened = await openSession(admin, d, { unattended: true, reason: 'snapshot check' });
+    expect(opened.statusCode, opened.body).toBe(201);
+    const { sessionId } = opened.json() as { sessionId: string };
+    // Sections 6.2 / 13.2: the snapshot is the policy at open, and approvedBy is null until consent chains it.
+    const session = await call(t.app, `/api/v1/sessions/${sessionId}`, { cookie: admin.cookie });
+    expect(session.json()).toMatchObject({ unattended: true, approvedBy: null, policySnapshot: { mode: 'allow', maxUnattendedMinutes: 15 } });
+    expect((await call(t.app, `/api/v1/devices/${d.deviceId}`, { cookie: admin.cookie })).json()).toMatchObject({
+      recentSessions: expect.arrayContaining([expect.objectContaining({ id: sessionId, approvedBy: null, policySnapshot: expect.objectContaining({ maxUnattendedMinutes: 15 }) })]),
+    });
+    // The snapshot does not follow the device: a later override leaves the open session's snapshot alone.
+    await call(t.app, `/api/v1/devices/${d.deviceId}`, { method: 'PATCH', cookie: admin.cookie, body: { unattendedPolicy: { maxUnattendedMinutes: 99 } } });
+    expect((await call(t.app, `/api/v1/sessions/${sessionId}`, { cookie: admin.cookie })).json()).toMatchObject({
+      policySnapshot: { maxUnattendedMinutes: 15 },
+    });
+    // Clearing the override (null) is not an empty patch.
+    const cleared = await call(t.app, `/api/v1/devices/${d.deviceId}`, { method: 'PATCH', cookie: admin.cookie, body: { unattendedPolicy: null } });
+    expect(cleared.json()).toMatchObject({ unattendedPolicy: null });
+  });
+
   it('fleet RBAC: cross-org 404, auditor read-only, observer cannot act, scoping on with [] / a group', async () => {
     const d = await enroll(admin);
     const other = await signup(t.app);
@@ -228,6 +270,56 @@ describe('phase D api', () => {
     expect(put.json()).toMatchObject({ deviceGroupIds: [g] });
     expect((await call(t.app, `/api/v1/devices/${d.deviceId}`, { cookie: tech.cookie })).statusCode).toBe(200);
     await call(t.app, '/api/v1/orgs/current/policy/fleet', { method: 'PATCH', cookie: admin.cookie, body: { fleetScopingEnabled: false } });
+  });
+
+  it('the branded installer is served to an org_admin against an enrollment token, and audited (sections 12.1, 13.4)', async () => {
+    const path = '/api/v1/download/installer';
+    // Nothing configured: an empty manifest, so the console simply does not offer the download.
+    expect((await call(t.app, path, { cookie: admin.cookie })).json()).toEqual({ v: 1, builds: [] });
+    const tok = await createToken(t.app, admin, { tier: 'p4_installed', typ: 'enrollment', maxDevices: 50 });
+    const dl = (query: string, cookie = admin.cookie, method: 'GET' | 'HEAD' = 'GET') =>
+      t.app.inject({ method, url: `${path}/x64${query}`, headers: { cookie } });
+    expect((await dl(`?tokenId=${tok.token.id}`)).json()).toMatchObject({ error: { code: 'download_unavailable' } });
+
+    const dir = t.ctx.config.fleet.msiDistDir;
+    mkdirSync(dir, { recursive: true });
+    const bytes = Buffer.from('fake signed MSI for tests '.repeat(40));
+    writeFileSync(join(dir, installerFileName('x64', '0.4.0')), bytes);
+    const build = (arch: string) => ({ arch, version: '0.4.0', size: 1, sha256: sha256Hex(bytes), signed: true, minOs: '10.0.17763' });
+    // arm64 is listed but its file is missing: it must not be served (as the Phase C manifest rule).
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ v: 1, builds: [build('x64'), build('arm64')] }));
+    t.ctx.installerDist.load();
+    expect((await call(t.app, path, { cookie: admin.cookie })).json().builds.map((b: { arch: string }) => b.arch)).toEqual(['x64']);
+
+    const ok = await dl(`?tokenId=${tok.token.id}`);
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.headers['content-disposition']).toContain(installerFileName('x64', '0.4.0'));
+    expect(ok.headers['content-type']).toBe('application/x-msi');
+    expect(ok.headers['cache-control']).toBe('private, no-store');
+    expect(ok.headers['accept-ranges']).toBe('bytes');
+    expect(ok.rawPayload.length).toBe(bytes.length);
+    const entries = await listAuditByOrgPaginated(t.ctx.db, admin.org.id, { action: 'download.served' });
+    expect(entries.items[0]?.data).toMatchObject({ tokenId: tok.token.id, platform: 'windows', arch: 'x64', version: '0.4.0' });
+    expect(entries.items[0]?.actorType).toBe('user');
+
+    // A range is honoured; HEAD is free (no new audit entry), as on the Phase C route.
+    const ranged = await t.app.inject({ method: 'GET', url: `${path}/x64?tokenId=${tok.token.id}`, headers: { cookie: admin.cookie, range: 'bytes=10-19' } });
+    expect(ranged.statusCode).toBe(206);
+    expect(ranged.headers['content-range']).toBe(`bytes 10-19/${bytes.length}`);
+    expect((await dl(`?tokenId=${tok.token.id}`, admin.cookie, 'HEAD')).statusCode).toBe(200);
+    expect((await listAuditByOrgPaginated(t.ctx.db, admin.org.id, { action: 'download.served' })).items).toHaveLength(1);
+
+    // Refusals: unknown arch, a missing or wrong-type token, a revoked token, and any role below org_admin.
+    expect((await call(t.app, `${path}/mips?tokenId=${tok.token.id}`, { cookie: admin.cookie })).json()).toMatchObject({ error: { code: 'not_found' } });
+    expect((await dl('')).statusCode).toBe(400);
+    const attended = await createToken(t.app, admin, { tier: 'p4_installed', typ: 'one_time' });
+    expect((await dl(`?tokenId=${attended.token.id}`)).json()).toMatchObject({ error: { code: 'invalid_token_type' } });
+    await call(t.app, `/api/v1/tokens/${tok.token.id}/revoke`, { cookie: admin.cookie, body: {} });
+    expect((await dl(`?tokenId=${tok.token.id}`)).json()).toMatchObject({ error: { code: 'token_gone' } });
+    const tech = await addMember(t.app, admin, 'senior_technician');
+    expect((await call(t.app, path, { cookie: tech.cookie })).statusCode).toBe(403);
+    expect((await dl(`?tokenId=${tok.token.id}`, tech.cookie)).statusCode).toBe(403);
+    expect((await call(t.app, path)).statusCode).toBe(401);
   });
 
   it('actions: deny refuses at POST except message; a privileged playbook needs a reason', async () => {

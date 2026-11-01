@@ -19,7 +19,7 @@ import {
 } from '../enums.js';
 import { REGIONS } from '../regions.js';
 import { sanitiseText } from '../audit/sanitise.js';
-import { unattendedPolicySchema } from './policy.js';
+import { unattendedPolicyPatchSchema, unattendedPolicySchema } from './policy.js';
 
 const unique = <T>(a: readonly T[]) => new Set(a).size === a.length;
 const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'expected a lower-case uuid');
@@ -143,6 +143,13 @@ export const deviceSchema = z.object({
   agentVersion: z.string().nullable(),
   serviceVersion: z.string().nullable(),
   groupId: uuid.nullable(),
+  /**
+   * The device's own override (`device.unattended_policy`, section 13.2), as stored: a patch, `null` when the device
+   * overrides nothing, so the console can tell "set here" from "inherited" instead of guessing from a diff. The
+   * effective policy stays `GET /devices/:id` -> `policy` (section 2.2 merge order). Additive: always sent by the
+   * api, optional so Phase D clients and fixtures written before it still parse.
+   */
+  unattendedPolicy: unattendedPolicyPatchSchema.nullable().optional(),
   tags: z.array(z.string()),
   capabilities: serviceCapabilitiesSchema.or(z.record(z.string(), z.unknown())),
   interactive: interactiveStateSchema.nullable(),

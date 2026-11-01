@@ -55,6 +55,7 @@ export async function makeApp(env: Record<string, string> = {}, timing: Partial<
       ICE_OWN_HOST_SUFFIXES: 'example.test',
       AGENT_DEV_STUB: '',
       AGENT_DIST_DIR: join(storageDir, 'agent-dist'),
+      AGENT_MSI_DIST_DIR: join(storageDir, 'agent-msi'),
       ...env,
     },
     { persistSecrets: false },

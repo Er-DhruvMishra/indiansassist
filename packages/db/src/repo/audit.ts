@@ -25,7 +25,7 @@ import {
   type JsonObject,
   type Region,
 } from '@indiansassist/shared';
-import { and, asc, desc, eq, gt, gte, lt, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 import type { Executor } from '../client.js';
 import { AuditRegionMismatchError, NotFoundError } from '../errors.js';
 import { auditEntry, org, session, type AuditEntryRow } from '../schema/index.js';
@@ -165,6 +165,27 @@ export async function findSessionAuditByAction(
     .orderBy(asc(auditEntry.seq))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * The first entry of one action per session, for a batch of sessions (Phase D: `session.unattended_started`, so a
+ * session list can carry `approvedBy` without one query per row). Sessions with no such entry are absent.
+ */
+export async function findSessionsAuditByAction(
+  exec: Executor,
+  sessionIds: readonly string[],
+  action: AuditAction,
+): Promise<Map<string, AuditEntryRow>> {
+  const ids = [...new Set(sessionIds)];
+  const out = new Map<string, AuditEntryRow>();
+  if (ids.length === 0) return out;
+  const rows = await exec
+    .select()
+    .from(auditEntry)
+    .where(and(inArray(auditEntry.sessionId, ids), eq(auditEntry.action, action)))
+    .orderBy(asc(auditEntry.seq));
+  for (const r of rows) if (r.sessionId !== null && !out.has(r.sessionId)) out.set(r.sessionId, r);
+  return out;
 }
 
 export type ListAuditQuery = PageQuery & {

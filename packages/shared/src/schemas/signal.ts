@@ -62,10 +62,11 @@ export const signalMessageSchema = z.discriminatedUnion('t', [
   r.recorderAssignSchema,
   r.recorderJoinedSchema,
   r.recorderPauseSchema,
-  // Phase D section 8: S->A pushes on /signal.
+  // Phase D sections 6.2a, 8: S->A pushes on /signal.
   p4.deviceWokeSchema,
   p4.deviceWakeFailedSchema,
   p4.amtSolDataAssistSchema,
+  p4.sessionLocalUserArrivedSchema,
 ]);
 export type SignalMessage = z.infer<typeof signalMessageSchema>;
 export type SignalType = SignalMessage['t'];
@@ -142,6 +143,7 @@ export const serverSignalMessageSchema = z.discriminatedUnion('t', [
   p4.deviceWokeSchema,
   p4.deviceWakeFailedSchema,
   p4.amtSolDataAssistSchema,
+  p4.sessionLocalUserArrivedSchema,
 ]);
 export type ServerSignalMessage = z.infer<typeof serverSignalMessageSchema>;
 
