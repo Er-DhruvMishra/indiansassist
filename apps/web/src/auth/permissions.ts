@@ -16,7 +16,12 @@ export type Capability =
   | 'ws.assist'
   | 'recordings'
   | 'playbooks.admin'
-  | 'tokens.iaconfig';
+  | 'tokens.iaconfig'
+  | 'fleet.read'
+  | 'fleet.act'
+  | 'fleet.amt'
+  | 'fleet.queue'
+  | 'fleet.admin';
 
 const MATRIX: Record<Capability, readonly UserRole[]> = {
   'tokens.create': ['technician', 'senior_technician', 'org_admin'],
@@ -35,6 +40,17 @@ const MATRIX: Record<Capability, readonly UserRole[]> = {
   // Phase C 13.4: the playbook catalogue and agent policy page; the signed .iaconfig (also the token creator).
   'playbooks.admin': ['org_admin'],
   'tokens.iaconfig': ['org_admin'],
+  // Phase D section 7.1 (the fleet rows of the matrix; "own-group" scoping is the server's, not the client's).
+  /** Device list / get. An observer sees the fleet but may take no live action. */
+  'fleet.read': ['technician', 'senior_technician', 'org_admin', 'auditor', 'observer'],
+  /** Device session open, wake, action run / cancel. */
+  'fleet.act': ['technician', 'senior_technician', 'org_admin'],
+  /** AMT SOL console and boot redirect (out-of-band access, no on-screen indicator can exist). */
+  'fleet.amt': ['senior_technician', 'org_admin'],
+  /** The offline action queue list. */
+  'fleet.queue': ['technician', 'senior_technician', 'org_admin', 'auditor'],
+  /** Groups, policy, group assignment, fleet settings, disable / retire / rotate-key / tamper acknowledge. */
+  'fleet.admin': ['org_admin'],
 };
 
 export function can(role: UserRole | null | undefined, cap: Capability): boolean {

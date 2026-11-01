@@ -24,6 +24,10 @@ const UsersPage = lazy(() => import('./assist/UsersPage').then((m) => ({ default
 const BrandingPage = lazy(() => import('./assist/BrandingPage').then((m) => ({ default: m.BrandingPage })));
 const PlaybooksPage = lazy(() => import('./assist/playbooks/PlaybooksPage').then((m) => ({ default: m.PlaybooksPage })));
 const AccountPage = lazy(() => import('./assist/AccountPage').then((m) => ({ default: m.AccountPage })));
+// Phase D section 13.4: the fleet console, the device page and the group / policy admin.
+const FleetPage = lazy(() => import('./assist/fleet/FleetPage').then((m) => ({ default: m.FleetPage })));
+const DeviceDetailPage = lazy(() => import('./assist/fleet/DeviceDetailPage').then((m) => ({ default: m.DeviceDetailPage })));
+const DeviceGroupAdminPage = lazy(() => import('./assist/fleet/DeviceGroupAdminPage').then((m) => ({ default: m.DeviceGroupAdminPage })));
 
 function RootRedirect() {
   const { status } = useAuth();
@@ -74,6 +78,9 @@ export function App() {
           <Route path="tokens" element={<Allow cap="tokens.list"><TokensPage /></Allow>} />
           <Route path="sessions" element={<Allow cap="sessions.list"><SessionsPage /></Allow>} />
           <Route path="sessions/:id" element={<Allow cap="sessions.list"><ConsolePage /></Allow>} />
+          <Route path="fleet" element={<Allow cap="fleet.read"><FleetPage /></Allow>} />
+          <Route path="fleet/groups" element={<Allow cap="fleet.admin"><DeviceGroupAdminPage /></Allow>} />
+          <Route path="fleet/:id" element={<Allow cap="fleet.read"><DeviceDetailPage /></Allow>} />
           <Route path="audit" element={<Allow cap="audit.org"><AuditPage /></Allow>} />
           <Route path="residency" element={<Allow cap="residency"><ResidencyPage /></Allow>} />
           <Route path="users" element={<Allow cap="users.list"><UsersPage /></Allow>} />

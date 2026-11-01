@@ -28,6 +28,7 @@ import { MonitorPicker } from './MonitorPicker';
 import { PlaybookPanel } from './PlaybookPanel';
 import { SasConfirmDialog, SAS_STOP_TEXT } from './SasConfirmDialog';
 import { controlBlocker, hasFeature, levelAllows, levelChip, sasOk } from './agentState';
+import { PolicyState, UnattendedBanner, type UnattendedSessionInfo } from './UnattendedBanner';
 import type { OverlayActions } from './InputOverlay';
 
 const PHASE_TEXT: Record<string, string> = {
@@ -47,11 +48,16 @@ export type AgentConsoleProps = {
   helloReady: boolean;
   deskLabel: string;
   capabilities?: AgentCapabilities | null;
+  /**
+   * Phase D section 13.4: a P4 device session. Absent for a P3 portable session; present (with `unattended: false`)
+   * for an attended device session, so the console always says which kind of session this is.
+   */
+  device?: UnattendedSessionInfo;
   /** Test injection (fake connection, fixed handshake, REST stubs). */
   deps?: Partial<AgentConsoleDeps>;
 };
 
-export function AgentConsole({ sessionId, signal, cached, helloReady, deskLabel, capabilities, deps }: AgentConsoleProps) {
+export function AgentConsole({ sessionId, signal, cached, helloReady, deskLabel, capabilities, device, deps }: AgentConsoleProps) {
   const [ctrl, setCtrl] = useState<AgentConsoleController | null>(null);
   const startArgs = useRef({ cached, helloReady, capabilities, deps });
   useEffect(() => {
@@ -65,10 +71,20 @@ export function AgentConsole({ sessionId, signal, cached, helloReady, deskLabel,
     if (ctrl && capabilities) ctrl.setCapabilities(capabilities);
   }, [ctrl, capabilities]);
   if (!ctrl) return <Spinner label="Opening the console" />;
-  return <AgentConsoleView ctrl={ctrl} sessionId={sessionId} deskLabel={deskLabel} />;
+  return <AgentConsoleView ctrl={ctrl} sessionId={sessionId} deskLabel={deskLabel} device={device} />;
 }
 
-export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentConsoleController; sessionId: string; deskLabel: string }) {
+export function AgentConsoleView({
+  ctrl,
+  sessionId,
+  deskLabel,
+  device,
+}: {
+  ctrl: AgentConsoleController;
+  sessionId: string;
+  deskLabel: string;
+  device?: UnattendedSessionInfo;
+}) {
   const { me } = useAuth();
   const snap = useSyncExternalStore(ctrl.subscribe, () => ctrl.snapshot);
   const fsRef = useRef<HTMLDivElement | null>(null);
@@ -121,6 +137,7 @@ export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentCo
           </span>
         )}
         {secured && !sasOk(snap) && <Badge tone="amber">Code not confirmed</Badge>}
+        {device && <Badge tone={device.unattended ? 'amber' : 'blue'}>{device.unattended ? 'Unattended session' : 'Attended device session'}</Badge>}
         <div className="ml-auto flex gap-2">
           <Button variant="danger" onClick={() => setConfirmEnd(true)}>
             End session
@@ -130,6 +147,7 @@ export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentCo
       <p className="text-sm" role="status" aria-live="polite">
         {PHASE_TEXT[snap.phase]} {snap.notice ?? ''}
       </p>
+      {device && <UnattendedBanner info={device} />}
       {snap.error && <Alert>{snap.error}</Alert>}
       {snap.captureNotice && <Alert tone="amber">{snap.captureNotice}</Alert>}
       {elevated && <Alert tone="blue">{ELEVATED_NOTE}</Alert>}
@@ -200,6 +218,11 @@ export function AgentConsoleView({ ctrl, sessionId, deskLabel }: { ctrl: AgentCo
               />
               <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">The Desk has no echo cancellation; if you hear an echo, ask the user to wear a headset.</p>
               <RemoteAudio stream={snap.remoteAudio} />
+            </Card>
+          )}
+          {device?.policy && (
+            <Card>
+              <PolicyState policy={device.policy} unattended={device.unattended} />
             </Card>
           )}
           <Card>
