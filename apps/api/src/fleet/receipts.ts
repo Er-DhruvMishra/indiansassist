@@ -49,6 +49,7 @@ async function chainSent(
   org: OrgRow,
   data: { sessionId: string | null; actionIds: string[]; channel: 'email' | 'device'; to: string | null; delivered: boolean; cause?: 'no_address' | 'no_mailer' | 'send_failed' },
 ): Promise<void> {
+  ctx.metrics.receiptsSent.inc({ channel: data.channel, delivered: String(data.delivered) });
   await writeAudit(ctx, ctx.db, org, {
     sessionId: data.sessionId,
     actor: systemActor,

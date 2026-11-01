@@ -1,5 +1,5 @@
 /**
- * Playwright config for the apps/web end-to-end tests. Two suites share this file:
+ * Playwright config for the apps/web end-to-end tests. Three suites share this file:
  *
  *  - Package 1 (default): the two-browser session (`package1.spec.ts`). The API runs on a fresh PGlite database
  *    under ./data/e2e; one Chromium with fake media devices and an auto-selected screen drives both the Assist
@@ -8,9 +8,13 @@
  *    separate PGlite database under ./data/e2e-p3 with SIGNUP_PLAN_TIER=p3_portable (so the signed-up org can
  *    create p3 tokens) and AGENT_DEV_STUB pointing at the built dev agent binary (so the download grant serves a
  *    real file). The Assist is a browser; the Desk is the Rust agent spawned as a child process by the spec.
+ *  - Package 4 (`E2E_P4=1`, via `pnpm e2e:p4`): the fleet console's keyboard-only accessibility flows
+ *    (`package4.spec.ts`, docs/specs/phase-d-contracts.md section 13.5). The API runs on a separate PGlite database
+ *    under ./data/e2e-p4 with SIGNUP_PLAN_TIER=p4_installed, so the signed-up org can mint an enrollment token and
+ *    the spec can enrol devices over REST. No agent, no media, no browser but the Assist's own.
  *
  * Ports 4000 and 5173 must be free; `E2E_API_PORT=4100` moves the API when :4000 is taken (the web app reads it
- * through VITE_API_URL). The two suites use different data dirs so they never share state.
+ * through VITE_API_URL). The three suites use different data dirs so they never share state.
  */
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'node:path';
@@ -22,8 +26,20 @@ const headed = process.env.E2E_HEADED === '1';
 const apiPort = process.env.E2E_API_PORT || '4000';
 const apiUrl = `http://localhost:${apiPort}`;
 const p3 = process.env.E2E_P3 === '1';
+const p4 = process.env.E2E_P4 === '1';
 
-const apiEnv: Record<string, string> = p3
+const apiEnv: Record<string, string> = p4
+  ? {
+      PORT: apiPort,
+      API_ORIGIN: apiUrl,
+      METRICS_PORT: '0',
+      PGLITE_DIR: './data/e2e-p4/pglite',
+      STORAGE_FS_DIR: './data/e2e-p4/storage',
+      RATE_LIMIT_DISABLED: '1',
+      SIGNUP_PLAN_TIER: 'p4_installed',
+      LOG_LEVEL: 'warn',
+    }
+  : p3
   ? {
       PORT: apiPort,
       API_ORIGIN: apiUrl,
@@ -45,11 +61,15 @@ const apiEnv: Record<string, string> = p3
       RATE_LIMIT_DISABLED: '1',
       LOG_LEVEL: 'warn',
     };
-const resetCmd = p3 ? 'node apps/web/e2e/reset-data-p3.mjs' : 'node apps/web/e2e/reset-data.mjs';
+const resetCmd = p4
+  ? 'node apps/web/e2e/reset-data-p4.mjs'
+  : p3
+    ? 'node apps/web/e2e/reset-data-p3.mjs'
+    : 'node apps/web/e2e/reset-data.mjs';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: p3 ? /package3\.spec\.ts$/ : /package[12]\.spec\.ts$/,
+  testMatch: p4 ? /package4\.spec\.ts$/ : p3 ? /package3\.spec\.ts$/ : /package[12]\.spec\.ts$/,
   outputDir: './e2e/artifacts/test-results',
   fullyParallel: false,
   workers: 1,

@@ -90,6 +90,7 @@ async function sendAmt(ctx: AppContext, target: DeviceRow, proxy: DeviceRow, cmd
 async function wakeFailed(ctx: AppContext, org: OrgRow, w: WakeAttemptRow, cause: WakeFailCause, from: ('pending' | 'dispatched')[] = ['pending', 'dispatched']): Promise<void> {
   const r = await transitionWakeAttempt(ctx.db, w.id, 'failed', from, { cause });
   if (!r) return;
+  ctx.metrics.wakeAttempts.inc({ method: w.method, result: cause });
   await writeAudit(ctx, ctx.db, org, { actor: systemActor, action: 'device.wake_failed', data: { deviceId: w.deviceId, wakeId: w.id, method: w.method, cause } });
   ctx.hub.toUser(w.createdBy, { t: 'device.wake_failed', wakeId: w.id, deviceId: w.deviceId, cause });
 }
@@ -149,6 +150,7 @@ export async function confirmWakes(ctx: AppContext, d: DeviceRow, org: OrgRow): 
     if (w.state === 'pending') continue; // never sent anywhere (failed or in flight)
     const r = await transitionWakeAttempt(ctx.db, w.id, 'woke', ['dispatched'], { confirmedAt: new Date() });
     if (!r) continue;
+    ctx.metrics.wakeAttempts.inc({ method: w.method, result: 'woke' });
     await writeAudit(ctx, ctx.db, org, { actor: systemActor, action: 'device.woke', data: { deviceId: d.id, wakeId: w.id, method: w.method, via: w.via ?? null, elapsedMs } });
     ctx.hub.toUser(w.createdBy, { t: 'device.woke', wakeId: w.id, deviceId: d.id, method: w.method, via: w.via ?? null, elapsedMs });
   }

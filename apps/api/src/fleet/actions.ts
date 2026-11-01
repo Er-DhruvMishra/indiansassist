@@ -36,6 +36,7 @@ import type { AppContext } from '../context.js';
 import { fail } from '../errors.js';
 import { systemActor, userActor, writeAudit } from '../lib/audit.js';
 import { refOf, userRefs } from '../lib/lookup.js';
+import { countDeviceAction } from '../lib/metrics.js';
 import { iso, isoOrNull } from '../lib/time.js';
 import type { Principal } from '../plugins/auth.js';
 import type { DeviceConn, DeviceHub } from '../signal/device.js';
@@ -103,6 +104,7 @@ export async function queueDeviceAction(ctx: AppContext, p: Principal, d: Device
     });
     return r;
   });
+  countDeviceAction(ctx.metrics, row.kind, 'queued');
   let state: 'queued' | 'dispatched' = 'queued';
   if (await isDeviceOnline(ctx, d.id)) {
     const after = await dispatchDeviceAction(ctx, row.id);
@@ -117,6 +119,7 @@ type Prepared = { row: DeviceActionRow; frame: Record<string, unknown>; wire: De
 
 async function failAction(ctx: AppContext, a: DeviceActionRow, error: string): Promise<DeviceActionRow | null> {
   const r = await transitionDeviceAction(ctx.db, a.id, 'failed', ['queued', 'dispatched', 'awaiting_approval'], { result: { error }, completedAt: new Date() });
+  if (r) countDeviceAction(ctx.metrics, r.kind, 'failed');
   if (r) await onDeviceActionFinished(ctx, r).catch((err: unknown) => ctx.log.warn({ err }, 'action receipt failed'));
   return r;
 }
@@ -182,6 +185,7 @@ async function prepare(ctx: AppContext, a: DeviceActionRow, d: DeviceRow, org: O
 
 async function markDispatched(ctx: AppContext, a: DeviceActionRow, org: OrgRow): Promise<DeviceActionRow | null> {
   const r = await transitionDeviceAction(ctx.db, a.id, 'dispatched', ['queued'], { dispatchedAt: new Date() });
+  if (r) countDeviceAction(ctx.metrics, r.kind, 'dispatched');
   if (r) await writeAudit(ctx, ctx.db, org, { actor: systemActor, action: 'device.action_dispatched', data: { actionId: a.id, deviceId: a.deviceId, kind: a.kind } });
   return r;
 }
@@ -238,7 +242,10 @@ export async function redispatchQueues(ctx: AppContext): Promise<void> {
 
 /** Sweeper: non-final actions past `expires_at` go `expired` (each gets its receipt). */
 export async function expireActions(ctx: AppContext): Promise<void> {
-  for (const a of await expireDeviceActions(ctx.db)) await onDeviceActionFinished(ctx, a).catch((err: unknown) => ctx.log.warn({ err }, 'action receipt failed'));
+  for (const a of await expireDeviceActions(ctx.db)) {
+    countDeviceAction(ctx.metrics, a.kind, 'expired');
+    await onDeviceActionFinished(ctx, a).catch((err: unknown) => ctx.log.warn({ err }, 'action receipt failed'));
+  }
 }
 
 /** `POST /devices/:id/actions/:actionId/cancel`. */
@@ -250,6 +257,7 @@ export async function cancelDeviceAction(ctx: AppContext, p: Principal, a: Devic
     return x;
   });
   if (!r) fail('bad_state', `the action is ${a.state}`);
+  countDeviceAction(ctx.metrics, r.kind, 'cancelled');
   await onDeviceActionFinished(ctx, r).catch((err: unknown) => ctx.log.warn({ err }, 'action receipt failed'));
   return r;
 }
@@ -268,15 +276,17 @@ export async function handleActionResult(dh: DeviceHub, conn: DeviceConn, msg: D
   if (!org) return;
   const actor = deviceActor(d.id);
   if (msg.state === 'awaiting_approval') {
-    await transitionDeviceAction(ctx.db, a.id, 'awaiting_approval', ['dispatched']);
+    if (await transitionDeviceAction(ctx.db, a.id, 'awaiting_approval', ['dispatched'])) countDeviceAction(ctx.metrics, a.kind, 'awaiting_approval');
     return;
   }
   if (msg.state === 'running') {
     const approvedBy = msg.approvedBy ?? 'policy';
-    await ctx.db.transaction(async (tx) => {
+    const started = await ctx.db.transaction(async (tx) => {
       const r = await transitionDeviceAction(tx, a.id, 'running', ['dispatched', 'awaiting_approval'], { approvedBy });
       if (r) await writeAudit(ctx, tx, org, { actor, action: 'device.action_started', data: { actionId: a.id, deviceId: d.id, kind: a.kind, approvedBy } });
+      return r;
     });
+    if (started) countDeviceAction(ctx.metrics, started.kind, 'running');
     return;
   }
   const done = await ctx.db.transaction(async (tx) => {
@@ -300,5 +310,6 @@ export async function handleActionResult(dh: DeviceHub, conn: DeviceConn, msg: D
     });
     return r;
   });
+  if (done) countDeviceAction(ctx.metrics, done.kind, msg.state);
   if (done) await onDeviceActionFinished(ctx, done).catch((err: unknown) => ctx.log.warn({ err }, 'action receipt failed'));
 }

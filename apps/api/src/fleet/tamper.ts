@@ -49,6 +49,7 @@ export async function handleTamper(dh: DeviceHub, conn: DeviceConn, msg: DeviceC
         });
         await updateDevice(tx, d.id, { tamperState: 'alerted' });
       });
+      ctx.metrics.tamperAlerts.inc({ cause: ev.cause });
     }
     ids.push(ev.id);
   }
@@ -74,6 +75,7 @@ export async function sweepSilentDevices(ctx: AppContext, now: Date = new Date()
         .where(and(eq(deviceTable.id, d.id), eq(deviceTable.tamperState, 'ok')))
         .returning({ id: deviceTable.id });
       if (!r) return;
+      ctx.metrics.tamperAlerts.inc({ cause: 'suspected' });
       await writeAudit(ctx, tx, org, {
         actor: systemActor,
         action: 'tamper.suspected',

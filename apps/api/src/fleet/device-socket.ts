@@ -57,10 +57,12 @@ export async function handleDeviceMessage(dh: DeviceHub, conn: DeviceConn, msg: 
 
 export async function onDeviceSocketClosed(dh: DeviceHub, conn: DeviceConn): Promise<void> {
   dh.ctx.metrics.wsConnections.dec();
+  dh.ctx.metrics.devicesConnected.dec();
   void conn;
 }
 
 function unauthenticated(dh: DeviceHub, conn: DeviceConn, reId: string | undefined, why: string): void {
+  dh.ctx.metrics.deviceHello.inc({ result: 'unauthenticated' });
   dh.ctx.log.warn({ connectionId: conn.id, why }, 'device hello refused');
   conn.error('device_unauthenticated', 'the device could not be authenticated', reId);
   conn.close(WS_CLOSE.deviceUnauthenticated, 'device_unauthenticated');
@@ -71,6 +73,7 @@ async function deviceHello(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<
   const { ctx } = dh;
   if (!ctx.config.rateLimitDisabled && !dh.helloBucket.take()) {
     ctx.metrics.rateLimited.inc();
+    ctx.metrics.deviceHello.inc({ result: 'rate_limited' });
     conn.error('rate_limited', 'too many device hellos on this node; back off', msg.id, { retryAfterSec: 5 });
     return conn.close(WS_CLOSE.rateLimited, 'rate limited');
   }
@@ -84,10 +87,12 @@ async function deviceHello(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<
   }
   if (!verifyDeviceSignature(input, msg.sig, d.publicKey)) return unauthenticated(dh, conn, msg.id, 'bad signature');
   if (d.status !== 'enrolled') {
+    ctx.metrics.deviceHello.inc({ result: 'disabled' });
     conn.error('device_disabled', `this device is ${d.status}`, msg.id, { status: d.status, retryAfterSec: LIMITS.deviceDisabledRetrySec });
     return conn.close(WS_CLOSE.deviceUnauthenticated, 'device_disabled');
   }
   if (!isRegionServed(d.region, ctx.config.servedRegions)) {
+    ctx.metrics.deviceHello.inc({ result: 'region_mismatch' });
     conn.error('region_mismatch', 'this device belongs to another region', msg.id, { region: d.region });
     return conn.close(WS_CLOSE.forbidden, 'region_mismatch');
   }
@@ -95,6 +100,8 @@ async function deviceHello(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<
   if (!org) return unauthenticated(dh, conn, msg.id, 'org gone');
   dh.register(conn, d.id, d.orgId);
   ctx.metrics.wsConnections.inc();
+  ctx.metrics.devicesConnected.inc();
+  ctx.metrics.deviceHello.inc({ result: 'ok' });
   const c = msg.client;
   const now = new Date();
   const mac = macPatch(ctx, d, c.wakeMac);
@@ -147,6 +154,8 @@ async function heartbeat(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<'d
     return conn.close(WS_CLOSE.deviceUnauthenticated, 'device_disabled');
   }
   await refreshPresence(dh, conn, d);
+  // Section 13.5: the gap between the previous check-in and this heartbeat (about 30 s when the device is healthy).
+  if (d.lastSeenAt) ctx.metrics.deviceHeartbeatLag.observe(Math.max(0, Date.now() - d.lastSeenAt.getTime()) / 1000);
   const mac = macPatch(ctx, d, msg.wakeMac);
   await updateDevice(ctx.db, d.id, {
     lastSeenAt: new Date(),
