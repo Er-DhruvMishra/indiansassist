@@ -73,4 +73,8 @@ export const CAPTURE_PATH_LABEL: Record<AgentStats['capturePath'], string> = {
   dda: 'Desktop Duplication',
   gdi: 'GDI (compatibility)',
   projection: 'Screen projection',
+  // Phase E section 7.2 / 7.4: the Linux X11 paths and the Wayland no-screen path.
+  xshm: 'X11 shared memory',
+  xgetimage: 'X11 (compatibility)',
+  none: 'No screen shared',
 };

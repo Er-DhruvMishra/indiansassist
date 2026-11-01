@@ -52,3 +52,14 @@ export * from './fleet/seal.js';
 export * from './fleet/installer.js';
 export * from './schemas/signal-device.js';
 export * from './schemas/rest-fleet.js';
+// Phase E (docs/specs/phase-e-contracts.md section 13.1)
+export * from './enterprise/not-built.js';
+export * from './enterprise/secrets.js';
+export * from './enterprise/sso.js';
+export * from './enterprise/integrations.js';
+export * from './enterprise/redact.js';
+export * from './enterprise/summary.js';
+export * from './enterprise/residency.js';
+export * from './schemas/rest-sso.js';
+export * from './schemas/rest-integrations.js';
+export * from './schemas/rest-summary.js';

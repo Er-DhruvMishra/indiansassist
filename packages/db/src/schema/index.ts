@@ -38,3 +38,10 @@ export type DeviceActionRow = typeof tables.deviceAction.$inferSelect;
 export type NewDeviceActionRow = typeof tables.deviceAction.$inferInsert;
 export type WakeAttemptRow = typeof tables.wakeAttempt.$inferSelect;
 export type AmtSolRow = typeof tables.amtSol.$inferSelect;
+// Phase E (docs/specs/phase-e-contracts.md section 13.2)
+export type SsoDomainRow = typeof tables.ssoDomain.$inferSelect;
+export type SsoIdentityRow = typeof tables.ssoIdentity.$inferSelect;
+export type SessionSummaryRow = typeof tables.sessionSummary.$inferSelect;
+export type NewSessionSummaryRow = typeof tables.sessionSummary.$inferInsert;
+export type TicketPushRow = typeof tables.ticketPush.$inferSelect;
+export type NewTicketPushRow = typeof tables.ticketPush.$inferInsert;

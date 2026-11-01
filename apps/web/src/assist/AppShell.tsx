@@ -20,6 +20,10 @@ const NAV: { to: string; label: string; cap?: Capability; end?: boolean }[] = [
   { to: '/app/users', label: 'Users', cap: 'users.list' },
   { to: '/app/branding', label: 'Branding', cap: 'branding' },
   { to: '/app/playbooks', label: 'Playbooks', cap: 'playbooks.admin' },
+  // Phase E section 13.4 (the AI policy is readable by every role, section 2.3).
+  { to: '/app/settings/sso', label: 'SSO', cap: 'sso.read' },
+  { to: '/app/settings/integrations', label: 'Integrations', cap: 'integrations.read' },
+  { to: '/app/settings/ai', label: 'AI' },
   { to: '/app/account', label: 'Account' },
 ];
 

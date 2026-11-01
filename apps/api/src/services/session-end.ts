@@ -36,6 +36,15 @@ export type EndOptions = {
 
 export type EndedSession = { session: SessionRow; previousState: SessionState; org: OrgRow };
 
+/**
+ * Phase E section 1.4: after-commit hooks run once a session has ended and the hub has been told (the ai stream
+ * registers its rule 5.8a enqueue here from its own module). A hook's failure is logged and never fails the end.
+ * Each hook receives the app context as well as the ended session (contract correction: section 1.4 wrote
+ * `(ended) => Promise<void>`, but a module-level hook needs the context of the app that ended the session).
+ */
+export type SessionEndedHook = (ctx: AppContext, ended: EndedSession) => Promise<void>;
+export const onSessionEnded: SessionEndedHook[] = [];
+
 /** Ends a session; throws SessionAlreadyEndedError (409 already_ended) or InvalidSessionTransitionError. */
 export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: EndOptions): Promise<EndedSession> {
   const chatCount = await ctx.hub.chatCount(sessionId);
@@ -93,6 +102,8 @@ export async function endSessionFlow(ctx: AppContext, sessionId: string, opts: E
   // Phase D section 6.4: the receipt of a device session (to the device, mailed when unattended).
   if (out.session.deviceId)
     await onDeviceSessionEnded(ctx, out).catch((err: unknown) => ctx.log.warn({ err, sessionId }, 'device receipt failed'));
+  for (const hook of onSessionEnded)
+    await hook(ctx, out).catch((err: unknown) => ctx.log.warn({ err, sessionId }, 'session-ended hook failed'));
   return out;
 }
 

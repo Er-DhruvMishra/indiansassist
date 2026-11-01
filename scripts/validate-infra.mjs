@@ -81,6 +81,37 @@ export function validateInfra(root = ROOT) {
       if (!env.has(k)) problems.push(`${k} is not documented (Phase C)`);
     }
     if (env.get('AGENT_DEV_STUB')) problems.push('AGENT_DEV_STUB must be empty in the production example');
+    // Phase E (docs/specs/phase-e-contracts.md section 10): every key documented, no default secret, no loosening
+    // switch, and the retired OIDC_* keys gone (W86).
+    for (const k of [
+      'ORG_SECRETS_KEY',
+      'ORG_SECRETS_KEYS_PREVIOUS',
+      'ORG_SECRETS_FP_KEY',
+      'EGRESS_PRIVATE_ALLOW',
+      'EGRESS_METADATA_ADDRESSES',
+      'AI_LOCAL_ENDPOINTS',
+      'AI_LOCAL_MODEL',
+      'AI_LOCAL_API_KEY',
+      'AI_LOCAL_TIMEOUT_MS',
+      'AI_ANTHROPIC_API_KEY',
+      'AI_ANTHROPIC_REGIONS',
+      'AI_ANTHROPIC_MODEL',
+      'AI_ANTHROPIC_TIMEOUT_MS',
+      'AI_ANTHROPIC_MAX_RETRIES',
+    ]) {
+      if (!env.has(k)) problems.push(`${k} is not documented (Phase E)`);
+    }
+    for (const k of ['ORG_SECRETS_KEY', 'ORG_SECRETS_KEYS_PREVIOUS', 'ORG_SECRETS_FP_KEY', 'AI_LOCAL_API_KEY', 'AI_ANTHROPIC_API_KEY']) {
+      if (env.get(k)) problems.push(`${k} must be empty in the example (no default secrets)`);
+    }
+    for (const k of ['EGRESS_ALLOW_HTTP', 'EGRESS_ALLOW_LOOPBACK']) {
+      if (env.get(k)) problems.push(`${k} must not be set in the production example (tests and local fakes only)`);
+    }
+    for (const k of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET']) {
+      if (env.has(k)) problems.push(`${k} is retired (Phase E W86); remove it`);
+    }
+    if ((env.get('AUTH_PROVIDER') ?? 'local') !== 'local') problems.push('AUTH_PROVIDER must be local (Phase E W86)');
+    if (env.get('AI_ANTHROPIC_MAX_RETRIES') !== '0') problems.push('AI_ANTHROPIC_MAX_RETRIES must default to 0');
     return problems;
   });
   run('region origins / extension manifest', () => checkRegionAgreement(env, buildManifest));

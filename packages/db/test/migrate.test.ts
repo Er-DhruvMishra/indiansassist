@@ -31,6 +31,13 @@ import {
   TAMPER_STATES,
   WAKE_METHODS,
   WAKE_STATES,
+  AI_PROVIDERS,
+  SSO_DOMAIN_STATUSES,
+  SSO_PROTOCOLS,
+  SUMMARY_STATES,
+  SUMMARY_TRIGGERS,
+  TICKET_PUSH_MODES,
+  TICKET_PUSH_STATES,
 } from '@indiansassist/shared';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -68,7 +75,11 @@ const TABLES = [
   'session_file',
   'session_host',
   'session_participant',
+  'session_summary',
+  'sso_domain',
+  'sso_identity',
   'technician_seat',
+  'ticket_push',
   'token',
   'user',
   'wake_attempt',
@@ -104,6 +115,14 @@ const ENUMS: Record<string, readonly string[]> = {
   wake_method: WAKE_METHODS,
   wake_state: WAKE_STATES,
   tamper_state: TAMPER_STATES,
+  // Phase E (section 13.2)
+  ai_provider: AI_PROVIDERS,
+  sso_domain_status: SSO_DOMAIN_STATUSES,
+  sso_protocol: SSO_PROTOCOLS,
+  summary_state: SUMMARY_STATES,
+  summary_trigger: SUMMARY_TRIGGERS,
+  ticket_push_mode: TICKET_PUSH_MODES,
+  ticket_push_state: TICKET_PUSH_STATES,
 };
 
 describe('migrations', () => {
@@ -153,10 +172,10 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(8);
+    expect(rows[0]!.n).toBe(9);
   });
 
-  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C, playbook-pins and Phase D migrations', () => {
+  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C, playbook-pins, Phase D and Phase E migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
@@ -169,6 +188,7 @@ describe('migrations', () => {
       '0005_phase_c',
       '0006_playbook_pins',
       '0007_phase_d',
+      '0008_phase_e',
     ]);
   });
 

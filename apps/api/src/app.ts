@@ -45,6 +45,21 @@ import { playbookRoutes } from './routes/playbooks.js';
 import { deviceRoutes } from './fleet/routes-devices.js';
 import { fleetAdminRoutes } from './fleet/routes-admin.js';
 import { buildMailer } from './mail/mailer.js';
+import { createEgressFetch, systemDnsResolver, type DnsResolver } from './lib/egress.js';
+import type { EnterpriseRoutePlugin } from './lib/enterprise-hooks.js';
+import { orgSecretKeysFromConfig } from './lib/org-secrets.js';
+import { noSummaryProviders, type RegionSummaryProviders } from './ai/provider.js';
+import { aiRoutes } from './ai/routes.js';
+import { integrationRoutes } from './integrations/routes.js';
+import { residencyRoutes } from './routes/residency.js';
+import { ssoRoutes } from './sso/routes.js';
+import type { Region } from '@indiansassist/shared';
+
+/**
+ * Phase E section 1.4: one route plugin per parallel stream, each landed empty by the foundation and filled by its
+ * stream without editing this file again.
+ */
+export const ENTERPRISE_ROUTE_PLUGINS: readonly EnterpriseRoutePlugin[] = [ssoRoutes, integrationRoutes, aiRoutes, residencyRoutes];
 
 export type BuildAppOptions = {
   config: Config;
@@ -55,6 +70,10 @@ export type BuildAppOptions = {
   metrics?: Metrics;
   /** pino level; 'silent' disables logging (tests). Defaults to config.logLevel. */
   logLevel?: string;
+  /** Phase E: DNS for the egress guard and TXT proofs (default: the system resolver). */
+  dnsResolver?: DnsResolver;
+  /** Phase E: summary providers per region (default: none). */
+  summaryProviders?: (region: Region) => RegionSummaryProviders;
 };
 
 export function packageVersion(): string {
@@ -109,7 +128,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
     installerDist: new InstallerDist(config),
     hub: null as unknown as SignalHub,
     mailer: buildMailer(config, app.log),
+    orgSecrets: orgSecretKeysFromConfig(config.orgSecrets),
+    dnsResolver: opts.dnsResolver ?? systemDnsResolver,
+    egressFetch: null as unknown as AppContext['egressFetch'],
+    summaryProviders: opts.summaryProviders ?? noSummaryProviders,
   };
+  ctx.egressFetch = createEgressFetch({ config: config.egress, lookup: (h) => ctx.dnsResolver.lookup(h), log: app.log, metrics: ctx.metrics });
   ctx.agentDist.load();
   if (ctx.agentDist.lastError) app.log.info({ reason: ctx.agentDist.lastError }, 'no agent builds served by this node');
   ctx.installerDist.load();
@@ -140,6 +164,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   // Phase D (docs/specs/phase-d-contracts.md section 7.2)
   await deviceRoutes(app, ctx);
   await fleetAdminRoutes(app, ctx);
+  // Phase E (docs/specs/phase-e-contracts.md section 1.4)
+  for (const plugin of ENTERPRISE_ROUTE_PLUGINS) await plugin(app, ctx);
 
   ctx.hub.attach(app);
   await ctx.hub.start();

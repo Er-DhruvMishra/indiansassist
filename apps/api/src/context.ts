@@ -5,7 +5,11 @@ import type { AuthProvider } from './adapters/auth-provider.js';
 import type { Presence } from './adapters/presence.js';
 import type { ObjectStorage } from './adapters/storage.js';
 import type { Config } from './config.js';
+import type { DnsResolver, EgressFetch } from './lib/egress.js';
 import type { KeySet } from './lib/keys.js';
+import type { OrgSecretKeys } from './lib/org-secrets.js';
+import type { RegionSummaryProviders } from './ai/provider.js';
+import type { Region } from '@indiansassist/shared';
 import type { Metrics } from './lib/metrics.js';
 import type { Limiter, ShortCodeBudget } from './limiter.js';
 import type { Mailer } from './mail/mailer.js';
@@ -66,4 +70,12 @@ export type AppContext = {
   hub: SignalHub;
   /** Phase D rule 6.4d: the consent-receipt mailer. */
   mailer: Mailer;
+  /** Phase E section 2.1: the org-secret keys (sealOrgSecret / openOrgSecret / orgSecretFingerprint). */
+  orgSecrets: OrgSecretKeys;
+  /** Phase E sections 2.2, 3.2b: DNS for the egress guard and the domain TXT proofs (tests inject a fake). */
+  dnsResolver: DnsResolver;
+  /** Phase E section 2.2: the only way to reach an org-supplied URL. */
+  egressFetch: EgressFetch;
+  /** Phase E section 5.1: the summary providers this node serves for a region (null and null until the ai stream). */
+  summaryProviders: (region: Region) => RegionSummaryProviders;
 };

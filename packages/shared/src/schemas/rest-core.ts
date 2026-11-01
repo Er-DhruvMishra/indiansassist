@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { API_ERROR_CODES } from '../errors.js';
 import { base64Decode } from '../encoding.js';
-import { LIMITS } from '../enums.js';
+import { AI_PROVIDERS, LIMITS, LOGIN_METHODS } from '../enums.js';
 import { sanitiseText, SANITISE_LIMITS } from '../audit/sanitise.js';
 import {
   emailSchema,
@@ -79,6 +79,10 @@ export const userSchema = z.object({
   lastLoginAt: isoTimestampSchema.nullable(),
   /** Phase D section 7.1: the device groups a technician is scoped to (null / [] = none when fleet scoping is on). */
   deviceGroupIds: z.array(uuidSchema).nullable().optional(),
+  /** Phase E section 3.7d: a flagged break-glass org_admin (always sent by a Phase E api). */
+  ssoBreakGlass: z.boolean().optional(),
+  /** Phase E section 3.8: how the current session was minted (`/auth/me` only; null for pre-Phase E sessions). */
+  loginMethod: z.enum(LOGIN_METHODS).nullable().optional(),
 });
 
 export const brandingSchema = z.object({
@@ -99,6 +103,10 @@ export const orgSchema = z.object({
   /** Phase D section 7.1 / rule 8.2d (always sent by the api; optional so earlier fixtures parse). */
   fleetScopingEnabled: z.boolean().optional(),
   wakerMeshEnabled: z.boolean().optional(),
+  /** Phase E sections 3.1, 3.7, 5.2 (always sent by a Phase E api; optional so earlier fixtures parse). */
+  ssoEnabled: z.boolean().optional(),
+  ssoRequired: z.boolean().optional(),
+  aiProvider: z.enum(AI_PROVIDERS).optional(),
 });
 
 export const seatSchema = z.object({

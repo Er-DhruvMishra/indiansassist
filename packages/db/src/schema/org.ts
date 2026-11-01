@@ -1,7 +1,7 @@
 /** Tenancy and identity tables (contracts section 4.2): org, user, technician_seat, auth_session, login_attempt. */
 import { sql } from 'drizzle-orm';
 import { boolean, char, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { DEFAULT_UNATTENDED_POLICY } from '@indiansassist/shared';
+import { DEFAULT_AI_POLICY, DEFAULT_UNATTENDED_POLICY, type LoginMethod } from '@indiansassist/shared';
 import { packageTierEnum, recordingModeEnum, regionEnum, userRoleEnum, userStatusEnum } from './enums.js';
 
 /** `timestamp(..., { withTimezone: true, mode: 'date' })` as section 4 requires. */
@@ -49,6 +49,21 @@ export const org = pgTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default({ ...DEFAULT_UNATTENDED_POLICY }),
+    // Phase E section 13.2: SSO required, the sealed SSO secrets with their set-at and fingerprint (section 2.1),
+    // the SP certificate (clear), the last test login, and the AI policy (section 5.2).
+    ssoRequired: boolean('sso_required').notNull().default(false),
+    ssoSecretEnc: text('sso_secret_enc'),
+    ssoSecretSetAt: tstz('sso_secret_set_at'),
+    ssoSecretFp: char('sso_secret_fp', { length: 8 }),
+    ssoSpKeyEnc: text('sso_sp_key_enc'),
+    ssoSpKeySetAt: tstz('sso_sp_key_set_at'),
+    ssoSpKeyFp: char('sso_sp_key_fp', { length: 8 }),
+    ssoSpCert: text('sso_sp_cert'),
+    ssoLastTest: jsonb('sso_last_test').$type<Record<string, unknown>>(),
+    aiPolicy: jsonb('ai_policy')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({ ...DEFAULT_AI_POLICY }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -77,6 +92,8 @@ export const user = pgTable(
     lastLoginAt: tstz('last_login_at'),
     /** Phase D section 7.1: the device groups of a technician under fleet scoping (null / [] = none). */
     deviceGroupIds: uuid('device_group_ids').array(),
+    /** Phase E section 3.7d: a break-glass org_admin (at most LIMITS.ssoBreakGlassMax per org). */
+    ssoBreakGlass: boolean('sso_break_glass').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -117,8 +134,13 @@ export const authSession = pgTable(
     lastSeenAt: tstz('last_seen_at').notNull().defaultNow(),
     expiresAt: tstz('expires_at').notNull(),
     revokedAt: tstz('revoked_at'),
+    /** Phase E section 3.8: LOGIN_METHODS; null on rows that predate Phase E. */
+    loginMethod: text('login_method').$type<LoginMethod>(),
   },
-  (t) => [index('auth_session_user_id_idx').on(t.userId)],
+  (t) => [
+    index('auth_session_user_id_idx').on(t.userId),
+    check('auth_session_login_method_check', sql`login_method is null or login_method in ('local', 'invite', 'oidc', 'saml')`),
+  ],
 );
 
 export const loginAttempt = pgTable(

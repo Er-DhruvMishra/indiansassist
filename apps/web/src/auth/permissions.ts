@@ -21,7 +21,16 @@ export type Capability =
   | 'fleet.act'
   | 'fleet.amt'
   | 'fleet.queue'
-  | 'fleet.admin';
+  | 'fleet.admin'
+  // Phase E section 2.3
+  | 'sso.read'
+  | 'sso.admin'
+  | 'integrations.read'
+  | 'integrations.admin'
+  | 'integrations.push'
+  | 'ai.admin'
+  | 'summary.write'
+  | 'summary.read';
 
 const MATRIX: Record<Capability, readonly UserRole[]> = {
   'tokens.create': ['technician', 'senior_technician', 'org_admin'],
@@ -51,6 +60,22 @@ const MATRIX: Record<Capability, readonly UserRole[]> = {
   'fleet.queue': ['technician', 'senior_technician', 'org_admin', 'auditor'],
   /** Groups, policy, group assignment, fleet settings, disable / retire / rotate-key / tamper acknowledge. */
   'fleet.admin': ['org_admin'],
+  // Phase E section 2.3 ("own session" scoping of push, summary write and read is the server's, not the client's).
+  /** SSO settings read (secrets never shown). */
+  'sso.read': ['org_admin', 'auditor'],
+  /** SSO configure, domains, SSO required, break-glass, SP key. */
+  'sso.admin': ['org_admin'],
+  /** Integrations list / read (secrets never shown). */
+  'integrations.read': ['org_admin', 'auditor'],
+  /** Integrations configure, test, delete, rotate the webhook secret. */
+  'integrations.admin': ['org_admin'],
+  /** Ticket push and manual retry. */
+  'integrations.push': ['technician', 'senior_technician', 'org_admin'],
+  /** AI policy change (the policy itself is readable by every role). */
+  'ai.admin': ['org_admin'],
+  /** Summary generate / regenerate, transcript upload, edit. */
+  'summary.write': ['technician', 'senior_technician', 'org_admin'],
+  'summary.read': ['technician', 'senior_technician', 'org_admin', 'auditor'],
 };
 
 export function can(role: UserRole | null | undefined, cap: Capability): boolean {

@@ -74,3 +74,16 @@ export function isUniqueViolation(err: unknown, constraint?: string): boolean {
   }
   return false;
 }
+
+/** Phase E section 13.2a: a named summary version that is not `ready` (maps to `409 summary_not_ready`). */
+export class SummaryNotReadyError extends DbError {
+  readonly sessionId: string;
+  readonly version: number;
+  readonly state: string;
+  constructor(sessionId: string, version: number, state: string) {
+    super('summary_not_ready', `summary version ${version} of session ${sessionId} is ${state}, not ready`);
+    this.sessionId = sessionId;
+    this.version = version;
+    this.state = state;
+  }
+}

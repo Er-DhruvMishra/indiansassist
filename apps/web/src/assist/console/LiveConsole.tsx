@@ -20,6 +20,7 @@ import { EndedView, RecordingCard } from './EndedView';
 import { NetworkPanel } from './NetworkPanel';
 import { RemoteView } from './RemoteView';
 import { CONSOLE_RECORDING_DISABLED_TEXT, ServerRecordingBadge } from './ServerRecordingBadge';
+import { useEnterpriseLiveHooks } from './EnterpriseSlots';
 
 const PHASE_TEXT: Record<string, string> = {
   resuming: 'Reconnecting to the session...',
@@ -44,6 +45,8 @@ type LiveConsoleProps = {
 export function LiveConsole({ sessionId, signal, cached, helloReady, deskLabel, session }: LiveConsoleProps) {
   const [ctrl, setCtrl] = useState<AssistConsoleController | null>(null);
   const startArgs = useRef({ cached, helloReady });
+  // Phase E section 5.3: the transcript notice and upload (stream ai; a no-op until then).
+  useEnterpriseLiveHooks({ sessionId, tier: cached?.tier ?? 'p1_browser' });
   useEffect(() => {
     // Created inside the effect so React StrictMode's mount / unmount / mount gets a fresh controller.
     const c = new AssistConsoleController({ signal, sessionId });

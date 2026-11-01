@@ -1,5 +1,5 @@
 /** auth_session (cookie sessions, section 6.1) and login_attempt (lockout, section 6.5) repositories. */
-import type { Region } from '@indiansassist/shared';
+import type { LoginMethod, Region } from '@indiansassist/shared';
 import { and, count, eq, gt, gte, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Executor } from '../client.js';
 import {
@@ -22,6 +22,8 @@ export type CreateAuthSessionInput = {
   ip?: string | null;
   /** Defaults to now + 7 days. */
   expiresAt?: Date;
+  /** Phase E section 3.8: written on every mint; omitted leaves the column null (pre-Phase E callers). */
+  loginMethod?: LoginMethod | null;
 };
 
 export async function createAuthSession(exec: Executor, input: CreateAuthSessionInput): Promise<AuthSessionRow> {
@@ -34,6 +36,7 @@ export async function createAuthSession(exec: Executor, input: CreateAuthSession
       userAgent: input.userAgent ?? null,
       ip: input.ip ?? null,
       expiresAt: input.expiresAt ?? new Date(Date.now() + AUTH_SESSION_TTL_MS),
+      loginMethod: input.loginMethod ?? null,
     })
     .returning();
   return row!;

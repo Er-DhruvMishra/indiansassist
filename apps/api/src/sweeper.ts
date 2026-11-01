@@ -29,6 +29,17 @@ import { deleteRecording } from './services/recording-delete.js';
 import { deleteParts, failRecording } from './services/recording-service.js';
 import { endSessionQuietly } from './services/session-end.js';
 import { fleetSweep } from './fleet/sweep.js';
+import type { EnterpriseSweepPass } from './lib/enterprise-hooks.js';
+import { sweepTicketPushes } from './integrations/sweep.js';
+import { sweepSummaries } from './ai/worker.js';
+import { sweepSsoDomains } from './sso/sweep.js';
+
+/** Phase E section 1.4: the stream passes, each a no-op until its stream fills it. */
+export const ENTERPRISE_SWEEP_PASSES: readonly [name: string, pass: EnterpriseSweepPass][] = [
+  ['ticket pushes', sweepTicketPushes],
+  ['summaries', sweepSummaries],
+  ['sso domains', sweepSsoDomains],
+];
 
 const HOUR_MS = 60 * 60_000;
 /** Lease TTL: three missed passes before another node takes over. */
@@ -72,6 +83,9 @@ export class Sweeper {
       await this.expiredHandovers();
       // Phase D: action expiry, held-queue re-dispatch, wake confirmation, SOL cap, silent devices.
       await fleetSweep(this.ctx).catch((err: unknown) => this.ctx.log.error({ err }, 'fleet sweep failed'));
+      // Phase E: ticket push retries (4.4d), the summary worker (5.8c), the domain re-check (3.2d).
+      for (const [name, pass] of ENTERPRISE_SWEEP_PASSES)
+        await pass(this.ctx).catch((err: unknown) => this.ctx.log.error({ err, pass: name }, 'enterprise sweep pass failed'));
       if (opts.forcePeriodic || Date.now() - this.lastPeriodic >= HOUR_MS) {
         this.lastPeriodic = Date.now();
         await this.periodicCheckpoints();

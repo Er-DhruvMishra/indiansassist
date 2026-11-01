@@ -47,14 +47,20 @@ export const agentDistManifestSchema = z.object({
 });
 export type AgentDistManifest = z.infer<typeof agentDistManifestSchema>;
 
-/** The dist file name of a build: `IndiansAssist-windows-x64-0.3.0.exe`, `IndiansAssist-android-universal-0.3.0.apk`. */
+/**
+ * The dist file name of a build: `IndiansAssist-windows-x64-0.3.0.exe`, `IndiansAssist-android-universal-0.3.0.apk`,
+ * and (Phase E section 7.6) the raw Linux ELF `IndiansAssist-linux-x64-0.3.0`, which has no extension.
+ */
 export function agentDistFileName(platform: AgentPlatform, arch: AgentArch, v: string): string {
+  if (platform === 'linux') return `IndiansAssist-linux-${arch}-${v}`;
   return `IndiansAssist-${platform}-${arch}-${v}.${platform === 'android' ? 'apk' : 'exe'}`;
 }
 
-/** Which arch values a platform serves (Windows: x64 / arm64; Android: one universal APK). */
+/** Which arch values a platform serves (Windows: x64 / arm64; Android: one universal APK; Linux: x64 only, E W81). */
 export function archAllowed(platform: AgentPlatform, arch: AgentArch): boolean {
-  return platform === 'android' ? arch === 'universal' : arch === 'x64' || arch === 'arm64';
+  if (platform === 'android') return arch === 'universal';
+  if (platform === 'linux') return arch === 'x64';
+  return arch === 'x64' || arch === 'arm64';
 }
 
 export const downloadPrepareSchema = z
@@ -92,6 +98,29 @@ export function parseAgentFileName(name: string): { region: Region; deskCode: st
   const m = AGENT_FILENAME_RE.exec(name);
   if (!m?.groups) return null;
   const region = m.groups['region']!.toLowerCase();
+  const deskCode = `${m.groups['a']}${m.groups['b']}${m.groups['c']}`;
+  if (!isRegion(region) || !isValidShortCode(deskCode)) return null;
+  return { region, deskCode };
+}
+
+/**
+ * Phase E section 7.6: the inner binary of the Linux `.tar.gz` is `IndiansAssist-<region>-<dddd>-<dddd>-<dddd>`
+ * with no extension. Case-sensitive and without a duplicate suffix: a browser's ` (1)` lands on the archive name,
+ * never on the name inside it. Mirrored by `ia_core::download` (linux stream).
+ */
+export const AGENT_LINUX_FILENAME_RE = /^IndiansAssist-(?<region>[a-z]{2}-[a-z]{3,5})-(?<a>\d{4})-(?<b>\d{4})-(?<c>\d{4})$/;
+
+/** The inner Linux binary name for a region and a desk code: `IndiansAssist-in-mum-4821-9365-7715`. */
+export function agentLinuxFileName(region: Region, deskCode: string): string {
+  if (!/^\d{12}$/.test(deskCode)) throw new Error('desk code must be 12 digits');
+  return `IndiansAssist-${region}-${deskCode.slice(0, 4)}-${deskCode.slice(4, 8)}-${deskCode.slice(8, 12)}`;
+}
+
+/** Parses an inner Linux binary name; null unless the region is known and the 12 digits are a Luhn-valid code. */
+export function parseAgentLinuxFileName(name: string): { region: Region; deskCode: string } | null {
+  const m = AGENT_LINUX_FILENAME_RE.exec(name);
+  if (!m?.groups) return null;
+  const region = m.groups['region']!;
   const deskCode = `${m.groups['a']}${m.groups['b']}${m.groups['c']}`;
   if (!isRegion(region) || !isValidShortCode(deskCode)) return null;
   return { region, deskCode };

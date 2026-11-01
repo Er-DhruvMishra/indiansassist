@@ -17,15 +17,31 @@ pub enum CaptureCause {
     DdaLost,
     SecureDesktop,
     Recovered,
+    /// Phase E §7.4: a Wayland session shares no screen (name only; the linux stream sends it).
+    WaylandUnsupported,
+    /// Phase E §16.2: the X11 connection was lost (name only; the linux stream sends it).
+    X11Lost,
 }
 
 impl CaptureCause {
+    /// Every cause, in the order of the shared `CAPTURE_CAUSES`.
+    pub const ALL: [Self; 6] = [
+        Self::Start,
+        Self::DdaLost,
+        Self::SecureDesktop,
+        Self::Recovered,
+        Self::WaylandUnsupported,
+        Self::X11Lost,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             CaptureCause::Start => "start",
             CaptureCause::DdaLost => "dda_lost",
             CaptureCause::SecureDesktop => "secure_desktop",
             CaptureCause::Recovered => "recovered",
+            CaptureCause::WaylandUnsupported => "wayland_unsupported",
+            CaptureCause::X11Lost => "x11_lost",
         }
     }
 }

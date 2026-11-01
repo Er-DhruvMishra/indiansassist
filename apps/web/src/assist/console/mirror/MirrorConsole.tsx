@@ -25,6 +25,7 @@ import { MirrorSidePanels } from './MirrorSidePanels';
 import { ReplayerHost } from './ReplayerHost';
 import { TabControlPanel } from './TabControlPanel';
 import { TabStrip, tabTitle } from './TabStrip';
+import { useEnterpriseLiveHooks } from '../EnterpriseSlots';
 
 const PHASE_TEXT: Record<string, string> = {
   resuming: 'Reconnecting to the session...',
@@ -42,6 +43,8 @@ export function MirrorLiveConsole({ sessionId, signal, cached, helloReady, deskL
   const { me } = useAuth();
   const [ctrl, setCtrl] = useState<MirrorConsoleController | null>(null);
   const startArgs = useRef({ cached, helloReady, assist: { id: me?.user.id ?? '', name: me?.user.name ?? '' } });
+  // Phase E section 5.3: the transcript notice and upload (stream ai; a no-op until then).
+  useEnterpriseLiveHooks({ sessionId, tier: cached?.tier ?? 'p2_extension' });
   useEffect(() => {
     const c = new MirrorConsoleController({ signal, sessionId, assist: startArgs.current.assist });
     c.start(startArgs.current.cached, startArgs.current.helloReady);

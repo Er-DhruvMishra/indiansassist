@@ -4,9 +4,17 @@
  * `ia_device_heartbeat_lag_seconds`, `ia_wake_attempts_total`, `ia_device_actions_total`, `ia_tamper_alerts_total`,
  * `ia_receipts_sent_total`). Every labelled fleet series is zero-initialised over its label values at boot, so a
  * dashboard or alert never has to wait for the first event for the series to exist, and the label names of the
- * contract are always visible on `/metrics`.
+ * contract are always visible on `/metrics`. Phase E (docs/specs/phase-e-contracts.md section 11) adds six series the
+ * foundation registers zero-initialised and the streams increment: `ia_sso_logins_total`, `ia_egress_requests_total`,
+ * `ia_ticket_pushes_total`, `ia_summaries_total`, `ia_summary_seconds`, `ia_redactions_total`.
  */
 import {
+  EGRESS_PURPOSES,
+  INTEGRATION_TYPES,
+  REDACTION_KINDS,
+  SSO_ERROR_CODES,
+  SSO_PROTOCOLS,
+  SUMMARY_FAIL_CAUSES,
   DEVICE_ACTION_KINDS,
   DEVICE_ACTION_STATES,
   TAMPER_CAUSES,
@@ -32,6 +40,19 @@ export type WakeMetricResult = 'woke' | WakeFailCause;
 export const TAMPER_METRIC_CAUSES = [...TAMPER_CAUSES, 'suspected'] as const;
 export type TamperMetricCause = TamperCause | 'suspected';
 
+/** Phase E section 11: `ia_sso_logins_total.result` is `ok` or an SSO_ERROR_CODES value. */
+export const SSO_LOGIN_RESULTS = ['ok', ...SSO_ERROR_CODES] as const;
+/** Phase E section 11: `ia_egress_requests_total.result`. */
+export const EGRESS_RESULTS = ['ok', 'refused', 'timeout', 'error'] as const;
+export type EgressResult = (typeof EGRESS_RESULTS)[number];
+/** Phase E section 11: `ia_ticket_pushes_total.state` counts the terminal and `retrying` transitions. */
+export const TICKET_PUSH_METRIC_STATES = ['delivered', 'retrying', 'failed'] as const;
+/** Phase E section 11: the providers that generate (a `none` policy generates nothing). */
+export const SUMMARY_METRIC_PROVIDERS = ['local', 'anthropic'] as const;
+/** Phase E section 11: `ia_summaries_total.result` is `ready` or a SUMMARY_FAIL_CAUSES value. */
+export const SUMMARY_METRIC_RESULTS = ['ready', ...SUMMARY_FAIL_CAUSES] as const;
+const SUMMARY_SECONDS_BUCKETS = [1, 2, 5, 10, 20, 40, 80, 160];
+
 /** Section 13.5: a heartbeat is due every 30 s +- 5 s, so the interesting mass is 25-35 s and the tail is a stall. */
 const HEARTBEAT_LAG_BUCKETS = [15, 25, 30, 35, 45, 60, 90, 120, 300, 900];
 
@@ -55,6 +76,13 @@ export type Metrics = {
   deviceActions: Counter<'kind' | 'state'>;
   tamperAlerts: Counter<'cause'>;
   receiptsSent: Counter<'channel' | 'delivered'>;
+  /** Phase E section 11. */
+  ssoLogins: Counter<'protocol' | 'result'>;
+  egressRequests: Counter<'purpose' | 'result'>;
+  ticketPushes: Counter<'type' | 'state'>;
+  summaries: Counter<'provider' | 'result'>;
+  summarySeconds: Histogram<'provider'>;
+  redactions: Counter<'kind'>;
 };
 
 export function createMetrics(opts: { defaults?: boolean } = {}): Metrics {
@@ -102,12 +130,53 @@ export function createMetrics(opts: { defaults?: boolean } = {}): Metrics {
       labelNames: ['channel', 'delivered'],
       registers,
     }),
+    ssoLogins: new Counter({
+      name: 'ia_sso_logins_total',
+      help: 'SSO sign-ins by protocol and result (ok or the SSO error code)',
+      labelNames: ['protocol', 'result'],
+      registers,
+    }),
+    egressRequests: new Counter({
+      name: 'ia_egress_requests_total',
+      help: 'Outbound calls to org-supplied URLs through the egress guard, by purpose and result',
+      labelNames: ['purpose', 'result'],
+      registers,
+    }),
+    ticketPushes: new Counter({
+      name: 'ia_ticket_pushes_total',
+      help: 'Ticket push transitions (delivered, retrying, failed) by integration type',
+      labelNames: ['type', 'state'],
+      registers,
+    }),
+    summaries: new Counter({
+      name: 'ia_summaries_total',
+      help: 'Summary generation outcomes by provider (ready or the failure cause)',
+      labelNames: ['provider', 'result'],
+      registers,
+    }),
+    summarySeconds: new Histogram({
+      name: 'ia_summary_seconds',
+      help: 'Seconds one summary generation attempt took, by provider',
+      labelNames: ['provider'],
+      buckets: SUMMARY_SECONDS_BUCKETS,
+      registers,
+    }),
+    redactions: new Counter({ name: 'ia_redactions_total', help: 'Redaction placeholders inserted, by kind', labelNames: ['kind'], registers }),
   };
   for (const result of DEVICE_HELLO_RESULTS) m.deviceHello.inc({ result }, 0);
   for (const method of WAKE_METRIC_METHODS) for (const result of WAKE_METRIC_RESULTS) m.wakeAttempts.inc({ method, result }, 0);
   for (const kind of DEVICE_ACTION_KINDS) for (const state of DEVICE_ACTION_STATES) m.deviceActions.inc({ kind, state }, 0);
   for (const cause of TAMPER_METRIC_CAUSES) m.tamperAlerts.inc({ cause }, 0);
   for (const channel of ['device', 'email'] as const) for (const delivered of ['true', 'false'] as const) m.receiptsSent.inc({ channel, delivered }, 0);
+  // Phase E section 11: every labelled series exists from boot.
+  for (const protocol of SSO_PROTOCOLS) for (const result of SSO_LOGIN_RESULTS) m.ssoLogins.inc({ protocol, result }, 0);
+  for (const purpose of EGRESS_PURPOSES) for (const result of EGRESS_RESULTS) m.egressRequests.inc({ purpose, result }, 0);
+  for (const type of INTEGRATION_TYPES) for (const state of TICKET_PUSH_METRIC_STATES) m.ticketPushes.inc({ type, state }, 0);
+  for (const provider of SUMMARY_METRIC_PROVIDERS) {
+    for (const result of SUMMARY_METRIC_RESULTS) m.summaries.inc({ provider, result }, 0);
+    m.summarySeconds.zero({ provider });
+  }
+  for (const kind of REDACTION_KINDS) m.redactions.inc({ kind }, 0);
   return m;
 }
 

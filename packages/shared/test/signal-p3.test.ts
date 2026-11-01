@@ -36,10 +36,11 @@ const NATIVE = {
 };
 
 describe('desk.hello native', () => {
-  it('a native client needs platform, tokenSource, capabilities and os windows | android', () => {
+  it('a native client needs platform, tokenSource, capabilities and os windows | android | linux (Phase E 7.3a)', () => {
     expect(deskClientSchema.safeParse(NATIVE).success).toBe(true);
     expect(deskClientSchema.safeParse({ ...NATIVE, os: 'android' }).success).toBe(true);
-    expect(deskClientSchema.safeParse({ ...NATIVE, os: 'linux' }).success).toBe(false);
+    expect(deskClientSchema.safeParse({ ...NATIVE, os: 'linux' }).success).toBe(true);
+    expect(deskClientSchema.safeParse({ ...NATIVE, os: 'mac' }).success).toBe(false);
     const { capabilities: _c, ...noCaps } = NATIVE;
     void _c;
     expect(deskClientSchema.safeParse(noCaps).success).toBe(false);

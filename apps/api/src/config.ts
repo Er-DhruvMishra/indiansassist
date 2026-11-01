@@ -95,10 +95,8 @@ const envSchema = z.object({
   S3_ACCESS_KEY: str(''),
   S3_SECRET_KEY: str(''),
   S3_FORCE_PATH_STYLE: bool(true),
-  AUTH_PROVIDER: z.enum(['local', 'oidc']).optional().default('local'),
-  OIDC_ISSUER: str(''),
-  OIDC_CLIENT_ID: str(''),
-  OIDC_CLIENT_SECRET: str(''),
+  /** Phase E W86: only `local`; any other value is a boot problem naming docs/specs/phase-e-contracts.md section 3.10. */
+  AUTH_PROVIDER: str('local'),
   LOG_LEVEL: str('info'),
   RATE_LIMIT_DISABLED: bool(false),
   RECORDING_DOWNLOAD_ORIGIN: str(''),
@@ -133,6 +131,26 @@ const envSchema = z.object({
   MAIL_FROM: str('IndiansAssist <no-reply@localhost>'),
   DEVICE_HELLO_RATE: int(500),
   WAKE_CONFIRM_SEC: int(LIMITS.wakeConfirmSec),
+  // Phase E (docs/specs/phase-e-contracts.md sections 2.1, 2.2, 5.2a, 10)
+  /** `<keyId>:<64 hex>`; seals org secrets at rest. Dev: generated and persisted to ./data/org-secrets.key. */
+  ORG_SECRETS_KEY: str(''),
+  /** Comma list of `<keyId>:<64 hex>`, used only to open (rotation). */
+  ORG_SECRETS_KEYS_PREVIOUS: str(''),
+  /** 64 hex; keys the secret fingerprints; never rotated. Dev: persisted to ./data/org-secrets-fp.key. */
+  ORG_SECRETS_FP_KEY: str(''),
+  EGRESS_PRIVATE_ALLOW: str(''),
+  EGRESS_METADATA_ADDRESSES: str(''),
+  EGRESS_ALLOW_HTTP: bool(false),
+  EGRESS_ALLOW_LOOPBACK: bool(false),
+  AI_LOCAL_ENDPOINTS: str(''),
+  AI_LOCAL_MODEL: str('local'),
+  AI_LOCAL_API_KEY: str(''),
+  AI_LOCAL_TIMEOUT_MS: int(60_000),
+  AI_ANTHROPIC_API_KEY: str(''),
+  AI_ANTHROPIC_REGIONS: str(''),
+  AI_ANTHROPIC_MODEL: str('claude-opus-5-5'),
+  AI_ANTHROPIC_TIMEOUT_MS: int(90_000),
+  AI_ANTHROPIC_MAX_RETRIES: int(0),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -168,7 +186,8 @@ export type Config = {
   storageDriver: 'fs' | 's3';
   storageFsDir: string;
   s3: { endpoint: string; region: string; bucket: string; accessKey: string; secretKey: string; forcePathStyle: boolean };
-  authProvider: 'local' | 'oidc';
+  /** Phase E W86: the password provider only; per-org SSO lives in `apps/api/src/sso`. */
+  authProvider: 'local';
   logLevel: string;
   rateLimitDisabled: boolean;
   /** Storage quotas (section 6.10): bytes per org (0 = unlimited), open uploads per org / user, upload window. */
@@ -191,10 +210,67 @@ export type Config = {
   mail: { driver: 'log' | 'smtp'; smtpUrl: string; from: string };
   /** Phase D rule 9.8: the credential vault (OpenBao / Vault AppRole); '' addr = not configured. */
   vault: { addr: string; roleId: string; secretId: string };
+  /** Phase E section 2.1: the org-secret key (current), the open-only previous keys and the fingerprint key. */
+  orgSecrets: OrgSecretsConfig;
+  /** Phase E section 2.2: the egress guard's operator settings. */
+  egress: EgressConfig;
+  /** Phase E section 5.2a: operator AI configuration, per region, never per org. */
+  ai: AiConfig;
   repoRoot: string;
   /** Where dev secrets are persisted (`./data`). */
   dataDir: string;
 };
+
+export type OrgSecretsConfig = {
+  keyId: string;
+  key: Buffer;
+  /** Open-only keys (`ORG_SECRETS_KEYS_PREVIOUS`). */
+  previous: { keyId: string; key: Buffer }[];
+  /** 32 bytes; `HMAC-SHA256(fpKey, plaintext)` fingerprints (section 2.1). */
+  fpKey: Buffer;
+};
+
+/** One `EGRESS_PRIVATE_ALLOW` entry: an exact host name or a CIDR, each with a port (default 443 for a host). */
+export type EgressAllowEntry = { kind: 'host'; host: string; port: number } | { kind: 'cidr'; cidr: string; port: number };
+
+export type EgressConfig = {
+  allowHttp: boolean;
+  allowLoopback: boolean;
+  privateAllow: EgressAllowEntry[];
+  /** Extra metadata addresses refused always (beyond the built-in list of section 2.2 G2). */
+  metadataAddresses: string[];
+};
+
+export type AiConfig = {
+  local: { endpoints: Partial<Record<Region, string>>; model: string; apiKey: string; timeoutMs: number };
+  anthropic: { apiKey: string; regions: Region[]; model: string; timeoutMs: number; maxRetries: number };
+};
+
+const KEYED_HEX64 = /^([A-Za-z0-9_-]{1,16}):([0-9a-fA-F]{64})$/;
+
+/** Parses `EGRESS_PRIVATE_ALLOW` (section 2.2 G2): `host[:port]` or `CIDR:port`; throws naming the bad entry. */
+export function parseEgressAllow(value: string): EgressAllowEntry[] {
+  const out: EgressAllowEntry[] = [];
+  for (const raw of value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    const cidr = /^([0-9a-fA-F:.]+\/\d{1,3}):(\d{1,5})$/.exec(raw);
+    if (cidr) {
+      const port = Number(cidr[2]);
+      if (port < 1 || port > 65535) throw new Error(`EGRESS_PRIVATE_ALLOW entry ${raw} has a bad port`);
+      out.push({ kind: 'cidr', cidr: cidr[1]!, port });
+      continue;
+    }
+    if (raw.includes('/')) throw new Error(`EGRESS_PRIVATE_ALLOW entry ${raw} must be CIDR:port`);
+    const hp = /^([A-Za-z0-9.-]+)(?::(\d{1,5}))?$/.exec(raw);
+    if (!hp) throw new Error(`EGRESS_PRIVATE_ALLOW entry ${raw} is not host[:port] or CIDR:port`);
+    const port = hp[2] ? Number(hp[2]) : 443;
+    if (port < 1 || port > 65535) throw new Error(`EGRESS_PRIVATE_ALLOW entry ${raw} has a bad port`);
+    out.push({ kind: 'host', host: hp[1]!.toLowerCase(), port });
+  }
+  return out;
+}
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -320,6 +396,59 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
   if (e.MAIL_DRIVER === 'smtp' && e.SMTP_URL === '') problems.push('SMTP_URL is required with MAIL_DRIVER=smtp');
   if (e.VAULT_ADDR !== '' && (e.VAULT_ROLE_ID === '' || e.VAULT_SECRET_ID === ''))
     problems.push('VAULT_ROLE_ID and VAULT_SECRET_ID are required with VAULT_ADDR');
+  // Phase E W86: the oidc stub and AUTH_PROVIDER=oidc are retired.
+  if (e.AUTH_PROVIDER !== 'local')
+    problems.push(`AUTH_PROVIDER must be local (got ${e.AUTH_PROVIDER}); per-org SSO replaces it, docs/specs/phase-e-contracts.md section 3.10`);
+  // Phase E section 2.1: the org-secret keys (dev: generated and persisted like the other dev secrets).
+  let orgKeyRaw = e.ORG_SECRETS_KEY;
+  if (orgKeyRaw === '') {
+    if (production) problems.push('ORG_SECRETS_KEY is required in production');
+    orgKeyRaw = readOrCreateSecret(resolve(dataDir, 'org-secrets.key'), () => `k1:${randomBytes(32).toString('hex')}`, (s) => KEYED_HEX64.test(s), persist);
+  }
+  const orgKeyMatch = KEYED_HEX64.exec(orgKeyRaw);
+  if (!orgKeyMatch) problems.push('ORG_SECRETS_KEY must be "<keyId>:<64 hex>" (keyId 1..16 of [A-Za-z0-9_-])');
+  const previousOrgKeys: { keyId: string; key: Buffer }[] = [];
+  for (const entry of splitUrlList(e.ORG_SECRETS_KEYS_PREVIOUS)) {
+    const m = KEYED_HEX64.exec(entry);
+    if (!m) problems.push('ORG_SECRETS_KEYS_PREVIOUS entries must be "<keyId>:<64 hex>"');
+    else if (orgKeyMatch && m[1] === orgKeyMatch[1]) problems.push(`ORG_SECRETS_KEYS_PREVIOUS repeats the current key id ${m[1]}`);
+    else previousOrgKeys.push({ keyId: m[1]!, key: Buffer.from(m[2]!, 'hex') });
+  }
+  let fpKeyRaw = e.ORG_SECRETS_FP_KEY;
+  if (fpKeyRaw === '') {
+    if (production) problems.push('ORG_SECRETS_FP_KEY is required in production');
+    fpKeyRaw = readOrCreateSecret(resolve(dataDir, 'org-secrets-fp.key'), () => randomBytes(32).toString('hex'), (s) => HEX64.test(s), persist);
+  }
+  if (!HEX64.test(fpKeyRaw)) problems.push('ORG_SECRETS_FP_KEY must be 64 hex chars');
+  // Phase E section 2.2 G1/G2: the loosening switches never combine with production.
+  if (production && e.EGRESS_ALLOW_HTTP) problems.push('EGRESS_ALLOW_HTTP must not be set with NODE_ENV=production');
+  if (production && e.EGRESS_ALLOW_LOOPBACK) problems.push('EGRESS_ALLOW_LOOPBACK must not be set with NODE_ENV=production');
+  let egressAllow: EgressAllowEntry[] = [];
+  try {
+    egressAllow = parseEgressAllow(e.EGRESS_PRIVATE_ALLOW);
+  } catch (err) {
+    problems.push((err as Error).message);
+  }
+  // Phase E section 5.2a: operator AI configuration (an unknown region code is a boot problem).
+  let aiLocalEndpoints: Partial<Record<Region, string>> = {};
+  try {
+    aiLocalEndpoints = parseRegionOrigins(e.AI_LOCAL_ENDPOINTS);
+  } catch (err) {
+    problems.push(`AI_LOCAL_ENDPOINTS: ${(err as Error).message}`);
+  }
+  for (const [region, url] of Object.entries(aiLocalEndpoints)) {
+    if (!/^https?:\/\/\S+$/.test(url ?? '')) problems.push(`AI_LOCAL_ENDPOINTS entry for ${region} must be an http(s) base URL`);
+  }
+  if (e.AI_LOCAL_TIMEOUT_MS < 1000 || e.AI_LOCAL_TIMEOUT_MS > 600_000) problems.push('AI_LOCAL_TIMEOUT_MS must be 1000..600000');
+  let aiAnthropicRegions: Region[] = [];
+  try {
+    aiAnthropicRegions = parseRegionList(e.AI_ANTHROPIC_REGIONS);
+  } catch (err) {
+    problems.push(`AI_ANTHROPIC_REGIONS: ${(err as Error).message}`);
+  }
+  if (e.AI_ANTHROPIC_TIMEOUT_MS < 1000 || e.AI_ANTHROPIC_TIMEOUT_MS > 600_000) problems.push('AI_ANTHROPIC_TIMEOUT_MS must be 1000..600000');
+  if (e.AI_ANTHROPIC_MAX_RETRIES > 2)
+    problems.push('AI_ANTHROPIC_MAX_RETRIES must be 0..2 (above 0 one attempt can outlast the section 11 latency target)');
   if (problems.length > 0) throw new ConfigError(`refusing to boot: ${problems.join('; ')}`);
 
   const suffixes = splitUrlList(e.ICE_OWN_HOST_SUFFIXES);
@@ -361,7 +490,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
       secretKey: e.S3_SECRET_KEY,
       forcePathStyle: e.S3_FORCE_PATH_STYLE,
     },
-    authProvider: e.AUTH_PROVIDER,
+    authProvider: 'local',
     logLevel: e.LOG_LEVEL,
     rateLimitDisabled: e.RATE_LIMIT_DISABLED,
     recordingDownloadOrigin: downloadOrigin,
@@ -395,6 +524,33 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     },
     mail: { driver: e.MAIL_DRIVER, smtpUrl: e.SMTP_URL, from: e.MAIL_FROM },
     vault: { addr: e.VAULT_ADDR.replace(/\/+$/, ''), roleId: e.VAULT_ROLE_ID, secretId: e.VAULT_SECRET_ID },
+    orgSecrets: {
+      keyId: orgKeyMatch![1]!,
+      key: Buffer.from(orgKeyMatch![2]!, 'hex'),
+      previous: previousOrgKeys,
+      fpKey: Buffer.from(fpKeyRaw, 'hex'),
+    },
+    egress: {
+      allowHttp: e.EGRESS_ALLOW_HTTP,
+      allowLoopback: e.EGRESS_ALLOW_LOOPBACK,
+      privateAllow: egressAllow,
+      metadataAddresses: splitUrlList(e.EGRESS_METADATA_ADDRESSES),
+    },
+    ai: {
+      local: {
+        endpoints: Object.fromEntries(Object.entries(aiLocalEndpoints).map(([r, u]) => [r, (u ?? '').replace(/\/+$/, '')])),
+        model: e.AI_LOCAL_MODEL !== '' ? e.AI_LOCAL_MODEL : 'local',
+        apiKey: e.AI_LOCAL_API_KEY,
+        timeoutMs: e.AI_LOCAL_TIMEOUT_MS,
+      },
+      anthropic: {
+        apiKey: e.AI_ANTHROPIC_API_KEY,
+        regions: aiAnthropicRegions,
+        model: e.AI_ANTHROPIC_MODEL !== '' ? e.AI_ANTHROPIC_MODEL : 'claude-opus-5-5',
+        timeoutMs: e.AI_ANTHROPIC_TIMEOUT_MS,
+        maxRetries: e.AI_ANTHROPIC_MAX_RETRIES,
+      },
+    },
     repoRoot,
     dataDir,
   };

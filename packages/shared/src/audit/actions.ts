@@ -27,11 +27,13 @@ import { P2_AUDIT_ACTIONS, P2_CHAIN_SCHEMAS } from './actions-p2.js';
 import { A2_AUDIT_ACTIONS, A2_CHAIN_SCHEMAS, recordingFailedDataSchema, recordingStoredDataSchema } from './actions-a2.js';
 import { P3_AUDIT_ACTIONS, P3_CHAIN_SCHEMAS } from './actions-p3.js';
 import { P4_AUDIT_ACTIONS, P4_CHAIN_SCHEMAS } from './actions-p4.js';
+import { E_AUDIT_ACTIONS, E_CHAIN_SCHEMAS } from './actions-e.js';
 
 export * from './actions-p2.js';
 export * from './actions-a2.js';
 export * from './actions-p3.js';
 export * from './actions-p4.js';
+export * from './actions-e.js';
 
 export const AUDIT_ACTIONS = [
   'auth.signup',
@@ -74,6 +76,8 @@ export const AUDIT_ACTIONS = [
   ...P3_AUDIT_ACTIONS,
   // Phase D (docs/specs/phase-d-contracts.md section 13.3)
   ...P4_AUDIT_ACTIONS,
+  // Phase E (docs/specs/phase-e-contracts.md section 13.3)
+  ...E_AUDIT_ACTIONS,
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -210,6 +214,7 @@ const SCHEMAS = {
   ...A2_CHAIN_SCHEMAS,
   ...P3_CHAIN_SCHEMAS,
   ...P4_CHAIN_SCHEMAS,
+  ...E_CHAIN_SCHEMAS,
 } satisfies Record<AuditAction, z.ZodType>;
 
 export type AuditDataSchemas = typeof SCHEMAS;

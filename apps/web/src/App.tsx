@@ -28,6 +28,11 @@ const AccountPage = lazy(() => import('./assist/AccountPage').then((m) => ({ def
 const FleetPage = lazy(() => import('./assist/fleet/FleetPage').then((m) => ({ default: m.FleetPage })));
 const DeviceDetailPage = lazy(() => import('./assist/fleet/DeviceDetailPage').then((m) => ({ default: m.DeviceDetailPage })));
 const DeviceGroupAdminPage = lazy(() => import('./assist/fleet/DeviceGroupAdminPage').then((m) => ({ default: m.DeviceGroupAdminPage })));
+// Phase E (docs/specs/phase-e-contracts.md section 13.4): placeholders the streams fill.
+const SsoSettingsPage = lazy(() => import('./assist/sso/SsoSettingsPage').then((m) => ({ default: m.SsoSettingsPage })));
+const SsoContinuePage = lazy(() => import('./assist/sso/SsoContinuePage').then((m) => ({ default: m.SsoContinuePage })));
+const IntegrationsPage = lazy(() => import('./assist/integrations/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })));
+const AiPolicyPage = lazy(() => import('./assist/summary/AiPolicyPage').then((m) => ({ default: m.AiPolicyPage })));
 
 function RootRedirect() {
   const { status } = useAuth();
@@ -60,6 +65,7 @@ export function App() {
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/invite" element={<InvitePage />} />
+        <Route path="/sso/continue" element={<SsoContinuePage />} />
         <Route path="/join" element={<JoinPage />} />
         <Route path="/download" element={<DownloadRedirect />} />
         <Route path="/room" element={<RoomLayout />}>
@@ -86,6 +92,9 @@ export function App() {
           <Route path="users" element={<Allow cap="users.list"><UsersPage /></Allow>} />
           <Route path="branding" element={<Allow cap="branding"><BrandingPage /></Allow>} />
           <Route path="playbooks" element={<Allow cap="playbooks.admin"><PlaybooksPage /></Allow>} />
+          <Route path="settings/sso" element={<Allow cap="sso.read"><SsoSettingsPage /></Allow>} />
+          <Route path="settings/integrations" element={<Allow cap="integrations.read"><IntegrationsPage /></Allow>} />
+          <Route path="settings/ai" element={<AiPolicyPage />} />
           <Route path="account" element={<AccountPage />} />
         </Route>
         <Route path="*" element={<NotFound />} />

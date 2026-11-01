@@ -186,6 +186,11 @@ Each release:
   `AGENT_ANDROID_APP_URL`, `TOKEN_SIGNING_KEY`).
 - The per-region `assetlinks.json` (Android App Links) and the agent `AGENT_DIST_DIR` payload from section 1.4.
 - `infra/HARDENING.md` (the documented hardening baseline) and `pnpm validate:infra` as the pre-deploy check.
+- **Phase E upgrade step** (`docs/specs/phase-e-contracts.md` rule 12.2): before upgrading to a Phase E release, set
+  `ORG_SECRETS_KEY` (`<keyId>:<64 hex>`) and `ORG_SECRETS_FP_KEY` (64 hex, generated once and never rotated) in `infra/.env`;
+  a production node refuses to boot without them, and `AUTH_PROVIDER=oidc` (never functional) now refuses to boot too (W86).
+  To rotate `ORG_SECRETS_KEY`, move the old value into `ORG_SECRETS_KEYS_PREVIOUS`, set a new key id, deploy, run
+  `pnpm secrets:reseal` (or let values re-seal lazily) and drop the old key only once the re-seal reports none left under it.
 
 ### 2.3 Server release gates (section 15.5)
 

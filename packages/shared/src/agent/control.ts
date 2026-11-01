@@ -148,6 +148,13 @@ export const agentControlRequestSchema = z.discriminatedUnion(
   AGENT_CONTROL_OPS.map((op) => req(op)) as unknown as [ReturnType<typeof req>, ...ReturnType<typeof req>[]],
 );
 
+/**
+ * `ctl.event capture.cause` (section 5.1); `wayland_unsupported` and `x11_lost` are the Linux causes of Phase E
+ * section 7.4. Mirrored by `ia_core::capture_decision::CaptureCause`.
+ */
+export const CAPTURE_CAUSES = ['start', 'dda_lost', 'secure_desktop', 'recovered', 'wayland_unsupported', 'x11_lost'] as const;
+export type CaptureCause = (typeof CAPTURE_CAUSES)[number];
+
 /** The new `ctl.event` kinds (section 5.1). */
 export const AGENT_CONTROL_EVENT_KINDS = [
   'monitors',
@@ -166,7 +173,7 @@ export const agentControlEventSchema = z.discriminatedUnion('kind', [
   ev('capture', {
     monitorId,
     path: z.enum(CAPTURE_PATHS),
-    cause: z.enum(['start', 'dda_lost', 'secure_desktop', 'recovered']),
+    cause: z.enum(CAPTURE_CAUSES),
   }),
   ev('agent_level', {
     level: z.enum(AGENT_CONSENT_LEVELS),

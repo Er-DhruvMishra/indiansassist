@@ -5,6 +5,13 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
 import {
   ACTOR_TYPES,
+  AI_PROVIDERS,
+  SSO_DOMAIN_STATUSES,
+  SSO_PROTOCOLS,
+  SUMMARY_STATES,
+  SUMMARY_TRIGGERS,
+  TICKET_PUSH_MODES,
+  TICKET_PUSH_STATES,
   CHECKPOINT_KINDS,
   CONSENT_STATES,
   DEVICE_ACTION_KINDS,
@@ -69,3 +76,11 @@ export const deviceActionStateEnum = pgEnum('device_action_state', DEVICE_ACTION
 export const wakeMethodEnum = pgEnum('wake_method', WAKE_METHODS);
 export const wakeStateEnum = pgEnum('wake_state', WAKE_STATES);
 export const tamperStateEnum = pgEnum('tamper_state', TAMPER_STATES);
+// Phase E (docs/specs/phase-e-contracts.md section 13.2; `integration_type` gains `webhook` through INTEGRATION_TYPES)
+export const ssoProtocolEnum = pgEnum('sso_protocol', SSO_PROTOCOLS);
+export const ssoDomainStatusEnum = pgEnum('sso_domain_status', SSO_DOMAIN_STATUSES);
+export const ticketPushStateEnum = pgEnum('ticket_push_state', TICKET_PUSH_STATES);
+export const ticketPushModeEnum = pgEnum('ticket_push_mode', TICKET_PUSH_MODES);
+export const summaryStateEnum = pgEnum('summary_state', SUMMARY_STATES);
+export const summaryTriggerEnum = pgEnum('summary_trigger', SUMMARY_TRIGGERS);
+export const aiProviderEnum = pgEnum('ai_provider', AI_PROVIDERS);

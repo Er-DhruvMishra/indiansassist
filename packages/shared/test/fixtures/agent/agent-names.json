@@ -85,7 +85,10 @@
   "capturePaths": [
     "dda",
     "gdi",
-    "projection"
+    "projection",
+    "xshm",
+    "xgetimage",
+    "none"
   ],
   "secFailReasons": [
     "suite",
@@ -200,6 +203,70 @@
     "hwEncoder": true,
     "interpreters": []
   },
+  "agentPlatforms": [
+    "windows",
+    "android",
+    "linux"
+  ],
+  "captureCauses": [
+    "start",
+    "dda_lost",
+    "secure_desktop",
+    "recovered",
+    "wayland_unsupported",
+    "x11_lost"
+  ],
+  "linuxFileNames": [
+    {
+      "name": "IndiansAssist-in-mum-4821-9365-7715",
+      "parsed": {
+        "region": "in-mum",
+        "deskCode": "482193657715"
+      }
+    },
+    {
+      "name": "IndiansAssist-eu-fra-1000-0000-0008",
+      "parsed": {
+        "region": "eu-fra",
+        "deskCode": "100000000008"
+      }
+    },
+    {
+      "name": "IndiansAssist-us-east-9999-9999-9991",
+      "parsed": {
+        "region": "us-east",
+        "deskCode": "999999999991"
+      }
+    },
+    {
+      "name": "IndiansAssist-in-mum-4821-9365-7715.exe",
+      "parsed": null
+    },
+    {
+      "name": "IndiansAssist-in-mum-4821-9365-7715 (1)",
+      "parsed": null
+    },
+    {
+      "name": "IndiansAssist-in-mum-4821-9365-7715.tar.gz",
+      "parsed": null
+    },
+    {
+      "name": "IndiansAssist-IN-MUM-4821-9365-7715",
+      "parsed": null
+    },
+    {
+      "name": "indiansassist-in-mum-4821-9365-7715",
+      "parsed": null
+    },
+    {
+      "name": "IndiansAssist-xx-abc-4821-9365-7715",
+      "parsed": null
+    },
+    {
+      "name": "IndiansAssist-in-mum-4821-9365-7716",
+      "parsed": null
+    }
+  ],
   "limits": {
     "secHandshakeTimeoutMs": 10000,
     "secFrameMaxBytes": 131072,

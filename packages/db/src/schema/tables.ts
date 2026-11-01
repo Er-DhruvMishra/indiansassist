@@ -8,3 +8,7 @@ export { auditEntry, auditCheckpoint } from './audit.js';
 export { sessionFile } from './files.js';
 export { recording, integration } from './recording.js';
 export { playbook, playbookRun, elevationHandover } from './playbook.js';
+// Phase E (docs/specs/phase-e-contracts.md section 13.2)
+export { ssoDomain, ssoIdentity } from './sso.js';
+export { sessionSummary } from './summary.js';
+export { ticketPush } from './ticketing.js';

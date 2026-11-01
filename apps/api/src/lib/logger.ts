@@ -141,6 +141,26 @@ export const REDACT_PATHS = [
   '*.secret',
   '*.vaultToken',
   '*.serverChallenge',
+  // Phase E section 14: org secrets and credentials, SAML and OIDC artefacts, transcripts, summary output, ticket
+  // bodies and notes ('*.password' and '*.nonce' are above; the OIDC code arrives in req.query, already redacted, and
+  // a bare '*.code' is deliberately absent because it would erase the error codes the logs keep).
+  '*.clientSecret',
+  '*.credentials',
+  '*.apiKey',
+  '*.apiToken',
+  '*.personalAccessToken',
+  '*.refreshToken',
+  '*.privateKey',
+  '*.SAMLResponse',
+  '*.RelayState',
+  '*.id_token',
+  '*.access_token',
+  '*.codeVerifier',
+  '*.transcript',
+  '*.messages',
+  '*.output',
+  '*.ticket',
+  '*.note',
 ];
 
 export function pathOnly(url: string | undefined): string {

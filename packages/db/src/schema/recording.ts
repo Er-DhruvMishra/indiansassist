@@ -53,6 +53,13 @@ export const integration = pgTable(
     type: integrationTypeEnum('type').notNull(),
     config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
     enabled: boolean('enabled').notNull().default(false),
+    // Phase E section 13.2: the sealed credentials (for `webhook` also the full URL, section 4.2), their set-at and
+    // fingerprint (section 2.1), the last test and who last changed the row.
+    credentialsEnc: text('credentials_enc'),
+    credentialsSetAt: tstz('credentials_set_at'),
+    credentialsFp: char('credentials_fp', { length: 8 }),
+    lastTest: jsonb('last_test').$type<Record<string, unknown>>(),
+    updatedBy: uuid('updated_by').references(() => user.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

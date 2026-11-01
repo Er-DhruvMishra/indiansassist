@@ -20,7 +20,7 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | coturn | BSD-3-Clause | STUN/TURN | self-hosted service |
 | PostgreSQL | PostgreSQL Licence | database | self-hosted service |
 | Valkey | BSD-3-Clause | presence / pub-sub (Redis compatible) | self-hosted service |
-| Keycloak | Apache-2.0 | SSO / OIDC (optional) | planned, Phase E |
+| Keycloak | Apache-2.0 | optional IdP a self-hoster may point an org at (Compose profile `sso`); the api is the OIDC relying party and SAML SP itself (Phase E W60), nothing of Keycloak is linked or required | optional self-hosted service, not a dependency |
 | SeaweedFS | Apache-2.0 | object storage (Compose default, S3 gateway) | self-hosted service |
 | Garage | AGPL-3.0 (run only as an unmodified separate process over its S3 API, nothing linked or copied) | object storage, optional alternative | self-hosted service, not the default |
 | prom-client | Apache-2.0 | `/metrics` | in use (Phase A) |
@@ -92,3 +92,16 @@ Our code: source available (PRD section 15.5). Third party components we build o
 | RustDesk, MinIO source | AGPL | reference reading only, never copied | forbidden in repo |
 | **Phase D packaging (`packaging/`)** | | | |
 | WiX Toolset v5 (5.0.2, installed as the .NET global tool `wix`: `dotnet tool install --global wix --version 5.0.2`) | MS-RL (Microsoft Reciprocal License); used only as an unmodified build tool, no WiX source copied into our code, no WiX binaries checked in; the MSI carries only the standard Windows Installer tables WiX emits and our own custom-action DLL (`packaging/windows/ca`, built from our source with crates already listed above: serde, serde_json, windows-sys) | compiles `packaging/windows/IndiansAssist.wxs` into the agent MSI and runs the ICE validation (`wix msi validate`), Phase D §11.2 / §12.2 | build tool, not shipped |
+| **Phase E (`docs/specs/phase-e-contracts.md` section 9; "planned, Phase E <stream>" rows flip to "in use" when that stream installs the package)** | | | |
+| undici 8.12.3 (exact pin) | MIT | `undici.fetch` and the pinned-address `undici.Agent` of the egress guard `egressFetch` (`apps/api/src/lib/egress.ts`, E §2.2) | in use (Phase E foundation, api) |
+| openid-client 6.x (+ jose 6, oauth4webapi 3) | MIT (all) | OIDC relying party, authorization code + PKCE (E §3.4) | planned, Phase E sso |
+| @node-saml/node-saml 5.x (+ xml-crypto 6, @xmldom/xmldom, @xmldom/is-dom-node, xml2js, xmlbuilder, xml-encryption, xpath) | MIT (all) | SAML 2.0 SP, SP-initiated (E §3.5) | planned, Phase E sso |
+| @peculiar/x509 3.x (+ tsyringe, @peculiar/asn1-*, @peculiar/utils) | MIT (all) | the self-signed SAML SP certificate (E §3.5 S7) | planned, Phase E sso |
+| @anthropic-ai/sdk 1.x (+ standardwebhooks MIT, json-schema-to-ts MIT, @opentelemetry/api Apache-2.0) | Apache-2.0 (E W73) | the opt-in `anthropic` summary provider (E §5.7) | planned, Phase E ai |
+| vLLM, llama.cpp, Ollama (any one, chosen by the operator) | Apache-2.0, MIT, MIT | optional model server behind `AI_LOCAL_ENDPOINTS` (E §5.6); a separate service, nothing linked; the model weights' licence is the operator's | self-hosted service, optional (Phase E ai) |
+| x11rb 0.13 (already in `agent/Cargo.lock` as 0.13.2) | MIT OR Apache-2.0 | Linux X11 protocol client: RandR, MIT-SHM, XTEST, XFixes (E §7.2) | planned, Phase E linux |
+| arboard 3 (already in `agent/Cargo.lock` transitively; a direct dependency of `ia-input-x11` with its X11 backend) | MIT OR Apache-2.0 | Linux clipboard and the clipboard token carrier (E §7.2, §7.6) | planned, Phase E linux |
+| ksni (to pin) + zbus (to pin) | Unlicense (ksni), MIT (zbus), to be confirmed at install | best-effort StatusNotifierItem tray, Linux-target dependency only (E §7.3b) | planned, Phase E linux |
+| libc 0.2 | MIT OR Apache-2.0 | `SO_PEERCRED`, `memfd_create`, `getuid`, `setsid`, `killpg` on Linux (E §7.2, §7.8) | planned, Phase E linux |
+| ashpd (to pin) | MIT, to be confirmed at install | the feature-gated, unshipped Wayland `portal` capture, Linux-target dependency only (E §7.4) | planned, Phase E linux (off by default) |
+| cargo-zigbuild (to pin), Zig toolchain (to pin) | MIT (both), to be confirmed at install | the Linux release build against the glibc 2.35 floor (E §7.9); build tools, not shipped | planned, Phase E linux (build only) |

@@ -3,6 +3,9 @@ import {
   base64urlEncode,
   canonicalJson,
   formatShortCode,
+  parseAiPolicy,
+  parseSsoConfig,
+  type LoginMethod,
   TOKEN_PREFIX,
   utf8Encode,
   type ApprovedBy,
@@ -33,7 +36,11 @@ import { iso, isoOrNull, unixSeconds } from './time.js';
 
 export type UserRef = { id: string; name: string };
 
-export function toUser(u: UserRow): User {
+/**
+ * Phase E section 13.1: `ssoBreakGlass` always; `loginMethod` only when the caller passes the current session's
+ * method (`/auth/me`), null for a session minted before Phase E.
+ */
+export function toUser(u: UserRow, opts: { loginMethod?: LoginMethod | null } = {}): User {
   return {
     id: u.id,
     orgId: u.orgId,
@@ -44,6 +51,8 @@ export function toUser(u: UserRow): User {
     createdAt: iso(u.createdAt),
     lastLoginAt: isoOrNull(u.lastLoginAt),
     deviceGroupIds: u.deviceGroupIds ?? null,
+    ssoBreakGlass: u.ssoBreakGlass ?? false,
+    ...(opts.loginMethod !== undefined ? { loginMethod: opts.loginMethod } : {}),
   };
 }
 
@@ -58,6 +67,10 @@ export function toOrg(o: OrgRow): Org {
     createdAt: iso(o.createdAt),
     fleetScopingEnabled: o.fleetScopingEnabled,
     wakerMeshEnabled: o.wakerMeshEnabled,
+    // Phase E sections 3.1, 3.7, 5.2: read from the new columns (a legacy or absent value reads as off / none).
+    ssoEnabled: parseSsoConfig(o.ssoConfig)?.enabled ?? false,
+    ssoRequired: o.ssoRequired ?? false,
+    aiProvider: parseAiPolicy(o.aiPolicy).provider,
   };
 }
 

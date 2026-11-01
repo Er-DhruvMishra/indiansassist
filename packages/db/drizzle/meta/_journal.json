@@ -57,6 +57,13 @@
       "when": 1793513053583,
       "tag": "0007_phase_d",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793559366157,
+      "tag": "0008_phase_e",
+      "breakpoints": true
     }
   ]
 }

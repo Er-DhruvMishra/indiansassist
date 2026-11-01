@@ -28,6 +28,7 @@ import { MonitorPicker } from './MonitorPicker';
 import { PlaybookPanel } from './PlaybookPanel';
 import { SasConfirmDialog, SAS_STOP_TEXT } from './SasConfirmDialog';
 import { controlBlocker, hasFeature, levelAllows, levelChip, sasOk } from './agentState';
+import { NoScreenSlot, useEnterpriseLiveHooks } from '../EnterpriseSlots';
 import { PolicyState, UnattendedBanner, type UnattendedSessionInfo } from './UnattendedBanner';
 import type { OverlayActions } from './InputOverlay';
 
@@ -60,6 +61,8 @@ export type AgentConsoleProps = {
 export function AgentConsole({ sessionId, signal, cached, helloReady, deskLabel, capabilities, device, deps }: AgentConsoleProps) {
   const [ctrl, setCtrl] = useState<AgentConsoleController | null>(null);
   const startArgs = useRef({ cached, helloReady, capabilities, deps });
+  // Phase E section 5.3: the transcript notice and upload (stream ai; a no-op until then).
+  useEnterpriseLiveHooks({ sessionId, tier: cached?.tier ?? null });
   useEffect(() => {
     const a = startArgs.current;
     const c = new AgentConsoleController({ signal, sessionId, ...a.deps });
@@ -171,6 +174,8 @@ export function AgentConsoleView({
             <NavButtons show={hasFeature(snap, 'nav')} disabled={!controlling} onNav={(a) => ctrl.nav(a)} />
             {controlling && <p className="text-xs text-slate-600 dark:text-slate-400">Text is typed as you see it; shortcuts follow the user&apos;s keyboard layout. Hold Escape for 1 s to release the keyboard.</p>}
           </div>
+          {/* Phase E section 7.4: the no-screen state of a Desk without `screen` (stream linux). */}
+          <NoScreenSlot capabilities={snap.capabilities}>
           <AgentScreen
             monitors={snap.monitors}
             viewed={snap.viewed}
@@ -197,6 +202,7 @@ export function AgentConsoleView({
                 }} onFit={() => undefined} onFullscreen={() => void fsRef.current?.requestFullscreen?.().catch(() => undefined)} />
             }
           />
+          </NoScreenSlot>
         </Card>
         <div className="flex flex-col gap-4">
           <Card>

@@ -129,7 +129,8 @@ export type FileDirection = (typeof FILE_DIRECTIONS)[number];
 export const CHECKPOINT_KINDS = ['periodic', 'verify', 'export'] as const;
 export type CheckpointKind = (typeof CHECKPOINT_KINDS)[number];
 
-export const INTEGRATION_TYPES = ['zoho_desk', 'servicenow', 'jira', 'freshdesk'] as const;
+/** `webhook` (Phase E section 4.1): the generic HMAC-signed webhook type. */
+export const INTEGRATION_TYPES = ['zoho_desk', 'servicenow', 'jira', 'freshdesk', 'webhook'] as const;
 export type IntegrationType = (typeof INTEGRATION_TYPES)[number];
 
 /** Phase D rule 3.7: `superseded` (re-enrolled), `retired` (soft delete), `deregistered` (signed uninstall). */
@@ -143,7 +144,8 @@ export type Side = (typeof SIDES)[number];
 export const TOKEN_REVOKE_REASONS = ['manual', 'auto_denied', 'user_disabled'] as const;
 export type TokenRevokeReason = (typeof TOKEN_REVOKE_REASONS)[number];
 
-export const LOGIN_METHODS = ['local', 'invite'] as const;
+/** `oidc`, `saml` (Phase E section 3.8): sessions minted by SSO. */
+export const LOGIN_METHODS = ['local', 'invite', 'oidc', 'saml'] as const;
 export type LoginMethod = (typeof LOGIN_METHODS)[number];
 
 export const VERIFY_FAILURE_KINDS = [
@@ -287,6 +289,25 @@ export const LIMITS = {
   deviceTagsMax: 32,
   deviceGroupsPerOrgMax: 500,
   fleetPageMax: 200,
+  // Phase E section 13.1 additions.
+  ssoFlowTtlSec: 600,
+  ssoDomainsMax: 20,
+  ssoDomainRecheckHours: 168,
+  ssoBreakGlassMax: 2,
+  breakGlassSessionHours: 1,
+  samlResponseMaxBytes: 262_144,
+  ticketPushMaxAttempts: 6,
+  ticketPushManualRetries: 3,
+  ticketBodyMax: 20_000,
+  summaryInputMaxBytes: 131_072,
+  summaryEventsMax: 400,
+  summaryTranscriptTtlSec: 1800,
+  summaryTranscriptGraceSec: 20,
+  summaryTranscriptUploadMaxBytes: 524_288,
+  summaryMaxAttempts: 4,
+  /** Per region (section 5.8c): the worker runs only on the region's sweeper lease holder. */
+  summaryConcurrency: 2,
+  webhookRotationOverlapHours: 24,
 } as const;
 
 export const DEFAULT_ANNOT_COLOR = '#f59e0b';
@@ -421,3 +442,5 @@ export const RRWEB_RECORDING_MIME = 'application/x-ia-rrweb+jsonl';
 export * from './enums-p3.js';
 // Phase D (docs/specs/phase-d-contracts.md section 13.1): the P4 enumerations live in enums-p4.ts.
 export * from './enums-p4.js';
+// Phase E (docs/specs/phase-e-contracts.md section 13.1): the enterprise enumerations live in enums-e.ts.
+export * from './enums-e.js';

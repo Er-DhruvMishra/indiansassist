@@ -99,17 +99,28 @@ impl QualityPreset {
     pub const ALL: [Self; 4] = [Self::Auto, Self::Sharp, Self::Smooth, Self::Floor];
 }
 
-/// `CAPTURE_PATHS` (contract §4.4).
+/// `CAPTURE_PATHS` (contract §4.4; Phase E §7.2/§7.4 adds the Linux X11 paths and the
+/// Wayland no-screen path as names only, the linux stream wires them).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapturePath {
     Dda,
     Gdi,
     Projection,
+    Xshm,
+    Xgetimage,
+    None,
 }
 
 impl CapturePath {
-    pub const ALL: [Self; 3] = [Self::Dda, Self::Gdi, Self::Projection];
+    pub const ALL: [Self; 6] = [
+        Self::Dda,
+        Self::Gdi,
+        Self::Projection,
+        Self::Xshm,
+        Self::Xgetimage,
+        Self::None,
+    ];
 }
 
 /// `NAV_ACTIONS` (contract §5.1; Windows answers `not_supported`).

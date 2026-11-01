@@ -124,11 +124,13 @@ export const ELEVATION_FAIL_ERRORS = [
 export type ElevationFailError = (typeof ELEVATION_FAIL_ERRORS)[number];
 export const NAV_ACTIONS = ['back', 'home', 'recents', 'notifications'] as const;
 export type NavAction = (typeof NAV_ACTIONS)[number];
-export const CAPTURE_PATHS = ['dda', 'gdi', 'projection'] as const;
+/** `xshm`, `xgetimage`, `none` (Phase E section 7.2, 7.4): the Linux X11 paths and the Wayland no-screen path. */
+export const CAPTURE_PATHS = ['dda', 'gdi', 'projection', 'xshm', 'xgetimage', 'none'] as const;
 export type CapturePath = (typeof CAPTURE_PATHS)[number];
 
 /** Phase C section 2.2: agent build platforms and architectures of `manifest.json`. */
-export const AGENT_PLATFORMS = ['windows', 'android'] as const;
+/** `linux` (Phase E section 7.6): the per-download .tar.gz of the x64 ELF. */
+export const AGENT_PLATFORMS = ['windows', 'android', 'linux'] as const;
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];
 export const AGENT_ARCHES = ['x64', 'arm64', 'universal'] as const;
 export type AgentArch = (typeof AGENT_ARCHES)[number];

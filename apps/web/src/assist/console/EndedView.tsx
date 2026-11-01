@@ -105,6 +105,8 @@ export function RecordingCard({
   );
 }
 
+import { SummaryPanelSlot, TicketPushSlot } from './EnterpriseSlots';
+
 export function EndedView({
   detail,
   recording,
@@ -158,6 +160,9 @@ export function EndedView({
           </table>
         )}
       </Card>
+      {/* Phase E section 13.4: the AI summary (stream ai) and the ticket push (stream tickets). */}
+      <SummaryPanelSlot session={detail} />
+      <TicketPushSlot session={detail} />
       {can(role, 'audit.session') && (
         <Card
           title="Session audit"

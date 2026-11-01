@@ -63,6 +63,39 @@ export const API_ERROR_STATUS = {
   download_unavailable: 503,
   /** Phase D rule 9.8: the credential vault is not configured or unreachable. */
   vault_unavailable: 503,
+  // ---------- Phase E (docs/specs/phase-e-contracts.md section 2.6) ----------
+  /** Password login, accept-invite or password change of a non-break-glass user of an SSO-required org. */
+  sso_required: 403,
+  /** `details.missing` (section 3.7a). */
+  sso_not_ready: 409,
+  sso_required_on: 409,
+  last_break_glass: 409,
+  break_glass_invalid_user: 400,
+  /** `details.cause`. */
+  sso_discovery_failed: 400,
+  sso_cert_invalid: 400,
+  domain_invalid: 400,
+  domain_not_allowed: 400,
+  domain_taken: 409,
+  domain_exists: 409,
+  push_id_conflict: 409,
+  domain_limit: 409,
+  /** `details.found` (at most 5 values, each cut to 100 chars). */
+  domain_unverified: 409,
+  /** `details.cause` (section 2.2 G1/G2 at save time). */
+  egress_refused: 400,
+  integration_not_configured: 409,
+  integration_disabled: 409,
+  session_not_ended: 409,
+  summary_not_ready: 409,
+  summary_running: 409,
+  summary_conflict: 409,
+  retry_limit: 409,
+  ai_provider_unavailable: 409,
+  ai_ack_required: 400,
+  ai_disabled: 409,
+  ai_transcript_disabled: 409,
+  transcript_notice_missing: 409,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_STATUS;

@@ -117,8 +117,8 @@ export const deskClientSchema = z
         c.tokenSource !== undefined &&
         c.capabilities !== undefined &&
         c.browser === undefined &&
-        (c.os === 'windows' || c.os === 'android')),
-    { message: 'a native client sends version, os (windows | android), platform, tokenSource and capabilities, no browser' },
+        (c.os === 'windows' || c.os === 'android' || c.os === 'linux')),
+    { message: 'a native client sends version, os (windows | android | linux), platform, tokenSource and capabilities, no browser' },
   )
   .refine(
     (c) =>
