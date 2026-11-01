@@ -172,5 +172,7 @@ keyboard-only accessibility spec (`e2e:p4`). The api table of section 15.3 has n
   disposable machine (install, enrollment, a real desktop session, the secure desktop, one
   elevation prompt, a service restart, uninstall); a serial-over-LAN close carrying real bytes,
   which needs a proxy that streams data; the full-size `smoke:p4:load` run at 2,000 devices,
-  proven so far at 25; and an Android emulator re-run of the strengthened `desk_stopped`
-  assertion.
+  proven so far at 25.
+- **Android emulator e2e: closed (1 Nov 2026, `6b9e946`).** `IA_EMULATOR=1 pnpm android:e2e` passes
+  17/17 on Pixel 7 API 35, including "Stop ends the session as `desk_stopped`". The earlier failure
+  was the harness, not the app: the logcat step encoding turned underscores into spaces.
