@@ -6,6 +6,7 @@ import { closeDb, createDb, migrate, type Db } from '@indiansassist/db';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { inject } from 'vitest';
 import WebSocket from 'ws';
+import type { Presence } from '../src/adapters/presence.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import type { AppContext, Timing } from '../src/context.js';
@@ -38,7 +39,13 @@ export async function makeDb(): Promise<Db> {
   return db;
 }
 
-export async function makeApp(env: Record<string, string> = {}, timing: Partial<Timing> = {}): Promise<TestApp> {
+/**
+ * `logLevel` raises the app out of `silent` (a test that needs to read what the server logs; see
+ * `captureLogLines`), `presence` swaps the presence driver (a clock-controlled `MemoryPresence`, a fake Redis).
+ */
+export type AppOpts = { logLevel?: string; presence?: Presence };
+
+export async function makeApp(env: Record<string, string> = {}, timing: Partial<Timing> = {}, opts: AppOpts = {}): Promise<TestApp> {
   const storageDir = mkdtempSync(join(tmpdir(), 'ia-api-test-'));
   const config = loadConfig(
     {
@@ -61,7 +68,14 @@ export async function makeApp(env: Record<string, string> = {}, timing: Partial<
     { persistSecrets: false },
   );
   const db = await makeDb();
-  const { app, ctx } = await buildApp({ config, db, logLevel: 'silent', metrics: createMetrics({ defaults: false }), timing });
+  const { app, ctx } = await buildApp({
+    config,
+    db,
+    logLevel: opts.logLevel ?? 'silent',
+    metrics: createMetrics({ defaults: false }),
+    timing,
+    ...(opts.presence ? { presence: opts.presence } : {}),
+  });
   trackServerErrors(app);
   await app.ready();
   return {
@@ -99,6 +113,31 @@ export function trackServerErrors(app: FastifyInstance): void {
     if (list.length > 20) list.shift();
     if (process.env['IA_TEST_DEBUG']) console.error(`[IA_TEST_DEBUG] ${line}\n${err.stack ?? ''}`);
   });
+}
+
+function symbolNamed(o: object, description: string): symbol | null {
+  for (let p: object | null = o; p !== null; p = Object.getPrototypeOf(p) as object | null) {
+    for (const k of Object.getOwnPropertySymbols(p)) if (k.description === description) return k;
+  }
+  return null;
+}
+
+/**
+ * Redirects the app's pino stream into the returned array, so a test can read every line the server writes. pino
+ * writes to fd 1 through sonic-boom, which neither `process.stdout.write` nor vitest's console capture sees, and
+ * `pino` itself is not resolvable from this package, so the stream is found by its symbol on `app.log`. Child
+ * loggers (`req.log`) inherit it. Needs an app built with a real `logLevel` (not `silent`).
+ */
+export function captureLogLines(app: FastifyInstance): string[] {
+  const sym = symbolNamed(app.log as unknown as object, 'pino.stream');
+  if (!sym) throw new Error('app.log is not a pino logger: build the app with { logLevel: "info" }');
+  const lines: string[] = [];
+  (app.log as unknown as Record<symbol, unknown>)[sym] = {
+    write(s: string) {
+      lines.push(s);
+    },
+  };
+  return lines;
 }
 
 /** The most recent server-side error recorded by trackServerErrors, for failure messages. */
