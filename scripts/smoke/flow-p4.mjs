@@ -3,8 +3,9 @@
 // desktop worker. Enrollment with a region-signed enroll.iaconfig, the signed /signal/device challenge, an unattended
 // session reaching active with session.unattended_started chained (its policy snapshot and approvedBy readable back
 // on REST and in session.created) and a valid device_attest, the rule 6.2a arrival push to the console, a queued action
-// delivered on reconnect with its signed result chained, a wake whose waker opens the sealed MAC and confirms, a
-// device.tamper producing tamper.alert, the signed deregister, and the org chain verified.
+// delivered on reconnect with its signed result chained, a vault-backed action whose secret is read at dispatch only
+// (sealed to the one device, or an honest vault_unavailable on a node with no vault), a wake whose waker opens the
+// sealed MAC and confirms, a device.tamper producing tamper.alert, the signed deregister, and the org chain verified.
 
 import { randomBytes } from 'node:crypto';
 import { SignalClient } from './ws-client.mjs';
@@ -375,6 +376,63 @@ export async function p4Steps(run, ctx) {
     for (const want of ['device.action_queued:user', 'device.action_dispatched:system', 'device.action_started:device', 'device.action_completed:device'])
       check(acts.includes(want), `chain has ${want} (got ${acts.join(', ')})`);
     return `action ${q.actionId}`;
+  });
+
+  await run.step('P4 vault: a vault-backed action is read at dispatch only, sealed to the one device, or fails vault_unavailable honestly', async () => {
+    const refs = [{ env: 'IA_SMOKE_SECRET', path: 'smoke/api-key' }];
+    const pb = await api.expect(
+      'POST',
+      '/api/v1/orgs/current/playbooks',
+      { name: `Smoke vault rotate ${randomBytes(3).toString('hex')}`, interpreter: 'cmd', body: 'echo rotating the key', vaultRefs: refs },
+      [201],
+    );
+    eq(JSON.stringify(pb.vaultRefs), JSON.stringify(refs), 'the catalogue entry keeps its vaultRefs (rule 9.8)');
+    const path = `/api/v1/devices/${state.A.deviceId}/actions`;
+    const payload = { playbookId: pb.id, args: {}, requiresElevation: false };
+    eq((await api.request('POST', path, { kind: 'playbook_run', payload })).status, 400, 'a vault-backed run needs a typed reason');
+    // Queue it while the device is away: the vault must not be read at queue time, so no secret may rest in the row.
+    state.A.ws.close();
+    await state.A.ws.waitClose(T);
+    await new Promise((r) => setTimeout(r, 300));
+    const q = await api.expect('POST', path, { kind: 'playbook_run', payload, reason: 'smoke: rotate the API key' }, [202]);
+    eq(q.state, 'queued', 'queued while the device is offline');
+    const queued = (await api.expect('GET', path)).items.find((a) => a.id === q.actionId);
+    check(queued && !JSON.stringify(queued).includes('sealed'), 'the queued row carries no sealed secret');
+    const ok = await state.A.connect(ctx);
+    check(!ok.queued.some((a) => a.id === q.actionId), 'a vault-backed action is not delivered inside hello.ok.queued');
+    let frame = null;
+    try {
+      frame = assertDeviceFrame(s(), await state.A.ws.next((m) => m.t === 'device.action' && m.actionId === q.actionId, 2000, 'device.action'));
+    } catch {
+      frame = null;
+    }
+    const chain = await api.expect('GET', '/api/v1/audit?action=secret.injected&limit=50');
+    const injected = chain.items.find((e) => e.data?.actionId === q.actionId);
+    if (!frame) {
+      // No vault on this node (the usual smoke setup): the action fails rather than running without its secret.
+      const row = (await api.expect('GET', path)).items.find((a) => a.id === q.actionId);
+      eq(row?.state, 'failed', 'with no vault reachable the action fails');
+      eq(row?.result?.error, 'vault_unavailable', 'the honest error of rule 9.8');
+      check(!injected, 'nothing is chained as injected when no secret was ever read');
+      return 'no vault reachable: failed vault_unavailable (set VAULT_ADDR / VAULT_ROLE_ID / VAULT_SECRET_ID to drive the sealed path)';
+    }
+    eq(frame.secrets?.length, 1, 'one sealed value per ref, attached at dispatch only');
+    eq(frame.secrets[0].env, 'IA_SMOKE_SECRET', 'the env name the playbook declared');
+    const value = new TextDecoder().decode(s().openSealed(state.A.kexSecret, state.A.deviceId, 'vault-secret', frame.secrets[0].sealed));
+    check(value.length > 0, 'the device opens the sealed secret with its own sealing key');
+    let opened = false;
+    try {
+      s().openSealed(state.B.kexSecret, state.B.deviceId, 'vault-secret', frame.secrets[0].sealed);
+      opened = true;
+    } catch {
+      opened = false;
+    }
+    check(!opened, 'no other device can open it: sealed to one device');
+    check(injected, 'secret.injected chained at dispatch');
+    eq(injected.actor.type, 'system', 'secret.injected actor');
+    eq(JSON.stringify(injected.data.refs), JSON.stringify(refs), 'the chain records env + path, never the value');
+    check(!JSON.stringify(chain.items).includes(value), 'the secret value is never chained');
+    return `secret sealed to ${state.A.deviceId} for one use`;
   });
 
   await run.step('P4 wake: the waker peer opens the sealed MAC, wake.sent; the target reconnects -> device.woke pushed and chained', async () => {

@@ -4,62 +4,24 @@
  * section 6.2 refusals at `POST /devices/:id/sessions`, fleet RBAC with scoping on and off, cross-org 404, the worker
  * credential's capability subset, the action `deny` gate, and the branded installer download of sections 12.1 / 13.4.
  */
-import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  base64urlDecode,
-  base64urlEncode,
-  devicePublicKeyOf,
-  deviceSigInput,
-  kexPublicKeyOf,
-  kidOf,
-  installerFileName,
-  sha256Hex,
-  signDeviceInput,
-} from '@indiansassist/shared';
+import { base64urlEncode, installerFileName, sha256Hex } from '@indiansassist/shared';
 import { listAuditByOrgPaginated } from '@indiansassist/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { addMember, call, createToken, listen, makeApp, signup, SignalClient, type Account, type TestApp } from './helpers.js';
-
-const CAPS = {
-  monitors: 1,
-  elevation: 'admin',
-  features: ['screen', 'input', 'chat', 'service_input'],
-  encoders: ['vp8'],
-  hwEncoder: false,
-  interpreters: ['powershell'],
-  serviceVersion: '0.4.0',
-};
-
-type Dev = { seed: Uint8Array; publicKey: string; kex: string; keyId: string; deviceId?: string };
-
-function newDev(): Dev {
-  const seed = new Uint8Array(randomBytes(32));
-  const publicKey = devicePublicKeyOf(seed);
-  return { seed, publicKey, kex: kexPublicKeyOf(new Uint8Array(randomBytes(32))), keyId: kidOf(base64urlDecode(publicKey)) };
-}
-
-function enrollBody(d: Dev, enrollConfig: string, tokenId: string, interactive = 'locked') {
-  return {
-    enrollConfig,
-    devicePublicKey: d.publicKey,
-    deviceKexPublicKey: d.kex,
-    deviceKeyProof: signDeviceInput(deviceSigInput.enroll({ tokenId, devicePublicKey: d.publicKey, deviceKexPublicKey: d.kex }), d.seed),
-    machine: {
-      name: 'PC',
-      platform: 'windows',
-      osVersion: '10.0',
-      arch: 'x64',
-      serviceVersion: '0.4.0',
-      hwFingerprint: randomBytes(32).toString('hex'),
-      wakeMac: null,
-      amt: null,
-      capabilities: CAPS,
-      interactive: { state: interactive, idleSec: null, at: 1 },
-    },
-  };
-}
+import { addMember, call, createToken, listen, signup, SignalClient, type Account, type TestApp } from './helpers.js';
+import {
+  connectDevice,
+  deviceGroup,
+  deviceSignalUrl,
+  enrollBody,
+  enrollConfigFor,
+  enrollDevice,
+  makeP4App,
+  newDev,
+  p4Admin,
+  type Dev,
+} from './p4-kit.js';
 
 describe('phase D api', () => {
   let t: TestApp;
@@ -67,65 +29,17 @@ describe('phase D api', () => {
   let admin: Account;
   const sockets: SignalClient[] = [];
 
-  async function enrollConfig(acc: Account, maxDevices: number, groupId?: string): Promise<{ cfg: string; tokenId: string }> {
-    const tok = await createToken(t.app, acc, { tier: 'p4_installed', typ: 'enrollment', maxDevices });
-    const res = await call(t.app, `/api/v1/devices/enroll-config?tokenId=${tok.token.id}${groupId ? `&groupId=${groupId}` : ''}`, { cookie: acc.cookie });
-    expect(res.statusCode).toBe(200);
-    return { cfg: (res.json() as { iaconfig: string }).iaconfig, tokenId: tok.token.id };
-  }
-
-  async function enroll(acc: Account, opts: { groupId?: string; interactive?: string } = {}): Promise<Dev> {
-    const d = newDev();
-    const { cfg, tokenId } = await enrollConfig(acc, 1, opts.groupId);
-    const res = await call(t.app, '/api/v1/devices/enroll', { body: enrollBody(d, cfg, tokenId, opts.interactive) });
-    expect(res.statusCode, res.body).toBe(201);
-    d.deviceId = (res.json() as { deviceId: string }).deviceId;
-    return d;
-  }
-
-  async function connect(d: Dev, interactive = 'locked', badSig = false): Promise<SignalClient> {
-    const ws = await SignalClient.open(url.replace(/\/signal$/, '/signal/device'), { origin: null });
-    sockets.push(ws);
-    const ch = await ws.next('device.challenge');
-    const nonce = base64urlEncode(new Uint8Array(randomBytes(16)));
-    const sig = badSig
-      ? base64urlEncode(new Uint8Array(64))
-      : signDeviceInput(deviceSigInput.hello({ deviceId: d.deviceId!, serverChallenge: String(ch['serverChallenge']), nonce }), d.seed);
-    ws.send({
-      t: 'device.hello',
-      deviceId: d.deviceId,
-      keyId: d.keyId,
-      nonce,
-      sig,
-      client: {
-        serviceVersion: '0.4.0',
-        agentVersion: '0.4.0',
-        osVersion: '10.0',
-        arch: 'x64',
-        capabilities: CAPS,
-        lanSegment: { subnetHash: 'a'.repeat(64), gatewayMacHash: 'b'.repeat(64) },
-        wakeMac: null,
-        amt: null,
-        interactive: { state: interactive, idleSec: null, at: Date.now() },
-      },
-    });
-    return ws;
-  }
-
-  async function group(acc: Account, defaultPolicy: Record<string, unknown>): Promise<string> {
-    const res = await call(t.app, '/api/v1/orgs/current/device-groups', { cookie: acc.cookie, body: { name: `g-${randomBytes(3).toString('hex')}`, defaultPolicy } });
-    expect(res.statusCode, res.body).toBe(201);
-    return (res.json() as { id: string }).id;
-  }
+  const enrollConfig = (acc: Account, maxDevices: number, groupId?: string) => enrollConfigFor(t, acc, maxDevices, groupId);
+  const enroll = (acc: Account, opts: { groupId?: string; interactive?: string } = {}) => enrollDevice(t, acc, opts);
+  const connect = (d: Dev, interactive = 'locked', badSig = false) => connectDevice(url, d, { interactive, badSig, track: sockets });
+  const group = (acc: Account, defaultPolicy: Record<string, unknown>) => deviceGroup(t, acc, defaultPolicy);
 
   const openSession = (acc: Account, d: Dev, body: Record<string, unknown>) => call(t.app, `/api/v1/devices/${d.deviceId}/sessions`, { cookie: acc.cookie, body });
 
   beforeAll(async () => {
-    t = await makeApp({ SIGNUP_PLAN_TIER: 'p4_installed' });
+    t = await makeP4App();
     url = await listen(t.app);
-    admin = await signup(t.app);
-    const r = await call(t.app, `/api/v1/users/${admin.user.id}/role`, { method: 'PATCH', cookie: admin.cookie, body: { role: 'org_admin', tier: 'p4_installed' } });
-    expect(r.statusCode).toBe(200);
+    admin = await p4Admin(t);
   });
   afterAll(async () => {
     for (const s of sockets) s.close();
@@ -152,12 +66,12 @@ describe('phase D api', () => {
   });
 
   it('/signal/device: Origin refused; assist.hello closes 4403; bad signature and disabled close 4412', async () => {
-    await expect(SignalClient.open(url.replace(/\/signal$/, '/signal/device'))).rejects.toThrow(/403/);
+    await expect(SignalClient.open(deviceSignalUrl(url))).rejects.toThrow(/403/);
     const d = await enroll(admin);
     const forger = await connect(d, 'locked', true);
     expect((await forger.next('error'))['code']).toBe('device_unauthenticated');
     expect(await forger.closed()).toBe(4412);
-    const rogue = await SignalClient.open(url.replace(/\/signal$/, '/signal/device'), { origin: null });
+    const rogue = await SignalClient.open(deviceSignalUrl(url), { origin: null });
     sockets.push(rogue);
     await rogue.next('device.challenge');
     rogue.send({ t: 'assist.hello' });
