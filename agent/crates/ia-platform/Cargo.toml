@@ -30,6 +30,10 @@ libc = { workspace = true, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 # getpeereid, LOCAL_PEERPID, proc_pidpath and getuid for the single instance (§17.2).
 libc.workspace = true
+# The `GetURL` Apple Event of the deep link (§17.2); the versions eframe already locks.
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, optional = true, features = [

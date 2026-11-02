@@ -178,6 +178,122 @@ pub fn macos_product_version() -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
+/// What the `IndiansAssist.iaconfig` sidecar beside the bundle gave (§17.2, C §2.4).
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum MacSidecar {
+    /// A join code from a sidecar whose signature verified against a compiled region key.
+    Verified(ia_core::join_input::TokenInput),
+    /// A dev build with no compiled keys: the code is used, unsigned, with a warning.
+    Unsigned(ia_core::join_input::TokenInput),
+    /// A valid sidecar without a `code` (an enrollment-only or label-only config).
+    NoCode,
+}
+
+/// Parse and check a sidecar: size and strict schema (`parse_iaconfig`), then the Ed25519
+/// signature against `keys` (comma-separated base64url, the `IA_TOKEN_PUBKEYS` list). A sidecar
+/// that does not verify against any compiled key is refused.
+#[cfg(target_os = "macos")]
+pub fn macos_sidecar(bytes: &[u8], keys: &str) -> Result<MacSidecar, String> {
+    let cfg = ia_core::download::parse_iaconfig(bytes)?;
+    let keys: Vec<&str> = keys
+        .split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .collect();
+    let signed = keys
+        .iter()
+        .any(|k| ia_core::download::verify_iaconfig_sig(&cfg, k));
+    if !keys.is_empty() && !signed {
+        return Err("the sidecar's signature does not verify".into());
+    }
+    let Some(code) = cfg
+        .code
+        .as_deref()
+        .and_then(ia_core::join_input::normalise_token_input)
+    else {
+        return Ok(MacSidecar::NoCode);
+    };
+    Ok(if signed {
+        MacSidecar::Verified(code)
+    } else {
+        MacSidecar::Unsigned(code)
+    })
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_sidecar_tests {
+    use super::*;
+    use ia_core::devsig::{device_public_key_of, sign_device_input};
+    use ia_core::download::{iaconfig_signing_input, Iaconfig};
+
+    const SEED: [u8; 32] = [7; 32];
+
+    /// A Luhn-valid 12-digit desk code, the same for the whole test run.
+    fn desk_code() -> &'static str {
+        static CODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        CODE.get_or_init(ia_core::download::make_desk_code)
+    }
+
+    fn sidecar(code: Option<&str>, sign_with: Option<[u8; 32]>) -> Vec<u8> {
+        let mut cfg = Iaconfig {
+            v: 1,
+            api_origin: "https://support.example.com".into(),
+            region: "in-mum".into(),
+            code: code.map(String::from),
+            desk_label: None,
+            kid: "k1".into(),
+            sig: String::new(),
+        };
+        cfg.sig = match sign_with {
+            Some(seed) => sign_device_input(iaconfig_signing_input(&cfg).as_bytes(), &seed),
+            None => "A".repeat(86),
+        };
+        serde_json::to_vec(&cfg).unwrap()
+    }
+
+    fn code() -> ia_core::join_input::TokenInput {
+        ia_core::join_input::normalise_token_input(desk_code()).expect("a valid desk code")
+    }
+
+    #[test]
+    fn a_signed_sidecar_gives_its_code() {
+        let key = device_public_key_of(&SEED);
+        let got = macos_sidecar(
+            &sidecar(Some(desk_code()), Some(SEED)),
+            &format!("junk,{key}"),
+        );
+        assert_eq!(got, Ok(MacSidecar::Verified(code())));
+    }
+
+    #[test]
+    fn a_sidecar_signed_by_another_key_is_refused() {
+        let key = device_public_key_of(&SEED);
+        assert!(macos_sidecar(&sidecar(Some(desk_code()), Some([9; 32])), &key).is_err());
+        assert!(macos_sidecar(&sidecar(Some(desk_code()), None), &key).is_err());
+    }
+
+    #[test]
+    fn a_dev_build_without_keys_uses_the_code_unsigned() {
+        let got = macos_sidecar(&sidecar(Some(desk_code()), None), "");
+        assert_eq!(got, Ok(MacSidecar::Unsigned(code())));
+    }
+
+    #[test]
+    fn a_sidecar_without_a_code_or_with_garbage_is_handled() {
+        let key = device_public_key_of(&SEED);
+        assert_eq!(
+            macos_sidecar(&sidecar(None, Some(SEED)), &key),
+            Ok(MacSidecar::NoCode)
+        );
+        assert!(macos_sidecar(b"not json", "").is_err());
+        assert!(
+            macos_sidecar(&vec![b' '; 20_000], "").is_err(),
+            "over iaconfigMaxBytes"
+        );
+    }
+}
+
 /// The live TCC state (no prompt is shown).
 #[cfg(target_os = "macos")]
 pub fn macos_grants() -> ia_core::types::MacGrants {
