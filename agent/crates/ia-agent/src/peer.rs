@@ -56,6 +56,9 @@ pub(crate) fn apply_dev_ice(se: &mut SettingEngine) {
     if std::env::var_os("IA_ICE_LOOPBACK").is_some() {
         se.set_include_loopback_candidate(true);
         se.set_ip_filter(Box::new(|ip: std::net::IpAddr| ip.is_loopback()));
+        // No mDNS listener on 0.0.0.0:5353 either: loopback needs none, so a dev run opens no
+        // non-loopback socket that a host firewall could prompt for.
+        se.set_ice_multicast_dns_mode(webrtc::ice::mdns::MulticastDnsMode::Disabled);
     }
     #[cfg(not(feature = "dev"))]
     let _ = se;
