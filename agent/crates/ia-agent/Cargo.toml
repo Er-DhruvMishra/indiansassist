@@ -101,6 +101,8 @@ libc.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 ia-capture-mac.workspace = true
 ia-input-mac.workspace = true
+# The macOS `zsh` / `sh` runner (setsid, killpg, the fd-3 body) and `process_is_elevated`.
+libc.workspace = true
 
 # The Win32 calls the binary makes itself (§8.4 playbook job object, owner-only run file,
 # token queries; §6.1 rename-without-replace). Pure bindings; no extra DLL is imported.

@@ -190,8 +190,6 @@ impl CaptureSource {
         // apple-owned: begin
         // Phase F §17.2: open the ScreenCaptureKit source when Screen Recording is granted;
         // until the apple stream fills it, macOS falls through to the synthetic source.
-        #[cfg(all(target_os = "macos", feature = "macos"))]
-        if !synthetic {}
         // apple-owned: end
         let _ = synthetic;
         CaptureSource::Synthetic(SyntheticCapturer::single(w, h))

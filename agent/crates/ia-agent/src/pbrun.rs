@@ -26,6 +26,11 @@
 //! its own process group, and a timeout or cancel kills the whole group (`killpg(SIGTERM)`, then
 //! `SIGKILL` after 2 s). The launch plan ([`sh_launch_plan`]) is pure and tested on every host.
 //!
+//! **macOS (Phase F §17.2).** `zsh` (`/bin/zsh -f`, no rc files) or `sh`, with the same rules as
+//! Linux except the body carrier: macOS has no `memfd`, so the body is written to an `O_EXCL`
+//! 0600 file in the private run dir, unlinked at once, rewound and placed on fd 3; nothing is
+//! left on disk while the script runs. The launch plan ([`mac_launch_plan`]) is pure and tested.
+//!
 //! The agent never runs a playbook elevated by accident: [`never_elevated_gate`] refuses a
 //! non-elevation playbook when this process itself is elevated (the §8.4 limited-linked-token
 //! launch is not implemented, so the run is refused instead of running as administrator).
@@ -35,7 +40,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 // Only the Windows and Linux launchers spawn (`launch` below); elsewhere playbooks are refused.
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -172,7 +177,14 @@ pub fn process_is_elevated() -> bool {
         // SAFETY: geteuid has no preconditions and cannot fail.
         unsafe { libc::geteuid() == 0 }
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    // apple-owned: begin
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        unsafe { libc::geteuid() == 0 }
+    }
+    // apple-owned: end
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         false
     }
@@ -230,8 +242,8 @@ struct Launched {
     child: Child,
     #[cfg(windows)]
     job: Option<win::Job>,
-    /// Linux: when the group was sent SIGTERM (SIGKILL follows after [`SH_TERM_GRACE`]).
-    #[cfg(target_os = "linux")]
+    /// Linux and macOS: when the group was sent SIGTERM (SIGKILL follows after [`SH_TERM_GRACE`]).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     term_sent: Option<Instant>,
     run_file: Option<PathBuf>,
     rx: mpsc::Receiver<ReaderMsg>,
@@ -249,7 +261,14 @@ impl Launched {
             sh::killpg(self.child.id(), libc::SIGTERM);
             self.term_sent = Some(Instant::now());
         }
-        #[cfg(not(target_os = "linux"))]
+        // apple-owned: begin
+        #[cfg(target_os = "macos")]
+        {
+            mac::killpg(self.child.id(), libc::SIGTERM);
+            self.term_sent = Some(Instant::now());
+        }
+        // apple-owned: end
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = self.child.kill();
         }
@@ -265,6 +284,15 @@ impl Launched {
                 self.term_sent = None;
             }
         }
+        // apple-owned: begin
+        #[cfg(target_os = "macos")]
+        if let Some(at) = self.term_sent {
+            if at.elapsed() >= SH_TERM_GRACE {
+                mac::killpg(self.child.id(), libc::SIGKILL);
+                self.term_sent = None;
+            }
+        }
+        // apple-owned: end
     }
 
     /// Close the job handle: `KILL_ON_JOB_CLOSE` takes any leftover grandchild with it, which
@@ -279,6 +307,12 @@ impl Launched {
         {
             sh::killpg(self.child.id(), libc::SIGKILL);
         }
+        // apple-owned: begin
+        #[cfg(target_os = "macos")]
+        {
+            mac::killpg(self.child.id(), libc::SIGKILL);
+        }
+        // apple-owned: end
     }
 }
 
@@ -624,11 +658,184 @@ fn launch(spec: &RunSpec) -> std::io::Result<Launched> {
     })
 }
 
-#[cfg(all(not(windows), not(target_os = "linux")))]
+// apple-owned: begin
+/// The pure launch plan of the macOS runner (Phase F §17.2), tested on every host: the §7.8
+/// plan with `/bin/zsh -f` (no rc files, so the user's `.zshenv` cannot change the run) or
+/// `/bin/sh`; any other interpreter has no plan.
+pub fn mac_launch_plan(spec: &RunSpec, inherited: &[String]) -> Option<ShPlan> {
+    let mut plan = sh_launch_plan(spec, inherited);
+    match spec.interpreter {
+        PlaybookInterpreter::Zsh => {
+            plan.program = "/bin/zsh";
+            plan.args = vec!["-f", "/dev/fd/3"];
+        }
+        PlaybookInterpreter::Sh => {}
+        _ => return None,
+    }
+    Some(plan)
+}
+
+#[cfg(target_os = "macos")]
+fn launch(spec: &RunSpec) -> std::io::Result<Launched> {
+    use std::os::unix::process::CommandExt;
+
+    let inherited: Vec<String> = std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .collect();
+    let Some(plan) = mac_launch_plan(spec, &inherited) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "only zsh and sh playbooks run on macOS",
+        ));
+    };
+    mac::ensure_private_dir(&spec.run_dir)?;
+    let body = mac::unlinked_body(&spec.run_dir, &spec.run_id, spec.body.as_bytes())?;
+    let mut cmd = Command::new(plan.program);
+    cmd.args(&plan.args);
+    cmd.current_dir(&plan.cwd);
+    for k in &plan.env_remove {
+        cmd.env_remove(k);
+    }
+    for (k, v) in &plan.env_set {
+        cmd.env(k, v);
+    }
+    for (k, v) in &spec.secret_env {
+        cmd.env(k, v.expose());
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let body_fd = body.0;
+    let target_fd = plan.body_fd;
+    // SAFETY: the closure runs in the forked child before exec and calls only async-signal-safe
+    // functions (setsid, dup2, fcntl) on fds that are open in the child.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if body_fd == target_fd {
+                // dup2(3, 3) would keep FD_CLOEXEC: clear it so the body survives exec.
+                if libc::fcntl(target_fd, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(body_fd, target_fd) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn()?;
+    drop(body);
+    let (tx, rx) = mpsc::channel();
+    if let Some(out) = child.stdout.take() {
+        spawn_reader(0, out, tx.clone());
+    }
+    if let Some(err) = child.stderr.take() {
+        spawn_reader(1, err, tx.clone());
+    }
+    Ok(Launched {
+        child,
+        term_sent: None,
+        run_file: None,
+        rx,
+    })
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    //! The macOS runner's OS calls: the unlinked body file, the private run dir and the group
+    //! kill.
+    use std::ffi::CString;
+    use std::io;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::Path;
+
+    /// An owned fd, closed on drop.
+    pub struct Fd(pub i32);
+    impl Drop for Fd {
+        fn drop(&mut self) {
+            // SAFETY: we own this fd and close it once.
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+
+    /// The body in a close-on-exec fd with no name: created `O_EXCL | O_NOFOLLOW` 0600 in the
+    /// private run dir, written, unlinked at once and rewound. A crash between create and
+    /// unlink leaves at most one 0600 file in a 0700 directory.
+    pub fn unlinked_body(dir: &Path, run_id: &str, bytes: &[u8]) -> io::Result<Fd> {
+        let path = dir.join(format!(".{run_id}.body"));
+        let c = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in the run dir"))?;
+        // SAFETY: `c` is a valid NUL-terminated path; the flags and mode are valid for open.
+        let fd = unsafe {
+            libc::open(
+                c.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = Fd(fd);
+        // SAFETY: unlink of the path we just created.
+        let unlinked = unsafe { libc::unlink(c.as_ptr()) };
+        if unlinked < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut off = 0usize;
+        while off < bytes.len() {
+            // SAFETY: the pointer and length describe the live `bytes[off..]` slice.
+            let n = unsafe { libc::write(fd.0, bytes[off..].as_ptr().cast(), bytes.len() - off) };
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            off += n as usize;
+        }
+        // SAFETY: plain lseek on an fd we own.
+        if unsafe { libc::lseek(fd.0, 0, libc::SEEK_SET) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(fd)
+    }
+
+    /// Create the run dir (and parents) and make it 0700 and ours.
+    pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        let meta = std::fs::symlink_metadata(dir)?;
+        // SAFETY: getuid has no preconditions.
+        let me = unsafe { libc::getuid() };
+        if !meta.is_dir() || meta.uid() != me {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the run dir is not a directory owned by this user",
+            ));
+        }
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    }
+
+    /// Signal the whole process group led by `pid` (the run's `setsid`).
+    pub fn killpg(pid: u32, sig: i32) {
+        if pid == 0 || pid > i32::MAX as u32 {
+            return;
+        }
+        // SAFETY: killpg with a positive group id and a valid signal number.
+        unsafe {
+            libc::killpg(pid as i32, sig);
+        }
+    }
+}
+// apple-owned: end
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn launch(_spec: &RunSpec) -> std::io::Result<Launched> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "playbooks run on Windows and Linux only",
+        "playbooks run on Windows, Linux and macOS only",
     ))
 }
 
@@ -1389,4 +1596,146 @@ mod tests {
         assert_eq!(plan.timeout, Duration::from_secs(30));
         assert_eq!(plan.term_grace, Duration::from_secs(2));
     }
+
+    // apple-owned: begin
+    fn mac_spec(interpreter: PlaybookInterpreter, body: &str, run_dir: PathBuf) -> RunSpec {
+        RunSpec {
+            run_id: "cd".repeat(16),
+            interpreter,
+            body: body.into(),
+            env: vec![("IA_PARAM_HOST".into(), "example.com".into())],
+            secret_env: vec![],
+            timeout: Duration::from_secs(10),
+            run_dir,
+            limits: fast(),
+        }
+    }
+
+    #[test]
+    fn the_mac_launch_plan_is_zsh_without_rc_files_or_sh() {
+        let dir = PathBuf::from("/private/tmp/ia-run");
+        let inherited = vec!["IA_PARAM_LEAK".to_string()];
+        let zsh = mac_launch_plan(
+            &mac_spec(PlaybookInterpreter::Zsh, "echo hi", dir.clone()),
+            &inherited,
+        )
+        .expect("zsh has a plan");
+        assert_eq!(zsh.program, "/bin/zsh");
+        assert_eq!(
+            zsh.args,
+            vec!["-f", "/dev/fd/3"],
+            "no rc files; body on fd 3"
+        );
+        assert_eq!(zsh.body_fd, 3);
+        assert!(zsh.stdin_null && zsh.new_session);
+        assert_eq!(zsh.env_remove, vec!["IA_PARAM_LEAK"]);
+        assert_eq!(zsh.cwd, dir);
+        let sh = mac_launch_plan(
+            &mac_spec(PlaybookInterpreter::Sh, "echo hi", dir.clone()),
+            &inherited,
+        )
+        .expect("sh has a plan");
+        assert_eq!((sh.program, sh.args), ("/bin/sh", vec!["/dev/fd/3"]));
+        for i in [PlaybookInterpreter::Powershell, PlaybookInterpreter::Cmd] {
+            assert!(mac_launch_plan(&mac_spec(i, "echo hi", dir.clone()), &[]).is_none());
+        }
+    }
+
+    /// A fresh run dir under the per-user temp dir (S7: tests touch temporary directories only).
+    #[cfg(target_os = "macos")]
+    fn mac_run_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "ia-pbrun-{tag}-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[cfg(target_os = "macos")]
+    fn stdout_of(events: &[RunEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                RunEvent::Output {
+                    stream: "stdout",
+                    chunk,
+                    ..
+                } => Some(chunk.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_zsh_and_sh_run_with_params_dev_null_stdin_and_no_body_left_on_disk() {
+        for interpreter in [PlaybookInterpreter::Zsh, PlaybookInterpreter::Sh] {
+            let dir = mac_run_dir("ok");
+            // Read-only (S1): echo, read stdin, list the run dir.
+            let body = "echo \"host=$IA_PARAM_HOST\"\n\
+                        if read -r line; then echo \"stdin=$line\"; else echo stdin-empty; fi\n\
+                        ls -A .\n\
+                        exit 3\n";
+            let (events, end) = run_collect(mac_spec(interpreter, body, dir.clone()));
+            let out = stdout_of(&events);
+            assert!(out.contains("host=example.com"), "{interpreter:?}: {out}");
+            assert!(out.contains("stdin-empty"), "{interpreter:?}: {out}");
+            assert!(!out.contains(".body"), "the body file is unlinked: {out}");
+            assert_eq!(end.exit, Some(3));
+            assert_eq!(end.error, None);
+            let mode = std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(&dir).unwrap().permissions(),
+            );
+            assert_eq!(mode & 0o777, 0o700);
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_zsh_ignores_the_users_rc_files() {
+        let dir = mac_run_dir("rc");
+        let zdot = dir.with_extension("zdot");
+        std::fs::create_dir_all(&zdot).unwrap();
+        std::fs::write(zdot.join(".zshenv"), "echo rc-was-read\n").unwrap();
+        let mut spec = mac_spec(PlaybookInterpreter::Zsh, "echo body-ran\n", dir.clone());
+        spec.env
+            .push(("ZDOTDIR".into(), zdot.to_string_lossy().into_owned()));
+        let (events, end) = run_collect(spec);
+        let out = stdout_of(&events);
+        assert!(
+            out.contains("body-ran") && !out.contains("rc-was-read"),
+            "{out}"
+        );
+        assert_eq!(end.exit, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&zdot);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_timeout_kills_the_whole_group() {
+        let dir = mac_run_dir("timeout");
+        let marker = dir.with_extension("pid");
+        let body = format!("sleep 30 &\necho $! > '{}'\nwait\n", marker.display());
+        let mut spec = mac_spec(PlaybookInterpreter::Zsh, &body, dir.clone());
+        spec.timeout = Duration::from_millis(500);
+        let (_, end) = run_collect(spec);
+        assert_eq!(end.error, Some(PlaybookError::Timeout));
+        assert_eq!(end.exit, None);
+        let pid: i32 = std::fs::read_to_string(&marker)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: kill with signal 0 only probes whether the pid exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "the backgrounded sleep died with its group");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&marker);
+    }
+    // apple-owned: end
 }
