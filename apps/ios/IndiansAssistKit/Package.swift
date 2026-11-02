@@ -9,9 +9,14 @@ let package = Package(
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
         .library(name: "IASec", targets: ["IASec"]),
+        .library(name: "IASession", targets: ["IASession"]),
     ],
     targets: [
         .target(name: "IASec"),
         .testTarget(name: "IASecTests", dependencies: ["IASec"]),
+        // The Desk session logic of the broadcast extension, unit-tested here because a broadcast cannot be driven
+        // end to end on the simulator (A5).
+        .target(name: "IASession", dependencies: ["IASec"]),
+        .testTarget(name: "IASessionTests", dependencies: ["IASession", "IASec"]),
     ]
 )
