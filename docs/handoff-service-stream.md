@@ -133,7 +133,7 @@ already reviewed.
 
 ## State at handoff
 
-Commit `d27934e`, clean tree. Phases A, A.2, B and C are complete and verified; Phase D is complete
+Commit `472bfe3`, clean tree. Phases A, A.2, B and C are complete and verified; Phase D is complete
 apart from this stream. The gate results at handoff are recorded in the session summary and in
 `docs/PLAN.md`. The known gaps outside this stream are the fleet metrics, the load test at the
 2,000-device target, the keyboard-only accessibility test for the fleet pages, and an Android

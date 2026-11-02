@@ -105,7 +105,7 @@ Open before Phase B can be called done:
 - **Gates (31 Oct 2026):** build, typecheck, lint; tests shared 299, db 62 + 3 skipped, api 192, web 223, extension 129; `pnpm test:scripts` 25; `pnpm validate:infra`; `pnpm agent:fixtures`; against one api started with `SIGNUP_PLAN_TIER=p3_portable` and `RECORDER_TOKEN`: `pnpm smoke` 26/26, `smoke:p2` 14/14, `smoke:recorder` 16/16 (12 + 4 P3 cases), `smoke:p3` 12/12.
 - **Open:** the agent's live serve loop (the glue above) so a real agent completes a session — this is what `pnpm e2e:p3` proves. The e2e is scaffolded (`apps/web/e2e/package3.spec.ts`, `agent-harness.ts`, a P3 branch of `playwright.config.ts` using `./data/e2e-p3` + `SIGNUP_PLAN_TIER=p3_portable` + `AGENT_DEV_STUB`, and the `e2e:p3` / `agent:build:dev` scripts); it runs through the knock but the post-accept assertions wait on the serve loop. Also open: P3 console voice and Assist-side recording, the File System Access receive path, nginx `proxy_buffering off` for downloads, Compose mount of `AGENT_DIST_DIR`, the Android emulator smoke against the api.
 
-**Phase D (Package 4), the service stream: built, verified and committed as `f413710` (1 Nov 2026).** The
+**Phase D (Package 4), the service stream: built, verified and committed as `450258e` (1 Nov 2026).** The
 contract is `docs/specs/phase-d-contracts.md` (revision 5). Everything else in Phase D was
 already built; this stream was the installed service, the desktop worker and the Phase C
 elevation wiring that `agent/README.md` recorded as stubbed.
@@ -150,9 +150,9 @@ elevation wiring that `agent/README.md` recorded as stubbed.
   a service restart and the uninstall are **built but unverified**. They are the manual checks in
   `docs/release.md` and in the handoff brief, and they need a disposable machine and a person.
 
-**Phase D, the whole package: complete (1 Nov 2026), `f413710` and `4468bbb`.** The contract is
+**Phase D, the whole package: complete (1 Nov 2026), `450258e` and `ab26e53`.** The contract is
 revision 6. The three section 13.5 targets the server stream owed are closed and committed
-earlier (`80317ac`, `f21c7de`): the seven fleet metric series, `smoke:p4:load`, and the
+earlier (`2360a64`, `8392daa`): the seven fleet metric series, `smoke:p4:load`, and the
 keyboard-only accessibility spec (`e2e:p4`). The api table of section 15.3 has no open row left.
 
 - **Coordinator verification of the service stream, run independently of the stream's own
@@ -173,12 +173,12 @@ keyboard-only accessibility spec (`e2e:p4`). The api table of section 15.3 has n
   elevation prompt, a service restart, uninstall); a serial-over-LAN close carrying real bytes,
   which needs a proxy that streams data; the full-size `smoke:p4:load` run at 2,000 devices,
   proven so far at 25.
-- **Android emulator e2e: closed (1 Nov 2026, `6b9e946`).** `IA_EMULATOR=1 pnpm android:e2e` passes
+- **Android emulator e2e: closed (1 Nov 2026, `2e6fd50`).** `IA_EMULATOR=1 pnpm android:e2e` passes
   17/17 on Pixel 7 API 35, including "Stop ends the session as `desk_stopped`". The earlier failure
   was the harness, not the app: the logcat step encoding turned underscores into spaces.
 
 **Phase E (cross-platform and enterprise): built and verified (2 Nov 2026).** The contract is
-`docs/specs/phase-e-contracts.md` revision 4. A foundation stream (`db33004`) landed the shared
+`docs/specs/phase-e-contracts.md` revision 4. A foundation stream (`44a53b9`) landed the shared
 names, schemas and empty hooks; five streams then built in parallel: **sso** (OIDC with PKCE, SAML
 2.0 SP, verified domains by DNS TXT, JIT provisioning, SSO required with break-glass),
 **tickets** (Jira, ServiceNow, Freshdesk, Zoho Desk and a signed webhook, with a retrying push
@@ -209,3 +209,35 @@ a glibc 2.35 release build). macOS and iOS are specified in section 8 and not bu
   `FLEET_DATA_KEY` to the api (a Phase D defect); on Linux the `portal` Wayland capture, a Keep
   control, and a run against a real window manager and session bus are not done, and self-delete
   of the built binary was never executed in automation (section 15.8).
+
+## 8. Phase F plan (2 Nov 2026): the Phase E open points and the deferred features
+
+Decisions taken on 2 Nov 2026: the controller is the **mobile web console** (a touch-first,
+installable Assist console that serves Android and iPhone/iPad technicians alike; no native
+controller app); **Linux unattended is built in full for X11 sessions** (systemd service, the
+Phase D enrollment and fleet protocol, deb and rpm, an Ansible role); **Wayland capture ships as
+an opt-in second Linux build** (view, chat and files, no control), beside the single X11 binary.
+The four Phase E defaults stand (no fallback under `in_geo`, 7-year key retention, 2 summaries
+per region, the AI notice in chat only).
+
+Process as in Phases D and E: a binding contract (`docs/specs/phase-f-contracts.md`) with an
+independent review; a foundation stream that owns every shared file; parallel streams; the
+coordinator's cross-stream integration before commit.
+
+| Stream | Scope | Verified here by |
+|---|---|---|
+| F0 foundation | shared names and schemas, migration `0009_phase_f`, route and console hooks, licence rows, env keys | the Phase E foundation gates |
+| fixes | compose passes `FLEET_DATA_KEY` to the api; the fleet key gets a previous-keys list (W89); the residency print gets real headroom; the Jira, ServiceNow and Freshdesk request shapes and the Zoho data-centre hosts are checked against vendor documentation (Zoho enabled once verified); the Keep (C D5) control in the console and Desk UI on Windows and Linux | unit tests, `smoke:e`, `e2e:e`, Keep applied only to temporary directories |
+| mail | invites by email and password reset over the existing `Mailer` (SMTP or log); single-use hashed tokens, no account enumeration, rate limits; SSO-required orgs offer no reset except break-glass | vitest with an in-process fake SMTP server, a smoke flow, a keyboard-only Playwright spec |
+| erasure | org erasure by `audit_pepper` destruction (A §4.2): requested by one org_admin, approved by a second, a cooling-off period, PII rows deleted, the pepper destroyed so chain entries become unlinkable while the chain still verifies; the residency report shows `erasure.available: true` | vitest, a smoke flow that erases a throwaway org and verifies its chain afterwards |
+| camera | phone as a support camera (PRD 12.8) in P1, P3 and P4 sessions: a QR code or short link opens the phone browser's rear camera with consent; the Assist sees it live, can freeze and snapshot, and the chain records it | vitest, Playwright with fake media, the Android emulator's Chrome |
+| mobile | the touch-first Assist console: installable (manifest and an app-shell service worker), touch mapped to pointer (tap, long-press right click, two-finger scroll, pinch zoom of the view), an on-screen keyboard with special keys, phone and tablet layouts | Playwright mobile projects (Android and iPhone emulation) and the Android emulator's Chrome |
+| linux-p4 | Linux unattended: the `ia-service` Linux half as a systemd system service, Phase D enrollment and fleet protocol, attaching to the active user's X11 session (logind), deb and rpm, an Ansible role | WSL unit tests, `systemd-analyze verify`, package-content checks, install tests only in a throwaway environment (never this machine or the main WSL distro) |
+| wayland | the `portal` build: xdg-desktop-portal ScreenCast over PipeWire, view only; the join page offers it to Wayland users | WSL tests under a headless compositor (needs a one-time `sudo apt install` by the user, named in the contract) |
+
+Waves: F0, then fixes, mail, erasure, camera and mobile in parallel (TypeScript-heavy); linux-p4
+and wayland follow, one at a time, because two Rust builds at once exhaust this machine's memory.
+
+Still outside this machine: the macOS agent and the native iOS share extension (no Apple host);
+a run against a real Linux window manager and session bus; the manual checks on a disposable
+machine; the full-size 2,000-device load run.
