@@ -3428,6 +3428,12 @@ fn parse_interpreter(s: &str) -> Option<PlaybookInterpreter> {
         "powershell" => Some(PlaybookInterpreter::Powershell),
         "cmd" => Some(PlaybookInterpreter::Cmd),
         "sh" => Some(PlaybookInterpreter::Sh),
+        // apple-owned: begin
+        // Phase F §17.2 / §17.8: the macOS agent runs `zsh` (without this arm the run request
+        // fell back to PowerShell and was refused `not_allowed`).
+        #[cfg(target_os = "macos")]
+        "zsh" => Some(PlaybookInterpreter::Zsh),
+        // apple-owned: end
         _ => None,
     }
 }
