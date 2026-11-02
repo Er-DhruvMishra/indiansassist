@@ -59,9 +59,12 @@ fn build_api() -> Result<webrtc::api::API, webrtc::Error> {
     // VP8 first (the recorder decodes VP8/VP9 only, A.2 N1; §4.2 order with a recorder).
     codecs::register_into_media_engine(&mut me, &codecs::offer_order(true, false, false))?;
     let registry = register_default_interceptors(Registry::new(), &mut me)?;
+    let mut se = webrtc::api::setting_engine::SettingEngine::default();
+    crate::peer::apply_dev_ice(&mut se);
     Ok(APIBuilder::new()
         .with_media_engine(me)
         .with_interceptor_registry(registry)
+        .with_setting_engine(se)
         .build())
 }
 
