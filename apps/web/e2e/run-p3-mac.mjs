@@ -3,11 +3,13 @@
 //
 //   1. builds the macOS dev agent into agent/target/e2e-mac (features media, macos, gui, dev; skip with
 //      E2E_MAC_SKIP_BUILD=1, or point MAC_AGENT_BIN at a built binary);
-//   2. runs Playwright with apps/web/e2e/p3-mac.config.ts: the api on 127.0.0.1:<E2E_API_PORT, default 4170>, the web
+//   2. builds the workspace packages when `packages/db/dist` or `packages/shared/dist` is missing (a fresh checkout);
+//   3. runs Playwright with apps/web/e2e/p3-mac.config.ts: the api on 127.0.0.1:<E2E_API_PORT, default 4170>, the web
 //      app on E2E_WEB_PORT (default 5340), data in E2E_DATA_DIR (default ./data/e2e-mac).
 //
 // Ports 4000, 4100 and 4105 are never used. Nothing is installed; TCC is never touched (A1-A3).
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +31,15 @@ if (process.env.E2E_MAC_SKIP_BUILD !== '1' && !process.env.MAC_AGENT_BIN) {
   if (b.status !== 0) {
     console.error('e2e:p3:mac: the macOS dev agent did not build');
     process.exit(b.status ?? 1);
+  }
+}
+
+// The api dev server imports the built workspace packages: build them on a fresh checkout.
+if (['packages/db/dist', 'packages/shared/dist'].some((d) => !existsSync(resolve(repoRoot, d)))) {
+  const p = spawnSync('pnpm', ['-r', '--filter', './packages/**', 'build'], { cwd: repoRoot, stdio: 'inherit' });
+  if (p.status !== 0) {
+    console.error('e2e:p3:mac: the workspace packages did not build');
+    process.exit(p.status ?? 1);
   }
 }
 
