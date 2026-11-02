@@ -1,10 +1,34 @@
-//! `ia-input-mac`: the macOS CGEvent input of the macOS portable agent (Phase F §17.2): CGEvent input (mouse and keyboard posted at `kCGHIDEventTap`, Unicode text, the W3C `code` to virtual-key table, and the `refuses_pointer` / `refuses_keyboard` guard).
+//! `ia-input-mac`: the macOS input and clipboard of the macOS portable agent (Phase F §17.2;
+//! C §3.5 and E rule 7.3c for the guard). **The apple stream owns this crate** (§1.4).
 //!
-//! Landed by F0 as an empty stub so the workspace, the `ia-agent/macos` feature and the
-//! `// apple-owned` hooks have something to name. **The apple stream owns this crate** (§1.4)
-//! and is the only stream that edits it. Everything is behind `cfg(target_os = "macos")`, so the
-//! Windows and Linux builds and their `--all-features` gates compile nothing from it.
+//! Pure, compiled and tested on every host (the `ia-input-x11` pattern):
+//! * [`keymap`]: W3C `KeyboardEvent.code` → macOS virtual key (`kVK_*`), checked against
+//!   `tests/fixtures/mac-keymap.json`, and the modifier each modifier key holds;
+//! * [`mapping`]: normalised monitor coordinates → Quartz global points, W3C buttons → Quartz
+//!   buttons and event types, the wheel with the Windows sink's sign convention;
+//! * [`guard`]: the injection-guard decision over the agent's own windows;
+//! * [`text`]: the UTF-16 chunking behind `os.text`.
+//!
+//! Behind `cfg(all(target_os = "macos", feature = "macos"))` (nothing elsewhere, so the Windows
+//! and Linux `--all-features` gates compile no Apple framework): [`MacInput`] (CGEvent, implements
+//! `InputSink` with the guard) and [`MacClipboard`] (`NSPasteboard`, implements
+//! `ClipboardBridge`).
 
-/// The macOS implementation (apple stream). Empty until then.
-#[cfg(target_os = "macos")]
-pub mod macos {}
+pub mod guard;
+pub mod keymap;
+pub mod mapping;
+pub mod text;
+
+#[cfg(all(target_os = "macos", feature = "macos"))]
+pub mod access;
+#[cfg(all(target_os = "macos", feature = "macos"))]
+mod clipboard;
+#[cfg(all(target_os = "macos", feature = "macos"))]
+mod input;
+
+#[cfg(all(target_os = "macos", feature = "macos"))]
+pub use access::{accessibility_granted, request_accessibility};
+#[cfg(all(target_os = "macos", feature = "macos"))]
+pub use clipboard::MacClipboard;
+#[cfg(all(target_os = "macos", feature = "macos"))]
+pub use input::{own_windows, MacInput};

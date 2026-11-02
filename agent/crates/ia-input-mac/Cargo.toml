@@ -5,14 +5,53 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Phase F section 17.2 (stream apple): macOS CGEvent input. An F0 stub: compiles to nothing until the apple stream fills it, and to nothing off macOS."
+description = "macOS input and clipboard (Phase F section 17.2, stream apple): the W3C code -> virtual key table, the normalised-to-global pointer mapping, the injection-guard decision and the UTF-16 text chunking (pure, tested on every host), and CGEvent injection and the NSPasteboard clipboard behind the `macos` feature on macOS."
 
 [features]
 default = []
-# Enabled by `ia-agent/macos`; the apple stream names what it turns on.
-macos = []
+# CGEvent injection and the NSPasteboard clipboard. Compiles to nothing off macOS.
+macos = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-graphics",
+]
 
 [dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
 
-# Phase F §17.7: owned by the apple stream (the objc2 family, §10, macOS-target only).
+# Phase F §17.7: owned by the apple stream (the objc2 family, §10, macOS-target only). The
+# versions are the ones eframe / winit already bring into Cargo.lock, so nothing moves.
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSObject",
+    "NSString",
+    "NSValue",
+] }
+objc2-app-kit = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "NSPasteboard",
+    "NSRunningApplication",
+] }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFCGTypes",
+] }
+objc2-core-graphics = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CGEvent",
+    "CGEventTypes",
+    "CGRemoteOperation",
+    "CGWindow",
+] }
+
+[dev-dependencies]
+serde_json.workspace = true

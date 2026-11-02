@@ -125,11 +125,44 @@ pub fn linux_caps(mode: &ScreenMode, monitors: usize) -> AgentCapabilities {
 
 // apple-owned: begin
 /// Phase F §17.2: the capabilities of a macOS Desk, from what TCC has granted at `desk.hello`
-/// (`ia_core::types::macos_capabilities`; the documented empty value until the apple stream
-/// fills it).
+/// (`ia_core::types::macos_capabilities`). A synthetic run (A1) captures nothing real and posts
+/// no input, so it advertises the full set the e2e gate exercises.
 #[cfg(target_os = "macos")]
-pub fn macos_caps(monitors: usize) -> AgentCapabilities {
-    ia_core::types::macos_capabilities(monitors.clamp(1, 16) as u8)
+pub fn macos_caps(monitors: usize, synthetic: bool) -> AgentCapabilities {
+    let grants = if synthetic {
+        ia_core::types::MacGrants {
+            screen: true,
+            accessibility: true,
+        }
+    } else {
+        macos_grants()
+    };
+    ia_core::types::macos_capabilities(monitors.clamp(1, 16) as u8, grants)
+}
+
+/// The live TCC state (no prompt is shown).
+#[cfg(target_os = "macos")]
+pub fn macos_grants() -> ia_core::types::MacGrants {
+    #[cfg(feature = "macos")]
+    {
+        ia_core::types::MacGrants {
+            screen: ia_capture_mac::screen_recording_granted(),
+            accessibility: ia_input_mac::accessibility_granted(),
+        }
+    }
+    #[cfg(not(feature = "macos"))]
+    {
+        ia_core::types::MacGrants::default()
+    }
+}
+
+/// The active displays a real (non-synthetic) macOS run captures.
+#[cfg(all(target_os = "macos", feature = "macos"))]
+pub fn macos_monitors() -> Vec<ia_core::types::MonitorInfo> {
+    ia_capture_mac::geometry::monitors(&ia_capture_mac::active_displays())
+        .into_iter()
+        .map(|(m, _)| m)
+        .collect()
 }
 // apple-owned: end
 
