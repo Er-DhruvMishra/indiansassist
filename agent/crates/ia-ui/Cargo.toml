@@ -49,3 +49,6 @@ ksni = { version = "0.3.7", optional = true, default-features = false, features 
 
 # Phase F §17.7: owned by the apple stream (eframe's AppKit backend, `tray-icon` on macOS, §17.2).
 [target.'cfg(target_os = "macos")'.dependencies]
+# The consent window's two TCC steps call the system requests and checks (§17.2).
+ia-capture-mac = { workspace = true, features = ["macos"] }
+ia-input-mac = { workspace = true, features = ["macos"] }

@@ -18,7 +18,7 @@ pub use sni::Tray;
 
 // apple-owned: begin
 #[cfg(target_os = "macos")]
-pub use mac::Tray;
+pub use mac::{tcc_steps, Tray};
 // apple-owned: end
 
 /// The tray state, mapped to colour + tooltip.
@@ -375,6 +375,115 @@ mod mac {
         pub fn poll(&self) -> Vec<TrayAction> {
             Vec::new()
         }
+    }
+
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    use egui::{Color32, RichText};
+
+    /// How often the grants are re-read while the consent window is open (they change only in
+    /// System Settings, so a person who switches back sees the new state within this time).
+    const RECHECK_EVERY: Duration = Duration::from_secs(2);
+
+    thread_local! {
+        static GRANTS: Cell<Option<(Instant, bool, bool)>> = const { Cell::new(None) };
+    }
+
+    /// `(screen recording, accessibility)`, re-read at most every [`RECHECK_EVERY`] or when
+    /// `force` (the "Check again" button).
+    fn grants(force: bool) -> (bool, bool) {
+        GRANTS.with(|g| match g.get() {
+            Some((at, s, a)) if !force && at.elapsed() < RECHECK_EVERY => (s, a),
+            _ => {
+                let s = ia_capture_mac::screen_recording_granted();
+                let a = ia_input_mac::accessibility_granted();
+                g.set(Some((Instant::now(), s, a)));
+                (s, a)
+            }
+        })
+    }
+
+    fn open_settings(pane: &str) {
+        if let Err(e) = std::process::Command::new("/usr/bin/open")
+            .arg(pane)
+            .spawn()
+        {
+            tracing::warn!("System Settings could not be opened: {e}");
+        }
+    }
+
+    /// One step: a tick when granted; otherwise why, the system request and the exact pane.
+    fn step(
+        ui: &mut egui::Ui,
+        granted: bool,
+        title: &str,
+        why: &str,
+        request: fn() -> bool,
+        pane: &str,
+    ) {
+        if granted {
+            ui.label(RichText::new(format!("✓ {title}")).color(Color32::from_rgb(60, 170, 90)));
+            return;
+        }
+        ui.label(RichText::new(title).strong());
+        ui.label(why);
+        ui.horizontal(|ui| {
+            if ui.button("Ask macOS").clicked() {
+                request();
+                grants(true);
+            }
+            if ui.button("Open System Settings").clicked() {
+                open_settings(pane);
+            }
+        });
+    }
+
+    /// Phase F §17.2: the consent window's two macOS steps, "Allow screen recording" and "Allow
+    /// control", each with one sentence of why, a button that calls the system request
+    /// (`CGRequestScreenCaptureAccess`, `AXIsProcessTrustedWithOptions` with the prompt), a
+    /// button that opens the exact System Settings pane, and **Check again**. The session goes on
+    /// with whatever is granted; TCC is never bypassed (PRD 5). Nothing is shown once both are
+    /// granted. Returns the grants it showed.
+    pub fn tcc_steps(ui: &mut egui::Ui) -> (bool, bool) {
+        let (screen, control) = grants(false);
+        if screen && control {
+            return (screen, control);
+        }
+        ui.separator();
+        ui.label(RichText::new("macOS needs your permission first").strong());
+        step(
+            ui,
+            screen,
+            "1. Allow screen recording",
+            "So the technician can see your screen. Without it they can still chat and send files.",
+            ia_capture_mac::request_screen_recording,
+            ia_input_mac::access::SETTINGS_SCREEN_RECORDING,
+        );
+        ui.add_space(4.0);
+        step(
+            ui,
+            control,
+            "2. Allow control",
+            "So the technician can use the mouse and keyboard, and only when you allow control.",
+            ia_input_mac::request_accessibility,
+            ia_input_mac::access::SETTINGS_ACCESSIBILITY,
+        );
+        ui.add_space(4.0);
+        if ui.button("Check again").clicked() {
+            grants(true);
+        }
+        if !screen {
+            ui.label(
+                RichText::new(
+                    "After you turn on screen recording, macOS may ask you to quit and reopen \
+                     IndiansAssist. Your support code is kept.",
+                )
+                .small(),
+            );
+        }
+        ui.ctx().request_repaint_after(RECHECK_EVERY);
+        (screen, control)
     }
 }
 // apple-owned: end

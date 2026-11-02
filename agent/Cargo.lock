@@ -2404,7 +2404,9 @@ version = "0.3.0"
 dependencies = [
  "eframe",
  "egui",
+ "ia-capture-mac",
  "ia-core",
+ "ia-input-mac",
  "ksni",
  "tracing",
  "tray-icon",
