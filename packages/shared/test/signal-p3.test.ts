@@ -40,7 +40,9 @@ describe('desk.hello native', () => {
     expect(deskClientSchema.safeParse(NATIVE).success).toBe(true);
     expect(deskClientSchema.safeParse({ ...NATIVE, os: 'android' }).success).toBe(true);
     expect(deskClientSchema.safeParse({ ...NATIVE, os: 'linux' }).success).toBe(true);
-    expect(deskClientSchema.safeParse({ ...NATIVE, os: 'mac' }).success).toBe(false);
+    // Phase F section 17.8: the native macOS agent and iOS extension.
+    expect(deskClientSchema.safeParse({ ...NATIVE, os: 'mac' }).success).toBe(true);
+    expect(deskClientSchema.safeParse({ ...NATIVE, os: 'cros' }).success).toBe(false);
     const { capabilities: _c, ...noCaps } = NATIVE;
     void _c;
     expect(deskClientSchema.safeParse(noCaps).success).toBe(false);

@@ -93,8 +93,15 @@ export function sha256Bytes(input: Uint8Array | string): Uint8Array {
   return sha256(typeof input === 'string' ? utf8Encode(input) : input);
 }
 
-/** `sha256Hex(pepper + ':' + value)`, the PII hashing rule of section 5.3. */
+/**
+ * `sha256Hex(pepper + ':' + value)`, the PII hashing rule of section 5.3. Phase F section 5.3 step 6: throws when
+ * the pepper is not 64 lower-case hex (an erased org's pepper is null, and `"null:" + value` would be an
+ * unpeppered, therefore linkable, hash).
+ */
 export function pepperedHash(pepperHex: string, value: string): string {
+  if (typeof pepperHex !== 'string' || !/^[0-9a-f]{64}$/.test(pepperHex)) {
+    throw new Error('pepperedHash: the pepper must be 64 lower-case hex characters');
+  }
   return sha256Hex(`${pepperHex}:${value}`);
 }
 

@@ -98,6 +98,11 @@ async function deviceHello(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<
   }
   const org = await getOrg(ctx.db, d.orgId);
   if (!org) return unauthenticated(dh, conn, msg.id, 'org gone');
+  // Phase F section 5.3 step 1: no device of an org whose erasure is executing connects.
+  if (org.erasingAt !== null) {
+    conn.error('org_erasing', 'this organisation is being erased', msg.id);
+    return conn.close(WS_CLOSE.forbidden, 'org_erasing');
+  }
   dh.register(conn, d.id, d.orgId);
   ctx.metrics.wsConnections.inc();
   ctx.metrics.devicesConnected.inc();

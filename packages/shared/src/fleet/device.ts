@@ -12,6 +12,7 @@ import {
   DEVICE_STATUSES,
   INTERACTIVE_STATES,
   LIMITS,
+  LINUX_DISPLAY_TYPES,
   PLAYBOOK_INTERPRETERS,
   SERVICE_FEATURES,
   TAMPER_STATES,
@@ -35,11 +36,15 @@ export const HW_FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 export const WAKE_MAC_RE = /^[0-9a-f]{12}$/;
 export const wakeMacSchema = z.string().regex(WAKE_MAC_RE, '12 lower-case hex chars');
 
-/** Section 3.4 `InteractiveState`; "present" = `state === 'active'`. */
+/**
+ * Section 3.4 `InteractiveState`; "present" = `state === 'active'`. `display` (Phase F section 8.3e, Linux only):
+ * the type of the target graphical session, null for none.
+ */
 export const interactiveStateSchema = z.strictObject({
   state: z.enum(INTERACTIVE_STATES),
   idleSec: z.number().int().nonnegative().nullable(),
   at: z.number().int().nonnegative(),
+  display: z.enum(LINUX_DISPLAY_TYPES).nullable().optional(),
 });
 export type InteractiveState = z.infer<typeof interactiveStateSchema>;
 
@@ -62,10 +67,13 @@ export const amtInventorySchema = z.strictObject({
 });
 export type AmtInventory = z.infer<typeof amtInventorySchema>;
 
-/** Section 13.1a `ServiceCapabilities`, strict; a superset of the C `AgentCapabilities`. */
+/**
+ * Section 13.1a `ServiceCapabilities`, strict; a superset of the C `AgentCapabilities`. `elevation: 'user'` (Phase F
+ * section 8.7): a Linux or macOS service, whose session work runs as the signed-in user.
+ */
 export const serviceCapabilitiesSchema = z.strictObject({
   monitors: z.number().int().min(1).max(16),
-  elevation: z.literal('admin'),
+  elevation: z.enum(['admin', 'user']),
   features: z.array(z.enum(SERVICE_FEATURES)).max(SERVICE_FEATURES.length).refine(unique, 'unique'),
   encoders: z.array(z.enum(VIDEO_ENCODERS)).max(VIDEO_ENCODERS.length).refine(unique, 'unique'),
   hwEncoder: z.boolean(),
@@ -89,10 +97,10 @@ export const deviceTagsSchema = z
   .max(LIMITS.deviceTagsMax)
   .transform((t) => [...new Set(t)]);
 
-/** The machine facts of an enrollment request (section 3.2). */
+/** The machine facts of an enrollment request (section 3.2); `linux` (Phase F section 8.3d), `macos` (section 17.8). */
 export const deviceMachineSchema = z.strictObject({
   name: deviceName,
-  platform: z.literal('windows'),
+  platform: z.enum(['windows', 'linux', 'macos']),
   osVersion: z.string().min(1).max(32),
   arch: z.enum(['x64', 'arm64']),
   serviceVersion: z.string().min(1).max(32),

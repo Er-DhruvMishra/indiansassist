@@ -12,3 +12,6 @@ export { playbook, playbookRun, elevationHandover } from './playbook.js';
 export { ssoDomain, ssoIdentity } from './sso.js';
 export { sessionSummary } from './summary.js';
 export { ticketPush } from './ticketing.js';
+// Phase F (docs/specs/phase-f-contracts.md section 13.2)
+export { passwordReset } from './mail.js';
+export { orgErasure } from './erasure.js';

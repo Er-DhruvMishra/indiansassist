@@ -10,6 +10,7 @@ import type { Duplex } from 'node:stream';
 import {
   ASSIST_CLIENT_TYPES,
   BUCKET_EXEMPT_TYPES,
+  CAMERA_CLIENT_TYPES,
   DESK_CLIENT_TYPES,
   RECORDER_CLIENT_TYPES,
   isRegionServed,
@@ -24,7 +25,7 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { isExtensionOrigin } from '../config.js';
 import type { AppContext } from '../context.js';
 import { canActOnToken } from '../lib/rbac.js';
-import { principalFromCookieValue, unsignSessionCookie, type Principal } from '../plugins/auth.js';
+import { isOrgErasing, principalFromCookieValue, unsignSessionCookie, type Principal } from '../plugins/auth.js';
 import {
   handleAssistAccept,
   handleAssistDeny,
@@ -47,6 +48,7 @@ import { onConnClosed } from './lifecycle.js';
 import { handleChatMessage, handleSessionEnd, handleWebrtc } from './relay.js';
 import { handleRecorderHello, handleRecorderJoin, handleRecorderLeave } from './recorder.js';
 import { DeviceHub } from './device.js';
+import { handleCameraHello, handleCameraReady, handleCameraStop } from './camera.js';
 
 type Handler = (hub: SignalHub, conn: Conn, msg: never) => Promise<void>;
 
@@ -74,11 +76,15 @@ const HANDLERS: Partial<Record<ClientSignalMessage['t'], Handler>> = {
   'control.relay': handleControlRelay as Handler,
   'recorder.join': handleRecorderJoin as Handler,
   'recorder.leave': handleRecorderLeave as Handler,
+  // Phase F section 6.4 (camera stream, signal/camera.ts).
+  'camera.ready': handleCameraReady as Handler,
+  'camera.stop': handleCameraStop as Handler,
 };
 
 const ASSIST_TYPES = new Set<string>(ASSIST_CLIENT_TYPES);
 const DESK_TYPES = new Set<string>(DESK_CLIENT_TYPES);
 const RECORDER_TYPES = new Set<string>(RECORDER_CLIENT_TYPES);
+const CAMERA_TYPES = new Set<string>(CAMERA_CLIENT_TYPES);
 const EXEMPT_TYPES = new Set<string>(BUCKET_EXEMPT_TYPES);
 const T_RE = /^\s*\{\s*"t"\s*:\s*"([a-z._]{1,40})"/;
 /** Phase C section 3.1: native Desks (agent / Android host) get a larger un-helloed socket cap per IP. */
@@ -169,6 +175,8 @@ export class SignalHub extends HubApi {
         this.ctx.log.error({ orgId: principal.org.id }, 'assist org region is not served by this node');
         return reject(socket, 421, 'Misdirected Request');
       }
+      // Phase F section 5.3 step 1: the Assists of an org whose erasure is executing get no socket (409 org_erasing).
+      if (principal && isOrgErasing(principal.org)) return reject(socket, 409, 'Conflict');
     }
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       const conn = new Conn(wsTransport(ws), ip, ua, principal);
@@ -231,9 +239,10 @@ export class SignalHub extends HubApi {
     const re = msg.id;
     if (msg.t === 'ping') return conn.send({ t: 'pong', ...(re !== undefined ? { re } : {}) });
     if (msg.t === 'pong') return;
-    const hello = msg.t === 'assist.hello' || msg.t === 'desk.hello' || msg.t === 'recorder.hello';
+    const hello = msg.t === 'assist.hello' || msg.t === 'desk.hello' || msg.t === 'recorder.hello' || msg.t === 'camera.hello';
     if (hello && conn.helloed) return conn.error('bad_state', 'hello already completed', re);
-    if (msg.t === 'assist.hello' && conn.deskOnly) {
+    // Phase F section 6.4: the phone page uses the web Origin, so a camera never says hello on a Desk-only socket.
+    if ((msg.t === 'assist.hello' || msg.t === 'camera.hello') && conn.deskOnly) {
       conn.error('forbidden', 'this socket may only connect as a Desk', re);
       return conn.close(WS_CLOSE.forbidden, 'forbidden');
     }
@@ -242,8 +251,16 @@ export class SignalHub extends HubApi {
     if (msg.t === 'assist.hello') handler = handleAssistHello as Handler;
     else if (msg.t === 'desk.hello') handler = handleDeskHello as Handler;
     else if (msg.t === 'recorder.hello') handler = handleRecorderHello as Handler;
+    else if (msg.t === 'camera.hello') handler = handleCameraHello as Handler;
     else {
-      const allowed = conn.side === 'assist' ? ASSIST_TYPES : conn.side === 'recorder' ? RECORDER_TYPES : DESK_TYPES;
+      const allowed =
+        conn.side === 'assist'
+          ? ASSIST_TYPES
+          : conn.side === 'recorder'
+            ? RECORDER_TYPES
+            : conn.side === 'camera'
+              ? CAMERA_TYPES
+              : DESK_TYPES;
       if (!allowed.has(msg.t)) return conn.error('forbidden', `${msg.t} is not allowed for this side`, re);
       handler = HANDLERS[msg.t];
     }

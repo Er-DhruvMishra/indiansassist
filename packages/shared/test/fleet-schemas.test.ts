@@ -96,7 +96,9 @@ describe('Phase D enums and additive changes (section 16.2)', () => {
 describe('device objects (section 13.1a)', () => {
   it('serviceCapabilities: elevation admin, unique features from SERVICE_FEATURES', () => {
     expect(serviceCapabilitiesSchema.safeParse(CAPS).success).toBe(true);
-    expect(serviceCapabilitiesSchema.safeParse({ ...CAPS, elevation: 'user' }).success).toBe(false);
+    // Phase F section 8.7: a Linux or macOS service advertises `elevation: 'user'`.
+    expect(serviceCapabilitiesSchema.safeParse({ ...CAPS, elevation: 'user' }).success).toBe(true);
+    expect(serviceCapabilitiesSchema.safeParse({ ...CAPS, elevation: 'system' }).success).toBe(false);
     expect(serviceCapabilitiesSchema.safeParse({ ...CAPS, features: ['screen', 'screen'] }).success).toBe(false);
     expect(serviceCapabilitiesSchema.safeParse({ ...CAPS, features: ['teleport'] }).success).toBe(false);
   });

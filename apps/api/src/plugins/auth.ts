@@ -1,7 +1,9 @@
 /**
  * Cookie sessions (contracts section 6.1): `ia_session` carries `sign(v)` (@fastify/cookie, SESSION_COOKIE_SECRET);
  * the database stores `sha256Hex(v)`. `authenticate()` resolves the principal once per request and enforces the
- * defence-in-depth region assertion of rule R3 (`org.data_region` must be served by this node, else 421).
+ * defence-in-depth region assertion of rule R3 (`org.data_region` must be served by this node, else 421). Phase F
+ * section 5.3 step 1: an org whose erasure is executing (`org.erasing_at` set) answers `409 org_erasing` to every
+ * authenticated request and every login (`mintSession`), and its Assist sockets are refused at the upgrade (hub.ts).
  */
 import cookie from '@fastify/cookie';
 import {
@@ -68,12 +70,13 @@ export async function principalFromCookieValue(ctx: AppContext, raw: string | nu
 /**
  * The principal of a cookie session by its id (not revoked, not expired, user active). Used by a session's owner
  * node for an Assist socket held by another node, which forwards only the cookie session id (section 7.6 N1).
+ * Phase F section 5.3 step 1: null for an org whose erasure is executing.
  */
 export async function principalFromAuthSessionId(ctx: AppContext, authSessionId: string): Promise<Principal | null> {
   const found = await findValidAuthSessionById(ctx.db, authSessionId);
   if (!found || found.user.status !== 'active') return null;
   const org = await getOrg(ctx.db, found.user.orgId);
-  if (!org) return null;
+  if (!org || isOrgErasing(org)) return null;
   const seat = await getSeatByUser(ctx.db, found.user.id);
   return { user: found.user, org, seat, authSession: found.session };
 }
@@ -88,7 +91,20 @@ export function assertOrgServed(ctx: AppContext, org: OrgRow, log: { error: (o: 
   }
 }
 
-/** Resolves the caller (401 unauthenticated otherwise) and checks `roles` when given (403 forbidden). */
+/** Phase F section 5.3 step 1: the org's erasure is executing (set at the freeze step, never cleared). */
+export function isOrgErasing(org: Pick<OrgRow, 'erasingAt'>): boolean {
+  return org.erasingAt !== null;
+}
+
+/** `409 org_erasing` for an org whose erasure is executing (section 2.4). */
+export function assertOrgNotErasing(org: Pick<OrgRow, 'erasingAt'>): void {
+  if (isOrgErasing(org)) fail('org_erasing', 'this organisation is being erased');
+}
+
+/**
+ * Resolves the caller (401 unauthenticated otherwise) and checks `roles` when given (403 forbidden). Phase F: every
+ * authenticated request of an org whose erasure is executing answers `409 org_erasing` (reads included).
+ */
 export async function authenticate(
   ctx: AppContext,
   req: FastifyRequest,
@@ -104,6 +120,7 @@ export async function authenticate(
   }
   const p = req.principal;
   if (!p) throw new HttpError('unauthenticated', 'sign in required');
+  assertOrgNotErasing(p.org);
   if (roles) requireRole(p.user.role, roles);
   return p;
 }
@@ -120,6 +137,8 @@ export async function mintSession(
   org: OrgRow,
   opts: { loginMethod?: LoginMethod; expiresAt?: Date } = {},
 ): Promise<{ raw: string; row: AuthSessionRow }> {
+  // Phase F section 5.3 step 1: no login (password, invite or SSO) of an org whose erasure is executing.
+  assertOrgNotErasing(org);
   const raw = randomSecret(32);
   const row = await createAuthSession(exec, {
     userId: user.id,

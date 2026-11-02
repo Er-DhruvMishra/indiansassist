@@ -98,7 +98,14 @@ describe('sha256Hex and encodings', () => {
   });
 
   it('peppered hash is sha256(pepper:value)', () => {
-    expect(pepperedHash('ab', 'x')).toBe(sha256Hex('ab:x'));
+    const pepper = 'ab'.repeat(32);
+    expect(pepperedHash(pepper, 'x')).toBe(sha256Hex(`${pepper}:x`));
+  });
+
+  it('peppered hash refuses a pepper that is not 64 lower-case hex (Phase F section 5.3 step 6)', () => {
+    expect(() => pepperedHash('ab', 'x')).toThrow();
+    expect(() => pepperedHash(null as unknown as string, 'x')).toThrow();
+    expect(() => pepperedHash('AB'.repeat(32), 'x')).toThrow();
   });
 
   it('base64url round trips and is strict', () => {

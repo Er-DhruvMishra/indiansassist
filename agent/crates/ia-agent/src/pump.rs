@@ -166,6 +166,10 @@ pub enum CaptureSource {
     Dxgi(Box<ia_capture_win::dxgi::DxgiCapturer>),
     #[cfg(all(target_os = "linux", feature = "x11"))]
     X11(Box<ia_capture_x11::X11Capturer>),
+    // apple-owned: begin
+    // Phase F §17.2: the ScreenCaptureKit source (`ia-capture-mac`, feature `macos`) is added
+    // here by the apple stream, with its arms in `next_frame`, `path` and `lost` below.
+    // apple-owned: end
 }
 
 impl CaptureSource {
@@ -183,6 +187,12 @@ impl CaptureSource {
                 }
             }
         }
+        // apple-owned: begin
+        // Phase F §17.2: open the ScreenCaptureKit source when Screen Recording is granted;
+        // until the apple stream fills it, macOS falls through to the synthetic source.
+        #[cfg(all(target_os = "macos", feature = "macos"))]
+        if !synthetic {}
+        // apple-owned: end
         let _ = synthetic;
         CaptureSource::Synthetic(SyntheticCapturer::single(w, h))
     }
@@ -194,6 +204,8 @@ impl CaptureSource {
             CaptureSource::Dxgi(c) => c.next_frame(id),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.next_frame(id),
+            // apple-owned: begin
+            // apple-owned: end
         }
     }
 
@@ -206,6 +218,8 @@ impl CaptureSource {
             CaptureSource::Dxgi(c) => c.path(id),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.path(id),
+            // apple-owned: begin
+            // apple-owned: end
         }
     }
 

@@ -23,7 +23,7 @@ describe('consent receipts: the device copy, the mail and its causes (section 6.
   let url: string;
   let admin: Account;
   let group: string;
-  let pepper: { auditPepper: string };
+  let pepper: { auditPepper: string | null };
   const sockets: SignalClient[] = [];
   const sent: MailMessage[] = [];
 

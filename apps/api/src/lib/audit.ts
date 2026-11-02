@@ -1,6 +1,6 @@
 /** Thin wrappers over the db audit writer: actors of section 5.3 and the ia_audit_entries_total counter. */
 import { deskActorLabel, pepperedHash, type ActorType } from '@indiansassist/shared';
-import { insertAuditEntry, type AuditEntryRow, type AuditInput, type Executor, type OrgRow } from '@indiansassist/db';
+import { insertAuditEntry, OrgErasedError, type AuditEntryRow, type AuditInput, type Executor, type OrgRow } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
 
 export type Actor = { type: ActorType; id: string | null; label: string };
@@ -27,7 +27,11 @@ export async function writeAudit(
   return row;
 }
 
-/** PII rule of section 5.3: `sha256Hex(org.audit_pepper + ':' + value)`. */
-export function piiHash(org: Pick<OrgRow, 'auditPepper'>, value: string): string {
+/**
+ * PII rule of section 5.3: `sha256Hex(org.audit_pepper + ':' + value)`. Phase F section 5.3 step 6: an erased org's
+ * pepper is null, and hashing would yield an unpeppered (linkable) value, so it throws `OrgErasedError` instead.
+ */
+export function piiHash(org: Pick<OrgRow, 'auditPepper'> & { id?: string }, value: string): string {
+  if (org.auditPepper === null) throw new OrgErasedError(org.id ?? 'unknown');
   return pepperedHash(org.auditPepper, value);
 }

@@ -21,17 +21,23 @@ pub enum CaptureCause {
     WaylandUnsupported,
     /// Phase E §16.2: the X11 connection was lost (name only; the linux stream sends it).
     X11Lost,
+    /// Phase F §9.3: the user cancelled the portal's source dialog (name only; the wayland stream sends it).
+    PortalDenied,
+    /// Phase F §9.3: the portal stream ended or the user stopped sharing (name only; wayland stream).
+    PortalClosed,
 }
 
 impl CaptureCause {
     /// Every cause, in the order of the shared `CAPTURE_CAUSES`.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Start,
         Self::DdaLost,
         Self::SecureDesktop,
         Self::Recovered,
         Self::WaylandUnsupported,
         Self::X11Lost,
+        Self::PortalDenied,
+        Self::PortalClosed,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -42,6 +48,8 @@ impl CaptureCause {
             CaptureCause::Recovered => "recovered",
             CaptureCause::WaylandUnsupported => "wayland_unsupported",
             CaptureCause::X11Lost => "x11_lost",
+            CaptureCause::PortalDenied => "portal_denied",
+            CaptureCause::PortalClosed => "portal_closed",
         }
     }
 }

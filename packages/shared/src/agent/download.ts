@@ -16,8 +16,7 @@ const hex64 = z.string().regex(/^[0-9a-f]{64}$/, 'expected 64 lower-case hex cha
 export const AGENT_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-[0-9A-Za-z.-]{1,32})?$/;
 const version = z.string().regex(AGENT_VERSION_RE, 'expected MAJOR.MINOR.PATCH');
 
-/** One downloadable build (`GET /download/manifest`, section 2.2). */
-export const agentBuildSchema = z.strictObject({
+const agentBuildShape = z.strictObject({
   platform: z.enum(AGENT_PLATFORMS),
   arch: z.enum(AGENT_ARCHES),
   version,
@@ -25,7 +24,21 @@ export const agentBuildSchema = z.strictObject({
   sha256: hex64,
   signed: z.boolean(),
   minOs: z.string().max(64),
+  /**
+   * Phase F section 9.2 (Linux only): the portal binary shipped beside the main one in the single Linux download
+   * (`agentPortalDistFileName`). Absent: the download is the one-file archive.
+   */
+  companion: z
+    .strictObject({ sha256: hex64, size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) })
+    .optional(),
 });
+/** `companion` exists only on a Linux build (Phase F section 9.2). */
+const companionLinuxOnly = (b: { platform: AgentPlatform; companion?: unknown }): boolean =>
+  b.companion === undefined || b.platform === 'linux';
+const companionIssue = { message: 'companion is for Linux builds only', path: ['companion'] };
+
+/** One downloadable build (`GET /download/manifest`, section 2.2). */
+export const agentBuildSchema = agentBuildShape.refine(companionLinuxOnly, companionIssue);
 export type AgentBuild = z.infer<typeof agentBuildSchema>;
 
 export const downloadManifestSchema = z.strictObject({ v: z.literal(1), builds: z.array(agentBuildSchema).max(32) });
@@ -36,12 +49,14 @@ export const agentDistManifestSchema = z.object({
   v: z.literal(1),
   builds: z
     .array(
-      agentBuildSchema.extend({
-        file: z
-          .string()
-          .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/, 'a bare file name')
-          .optional(),
-      }),
+      agentBuildShape
+        .extend({
+          file: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/, 'a bare file name')
+            .optional(),
+        })
+        .refine(companionLinuxOnly, companionIssue),
     )
     .max(32),
 });
@@ -49,14 +64,27 @@ export type AgentDistManifest = z.infer<typeof agentDistManifestSchema>;
 
 /**
  * The dist file name of a build: `IndiansAssist-windows-x64-0.3.0.exe`, `IndiansAssist-android-universal-0.3.0.apk`,
- * and (Phase E section 7.6) the raw Linux ELF `IndiansAssist-linux-x64-0.3.0`, which has no extension.
+ * (Phase E section 7.6) the raw Linux ELF `IndiansAssist-linux-x64-0.3.0`, which has no extension, and (Phase F
+ * section 17.8) the zipped macOS bundle `IndiansAssist-macos-arm64-0.3.0.app.zip`.
  */
 export function agentDistFileName(platform: AgentPlatform, arch: AgentArch, v: string): string {
   if (platform === 'linux') return `IndiansAssist-linux-${arch}-${v}`;
+  if (platform === 'macos') return `IndiansAssist-macos-${arch}-${v}.app.zip`;
   return `IndiansAssist-${platform}-${arch}-${v}.${platform === 'android' ? 'apk' : 'exe'}`;
 }
 
-/** Which arch values a platform serves (Windows: x64 / arm64; Android: one universal APK; Linux: x64 only, E W81). */
+/**
+ * Phase F section 9.2: the dist file name of the Linux portal companion (`IndiansAssist-linux-portal-x64-0.3.0`),
+ * shipped as `.ia-portal` inside the single Linux download.
+ */
+export function agentPortalDistFileName(v: string): string {
+  return `IndiansAssist-linux-portal-x64-${v}`;
+}
+
+/**
+ * Which arch values a platform serves (Windows: x64 / arm64; Android: one universal APK; Linux: x64 only, E W81;
+ * macOS: arm64 / x64, Phase F section 17.1).
+ */
 export function archAllowed(platform: AgentPlatform, arch: AgentArch): boolean {
   if (platform === 'android') return arch === 'universal';
   if (platform === 'linux') return arch === 'x64';

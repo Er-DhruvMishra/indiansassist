@@ -52,6 +52,8 @@ export function toUser(u: UserRow, opts: { loginMethod?: LoginMethod | null } = 
     lastLoginAt: isoOrNull(u.lastLoginAt),
     deviceGroupIds: u.deviceGroupIds ?? null,
     ssoBreakGlass: u.ssoBreakGlass ?? false,
+    // Phase F section 4.2c.
+    inviteMailedAt: isoOrNull(u.inviteMailedAt ?? null),
     ...(opts.loginMethod !== undefined ? { loginMethod: opts.loginMethod } : {}),
   };
 }

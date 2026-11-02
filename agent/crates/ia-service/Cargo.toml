@@ -34,6 +34,9 @@ service = [
 ]
 # Local-testing switches (`--data-dir`, `--console`, `--api-origin`), as C does with `dev`.
 dev = []
+# Phase F §17.3 / §17.7 (stream apple): the macOS LaunchDaemon half. Declared empty by F0;
+# the apple stream names its dependencies here. Compiles to nothing off macOS.
+macos-service = []
 
 [dependencies]
 ia-core.workspace = true
@@ -76,6 +79,9 @@ windows = { workspace = true, optional = true, features = [
     "Win32_System_Threading",
     "Win32_System_RemoteDesktop",
 ] }
+
+# Phase F §17.7: owned by the apple stream (macOS-target dependencies of `macos-service`).
+[target.'cfg(target_os = "macos")'.dependencies]
 
 [dev-dependencies]
 serde_json.workspace = true

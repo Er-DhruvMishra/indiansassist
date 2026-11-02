@@ -16,6 +16,11 @@ pub use win::Tray;
 #[cfg(target_os = "linux")]
 pub use sni::Tray;
 
+// apple-owned: begin
+#[cfg(target_os = "macos")]
+pub use mac::Tray;
+// apple-owned: end
+
 /// The tray state, mapped to colour + tooltip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayState {
@@ -50,6 +55,8 @@ impl TrayState {
         }
     }
 
+    // Used by the Windows and Linux trays; the macOS stub draws nothing yet (apple stream).
+    #[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
     fn colours(&self) -> ([u8; 3], bool, bool) {
         match self {
             TrayState::NotConnected => ([128, 128, 128], false, false),
@@ -339,6 +346,38 @@ mod sni {
         }
     }
 }
+
+// apple-owned: begin
+/// Phase F §17.2: the macOS menu-bar item (`tray-icon` on macOS, apple stream). An F0 stub with
+/// the API of the other targets' `Tray`: [`Tray::new`] returns `None` (no menu-bar item, so the
+/// pill and panel carry every tray function, as on a Linux desktop without a tray, W80).
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::{TrayAction, TrayState};
+
+    /// The menu-bar item (none until the apple stream fills it).
+    pub struct Tray {
+        _state: TrayState,
+    }
+
+    impl Tray {
+        /// No menu-bar item yet: always `None`.
+        pub fn new(_state: TrayState) -> Option<Tray> {
+            None
+        }
+
+        /// Update the icon and tooltip (nothing to update yet).
+        pub fn set_state(&mut self, state: TrayState) {
+            self._state = state;
+        }
+
+        /// The clicks and menu picks since the last poll (none yet).
+        pub fn poll(&self) -> Vec<TrayAction> {
+            Vec::new()
+        }
+    }
+}
+// apple-owned: end
 
 #[cfg(test)]
 mod tests {

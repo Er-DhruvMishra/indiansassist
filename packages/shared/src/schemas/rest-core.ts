@@ -83,6 +83,8 @@ export const userSchema = z.object({
   ssoBreakGlass: z.boolean().optional(),
   /** Phase E section 3.8: how the current session was minted (`/auth/me` only; null for pre-Phase E sessions). */
   loginMethod: z.enum(LOGIN_METHODS).nullable().optional(),
+  /** Phase F section 4.2c: when the last invitation mail was sent (always sent by a Phase F api; null = never). */
+  inviteMailedAt: isoTimestampSchema.nullable().optional(),
 });
 
 export const brandingSchema = z.object({
@@ -195,8 +197,11 @@ export const inviteRequestSchema = z.object({
     .transform((s) => sanitiseText(s, SANITISE_LIMITS.default)),
   role: userRoleSchema,
   tier: packageTierSchema.optional(),
+  /** Phase F section 4.2a: default true when invite mail is available (`/auth/options.inviteMail`), else ignored. */
+  sendEmail: z.boolean().optional(),
 });
-export const inviteResponseSchema = z.object({ user: userSchema, inviteUrl: z.string() });
+/** `mailed` (Phase F section 4.2a): whether the invitation mail was sent; absent from a pre-Phase F api. */
+export const inviteResponseSchema = z.object({ user: userSchema, inviteUrl: z.string(), mailed: z.boolean().optional() });
 
 export const roleChangeRequestSchema = z.object({ role: userRoleSchema, tier: packageTierSchema.optional() });
 export const statusChangeRequestSchema = z.object({ status: z.enum(['active', 'disabled']) });

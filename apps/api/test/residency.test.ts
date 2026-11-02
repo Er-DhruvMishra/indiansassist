@@ -201,7 +201,7 @@ describe('the report before any Phase E flow is configured', () => {
       host: 'mail.acme-relay.example',
       leavesInfrastructure: true,
       leavesRegion: 'unknown',
-      dataSent: 'consent receipts and break-glass notices',
+      dataSent: 'consent receipts, invitations, password-reset links and break-glass and erasure notices',
       enabled: true,
       since: null,
       enabledBy: 'operator',

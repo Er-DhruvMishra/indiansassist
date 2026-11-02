@@ -237,8 +237,31 @@ services:
       RATE_LIMIT_DISABLED: "false"
       # Phase A.2 server recorder service token (docs/specs/phase-a2-recorder.md section 2 P2); empty = disabled.
       RECORDER_TOKEN: ${RECORDER_TOKEN:-}
+      # Phase C/D agent builds (docs/specs/phase-f-contracts.md section 3.1a): mounted read-only below from
+      # infra/data/agent-dist and infra/data/agent-msi. Non-secret keys default to the config.ts defaults.
+      AGENT_DIST_DIR: /data/agent-dist
+      AGENT_MSI_DIST_DIR: /data/agent-msi
+      AGENT_MIN_VERSION: ${AGENT_MIN_VERSION:-0.3.0}
+      AGENT_ANDROID_APP_URL: ${AGENT_ANDROID_APP_URL:-}
+      # Phase D fleet (closes E W89): the MAC sealing key is required in production; previous keys open only.
+      FLEET_DATA_KEY: ${FLEET_DATA_KEY:?set FLEET_DATA_KEY in infra/.env}
+      FLEET_DATA_KEYS_PREVIOUS: ${FLEET_DATA_KEYS_PREVIOUS:-}
+      DEVICE_HELLO_RATE: ${DEVICE_HELLO_RATE:-500}
+      WAKE_CONFIRM_SEC: ${WAKE_CONFIRM_SEC:-120}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      # Mail (Phase F section 4.1): `log` sends nothing; `smtp` enables invite mail and password reset.
+      MAIL_DRIVER: ${MAIL_DRIVER:-log}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-true}
+      # Phase F section 11: the operator's backup retention, stated in the erasure certificate ('' = not stated).
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-}
     volumes:
       - apidata:/data
+      - ./data/agent-dist:/data/agent-dist:ro
+      - ./data/agent-msi:/data/agent-msi:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

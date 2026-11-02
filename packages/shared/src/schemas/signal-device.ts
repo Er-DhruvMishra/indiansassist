@@ -5,7 +5,7 @@
  * sent on `/signal`.
  */
 import { z } from 'zod';
-import { LIMITS, AMT_BOOT_TARGETS, AMT_OPS, APPROVED_BY, CONSENT_DECISIONS, DEVICE_ACTION_KINDS, RECORDING_MODES, WAKE_FAIL_CAUSES, WAKE_METHODS } from '../enums.js';
+import { LIMITS, AMT_BOOT_TARGETS, AMT_OPS, APPROVED_BY, CONSENT_DECISIONS, DEVICE_ACTION_KINDS, DEVICE_HELLO_OSES, RECORDING_MODES, WAKE_FAIL_CAUSES, WAKE_METHODS } from '../enums.js';
 import { epochMsSchema, isoTimestampSchema, regionSchema, uuidSchema } from './common.js';
 import { signalErrorSchema, pingSchema, pongSchema } from './signal-messages.js';
 import { playbookManifestSchema } from '../agent/playbook.js';
@@ -81,6 +81,8 @@ export const amtCommandSchema = msg('amt.command', {
 // ---------- D -> S ----------
 
 export const deviceHelloClientSchema = z.strictObject({
+  /** Phase F sections 8.3e, 17.8: absent = `windows`, so a Phase D service is unaffected. */
+  os: z.enum(DEVICE_HELLO_OSES).optional(),
   serviceVersion: z.string().min(1).max(32),
   agentVersion: z.string().min(1).max(32),
   osVersion: z.string().min(1).max(32),

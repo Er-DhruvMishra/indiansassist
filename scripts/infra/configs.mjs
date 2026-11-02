@@ -171,6 +171,94 @@ export function checkRegionAgreement(env, buildManifest, version = '0.0.0') {
   return problems;
 }
 
+/**
+ * Phase F section 11 (W116): the only Permissions-Policy that allows the camera, sent by the phone page's two
+ * locations (`= /c` and `^~ /c/`) and nowhere else.
+ */
+export const CAMERA_PERMISSIONS_POLICY = 'camera=(self), geolocation=(), display-capture=(), microphone=()';
+
+/** Body of `location <spec> { ... }` with nested braces (e.g. `types { }`), or null. Last match wins. */
+export function locationBlockNested(text, spec) {
+  const esc = spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`location\\s+${esc}\\s*\\{`, 'g');
+  let found = null;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const start = i;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}') depth--;
+      i++;
+    }
+    if (depth === 0) found = text.slice(start, i - 1);
+  }
+  return found;
+}
+
+const headerValue = (block, h) => new RegExp(`add_header\\s+${h}\\s+"([^"]*)"\\s+always;`).exec(block)?.[1];
+
+/**
+ * Phase F sections 4.4, 6.2e, 7.6e and 11 (W116): the phone-camera locations (the SPA header set with only the
+ * camera Permissions-Policy, `/c/<code>` never logged), the service worker and manifest locations (no-cache, the SPA
+ * header set, the manifest MIME type), the reset routes in the auth rate-limit location, and no other location
+ * allowing the camera.
+ */
+export function checkPhaseFLocations(webConf) {
+  const problems = [];
+  for (const spec of ['= /c', '^~ /c/']) {
+    const block = locationBlockNested(webConf, spec);
+    if (!block) {
+      problems.push(`web.conf: missing location ${spec} (Phase F 6.2e)`);
+      continue;
+    }
+    for (const [h, v] of Object.entries(SECURITY_HEADERS)) {
+      const want = h === 'Permissions-Policy' ? CAMERA_PERMISSIONS_POLICY : v;
+      const got = headerValue(block, h);
+      if (got === undefined) problems.push(`web.conf: ${spec} lacks add_header ${h} ... always`);
+      else if (got !== want) problems.push(`web.conf: ${spec} ${h} is "${got}", contract says "${want}"`);
+    }
+    if (/security-headers\.conf/.test(block))
+      problems.push(`web.conf: ${spec} must list its headers, not include the SPA set (camera=() would be sent too)`);
+    if (!/try_files\s+\/index\.html\s+=404;/.test(block))
+      problems.push(`web.conf: ${spec} must serve the SPA (try_files /index.html =404)`);
+  }
+  const codePath = locationBlockNested(webConf, '^~ /c/');
+  if (codePath && !/access_log\s+off;/.test(codePath))
+    problems.push('web.conf: ^~ /c/ must set access_log off (the camera code is in the path, Phase F 6.2e)');
+  // No other place may allow the camera.
+  const camAllowed = [...webConf.matchAll(/Permissions-Policy\s+"([^"]*)"/g)].filter((m) => /camera=\(self\)/.test(m[1]));
+  if (camAllowed.length !== 2) {
+    problems.push(`web.conf: camera=(self) must appear exactly twice (= /c and ^~ /c/), found ${camAllowed.length}`);
+  }
+  for (const spec of ['= /sw.js', '= /manifest.webmanifest']) {
+    const block = locationBlockNested(webConf, spec);
+    if (!block) {
+      problems.push(`web.conf: missing location ${spec} (Phase F 7.6e)`);
+      continue;
+    }
+    if (headerValue(block, 'Cache-Control') !== 'no-cache')
+      problems.push(`web.conf: ${spec} must send Cache-Control "no-cache" always`);
+    const includesSet = /include\s+\/etc\/nginx\/ia\/security-headers\.conf;/.test(block);
+    const listsSet = Object.entries(SECURITY_HEADERS).every(([h, v]) => headerValue(block, h) === v);
+    if (!includesSet && !listsSet) problems.push(`web.conf: ${spec} must repeat the full security header set`);
+    if (/camera=\(self\)/.test(block)) problems.push(`web.conf: ${spec} must not allow the camera`);
+    if (!/try_files\s+\$uri\s+=404;/.test(block)) problems.push(`web.conf: ${spec} must be served as a file`);
+  }
+  const manifest = locationBlockNested(webConf, '= /manifest.webmanifest');
+  if (manifest && !/application\/manifest\+json/.test(manifest))
+    problems.push('web.conf: /manifest.webmanifest must be served as application/manifest+json');
+  const auth = /location\s+~\s+(\^\/api\/v1\/auth\/\S+)\s*\{/.exec(webConf)?.[1] ?? '';
+  for (const route of ['login', 'password-reset/request', 'password-reset/confirm']) {
+    if (!new RegExp(auth).test(`/api/v1/auth/${route}`))
+      problems.push(`web.conf: the auth rate-limit location must match /api/v1/auth/${route} (Phase F 4.4)`);
+  }
+  if (auth && new RegExp(auth).test('/api/v1/auth/password-reset/other'))
+    problems.push('web.conf: the auth rate-limit location matches more than the reset request and confirm routes');
+  return problems;
+}
+
 /** Bodies of every `location <spec> { ... }` block (no nested blocks inside locations here). */
 export function locationBlocks(text, spec) {
   const esc = spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

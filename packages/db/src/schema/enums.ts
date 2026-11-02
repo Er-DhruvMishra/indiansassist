@@ -18,6 +18,7 @@ import {
   DEVICE_ACTION_STATES,
   DEVICE_PLATFORMS,
   ELEVATION_LEVELS,
+  ERASURE_STATES,
   MIRROR_SCOPES,
   DEVICE_STATUSES,
   FILE_DIRECTIONS,
@@ -84,3 +85,5 @@ export const ticketPushModeEnum = pgEnum('ticket_push_mode', TICKET_PUSH_MODES);
 export const summaryStateEnum = pgEnum('summary_state', SUMMARY_STATES);
 export const summaryTriggerEnum = pgEnum('summary_trigger', SUMMARY_TRIGGERS);
 export const aiProviderEnum = pgEnum('ai_provider', AI_PROVIDERS);
+// Phase F (docs/specs/phase-f-contracts.md section 13.2)
+export const erasureStateEnum = pgEnum('erasure_state', ERASURE_STATES);

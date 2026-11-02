@@ -4,6 +4,7 @@ import { bigint, boolean, char, check, index, integer, jsonb, pgTable, text, uni
 import { auditEntry } from './audit.js';
 import { integrationTypeEnum, recordingSourceEnum, recordingStatusEnum, regionEnum } from './enums.js';
 import { createdAt, org, tstz, updatedAt, user } from './org.js';
+import type { RecordingTrackSource } from '@indiansassist/shared';
 import { session } from './session.js';
 
 export const recording = pgTable(
@@ -35,11 +36,19 @@ export const recording = pgTable(
     /** Phase B Y26: the object was removed from storage; the row stays (the chain references it). */
     deletedAt: tstz('deleted_at'),
     deletedBy: uuid('deleted_by').references(() => user.id),
+    /** Phase F section 6.5a: the Desk's screen (every earlier row) or the phone camera's track. */
+    source: text('source').$type<RecordingTrackSource>().notNull().default('desk'),
+    /** Phase F section 6.5a: set exactly for a camera recording. */
+    cameraId: uuid('camera_id'),
   },
   (t) => [
     index('recording_org_id_idx').on(t.orgId),
-    unique('recording_session_source_unique').on(t.sessionId, t.recordedBy),
+    // Phase A.2 section 9: one recording per session per source (recorder); Phase F section 6.5a: plus one per
+    // camera, so the constraint gains camera_id with NULLS NOT DISTINCT (every Desk recording has camera_id null).
+    unique('recording_session_source_unique').on(t.sessionId, t.recordedBy, t.cameraId).nullsNotDistinct(),
     check('recording_uploader_present', sql`recorded_by = 'server' or uploaded_by is not null`),
+    check('recording_source_check', sql`source in ('desk', 'camera')`),
+    check('recording_camera_id_present', sql`(source = 'camera') = (camera_id is not null)`),
   ],
 );
 

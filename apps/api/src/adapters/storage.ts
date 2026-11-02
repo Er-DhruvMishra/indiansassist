@@ -23,6 +23,18 @@ export interface ObjectStorage {
   presignGet(key: string, ttlSeconds: number, opts?: PresignOpts): Promise<string>;
   /** Idempotent. */
   delete(key: string): Promise<void>;
+  /**
+   * Phase F section 5.3 step 4: every object whose key starts with `prefix` (a valid key prefix ending in `/`, e.g.
+   * `<region>/<orgId>/`), with its size; the order is unspecified. The fs driver walks the directory (sidecars and
+   * temp files excluded), the s3 driver pages ListObjectsV2.
+   */
+  list(prefix: string): AsyncIterable<{ key: string; bytes: number }>;
+}
+
+/** A `list` prefix: a valid key followed by `/` (so `in-mum/<orgId>/` never matches `in-mum/<orgId>x/`). */
+export function assertValidPrefix(prefix: string): void {
+  if (!prefix.endsWith('/')) throw new Error(`invalid storage prefix (must end with /): ${prefix}`);
+  assertValidKey(prefix.slice(0, -1));
 }
 
 export class ObjectNotFoundError extends Error {

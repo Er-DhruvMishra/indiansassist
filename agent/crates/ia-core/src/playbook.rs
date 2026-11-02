@@ -160,7 +160,7 @@ fn validate_string_value(
                 return Err(format!("bad_args: {} fails powershell rule", p.name));
             }
         }
-        PlaybookInterpreter::Sh => {}
+        PlaybookInterpreter::Sh | PlaybookInterpreter::Zsh => {}
     }
     Ok(())
 }
@@ -303,7 +303,7 @@ pub fn lint_playbook_body(interpreter: PlaybookInterpreter, body: &str) -> LintR
                 refusal = Some("cmd body references %IA_PARAM_ outside the quoted set form".into());
             }
         }
-        PlaybookInterpreter::Sh => {}
+        PlaybookInterpreter::Sh | PlaybookInterpreter::Zsh => {}
     }
     LintResult { warnings, refusal }
 }
@@ -463,7 +463,8 @@ pub fn check_run(
 }
 
 /// The interpreters the agent on this target runs (and advertises): `powershell` and `cmd`
-/// on Windows, `sh` on Linux (Phase E §7.5).
+/// on Windows, `sh` on Linux (Phase E §7.5). macOS has its own definition below (apple stream).
+#[cfg(not(target_os = "macos"))]
 pub fn native_interpreters() -> &'static [PlaybookInterpreter] {
     if cfg!(target_os = "linux") {
         &[PlaybookInterpreter::Sh]
@@ -471,6 +472,14 @@ pub fn native_interpreters() -> &'static [PlaybookInterpreter] {
         &[PlaybookInterpreter::Powershell, PlaybookInterpreter::Cmd]
     }
 }
+
+// apple-owned: begin
+/// Phase F §17.2: the macOS agent runs `zsh` and `sh`. Empty until the apple stream fills it.
+#[cfg(target_os = "macos")]
+pub fn native_interpreters() -> &'static [PlaybookInterpreter] {
+    &[]
+}
+// apple-owned: end
 
 /// How a playbook is launched (contract §8.4 execution table). Pure decision; the binary
 /// performs the spawn.

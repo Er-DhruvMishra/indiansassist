@@ -23,4 +23,5 @@ export * from './repo/handovers.js';
 export * from './repo/devices.js';
 export * from './repo/fleet.js';
 export * from './repo/enterprise.js';
+export * from './repo/phase-f.js';
 export * from './seed.js';

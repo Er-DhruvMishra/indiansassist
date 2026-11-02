@@ -25,6 +25,8 @@ import { errorMessage, request } from '../lib/api';
 import { orgApi } from '../lib/endpoints';
 import { formatBytes } from '../lib/fileChunker';
 import { fmtDateTime, regionLabel } from '../lib/format';
+import { ResidencyErasureSlot } from './console/PhaseFSlots';
+import { RESIDENCY_ERASURE_PRINT_CSS } from './erasure/ResidencyErasure';
 
 /** Section 6.4: one A4 page, 12 mm margins, 9 pt body, no navigation chrome. Mounted only while this page is. */
 export const RESIDENCY_PRINT_CSS = `
@@ -61,7 +63,7 @@ export const RESIDENCY_PRINT_CSS = `
   .residency-report .rr-screen-only, .residency-report .rr-grid > div.rr-screen-only { display: none !important; }
   .residency-print-hide { display: none !important; }
 }
-`;
+${RESIDENCY_ERASURE_PRINT_CSS}`;
 
 const CATEGORY_LABEL: Record<DataCategoryEntry['category'], string> = {
   identity: 'Identity',
@@ -427,11 +429,8 @@ export function ResidencyReportView({ r }: { r: ResidencyReport }) {
             )}
           </Row>
           <Row label="Personal data in the chain">{r.retention.piiInChain}</Row>
-          {r.erasure && (
-            <Row label="Erasure">
-              <Badge tone="amber">{r.erasure.available ? 'Available' : 'Not available'}</Badge> {r.erasure.note}
-            </Row>
-          )}
+          {/* Phase F sections 3.2b2, 5.7: the erasure line (stream erasure), 12 mm in print. */}
+          <ResidencyErasureSlot erasure={r.erasure} />
         </Grid>
       </Card>
     </div>

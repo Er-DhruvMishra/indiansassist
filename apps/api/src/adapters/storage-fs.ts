@@ -5,13 +5,14 @@
  */
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { presignSignature } from '../lib/crypto.js';
 import {
   assertValidKey,
+  assertValidPrefix,
   HashingStream,
   ObjectNotFoundError,
   recordingIdOfKey,
@@ -97,5 +98,27 @@ export class FsObjectStorage implements ObjectStorage {
     const path = this.pathOf(key);
     await rm(path, { force: true });
     await rm(`${path}.meta.json`, { force: true });
+  }
+
+  async *list(prefix: string): AsyncIterable<{ key: string; bytes: number }> {
+    assertValidPrefix(prefix);
+    const base = this.pathOf(prefix.slice(0, -1));
+    const walk = async function* (dir: string, keyDir: string): AsyncGenerator<{ key: string; bytes: number }> {
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return; // nothing stored under the prefix
+      }
+      for (const ent of entries) {
+        const full = join(dir, ent.name);
+        const key = `${keyDir}/${ent.name}`;
+        if (ent.isDirectory()) yield* walk(full, key);
+        else if (ent.isFile() && !ent.name.endsWith('.meta.json') && !ent.name.endsWith('.tmp')) {
+          yield { key, bytes: (await stat(full)).size };
+        }
+      }
+    };
+    yield* walk(base, prefix.slice(0, -1));
   }
 }

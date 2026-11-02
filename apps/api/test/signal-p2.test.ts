@@ -139,7 +139,7 @@ describe('desk.event P2 actions (3.6)', () => {
     );
     expect(ok.entryId).toBeTruthy();
     const org = (await getOrg(t.db, admin.org.id))!;
-    const hash = pepperedHash(org.auditPepper, 'example.com');
+    const hash = pepperedHash(org.auditPepper!, 'example.com');
     const audit = await sessionAudit(t, admin, s.sessionId);
     const entry = audit.items.find((e) => e.action === 'tab.action')!;
     expect(entry.actor.type).toBe('desk');

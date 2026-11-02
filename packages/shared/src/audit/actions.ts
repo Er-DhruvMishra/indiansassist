@@ -24,16 +24,24 @@ import {
 } from '../enums.js';
 import { sanitiseText, SANITISE_LIMITS } from './sanitise.js';
 import { P2_AUDIT_ACTIONS, P2_CHAIN_SCHEMAS } from './actions-p2.js';
-import { A2_AUDIT_ACTIONS, A2_CHAIN_SCHEMAS, recordingFailedDataSchema, recordingStoredDataSchema } from './actions-a2.js';
+import {
+  A2_AUDIT_ACTIONS,
+  A2_CHAIN_SCHEMAS,
+  recordingCameraIdSchema,
+  recordingFailedDataSchema,
+  recordingStoredDataSchema,
+} from './actions-a2.js';
 import { P3_AUDIT_ACTIONS, P3_CHAIN_SCHEMAS } from './actions-p3.js';
 import { P4_AUDIT_ACTIONS, P4_CHAIN_SCHEMAS } from './actions-p4.js';
 import { E_AUDIT_ACTIONS, E_CHAIN_SCHEMAS } from './actions-e.js';
+import { F_AUDIT_ACTIONS, F_CHAIN_SCHEMAS } from './actions-f.js';
 
 export * from './actions-p2.js';
 export * from './actions-a2.js';
 export * from './actions-p3.js';
 export * from './actions-p4.js';
 export * from './actions-e.js';
+export * from './actions-f.js';
 
 export const AUDIT_ACTIONS = [
   'auth.signup',
@@ -78,6 +86,8 @@ export const AUDIT_ACTIONS = [
   ...P4_AUDIT_ACTIONS,
   // Phase E (docs/specs/phase-e-contracts.md section 13.3)
   ...E_AUDIT_ACTIONS,
+  // Phase F (docs/specs/phase-f-contracts.md section 13.3)
+  ...F_AUDIT_ACTIONS,
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -181,8 +191,9 @@ const SCHEMAS = {
   'chat.relayed': z.strictObject({ count: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }),
   'file.sent': fileData,
   'file.received': fileData,
-  'recording.started': empty,
-  // Phase A.2: optional `source: 'server'` (server recordings only).
+  // Phase F section 6.5a: optional `cameraId` on a recording of the phone camera's track.
+  'recording.started': z.strictObject({ cameraId: recordingCameraIdSchema }),
+  // Phase A.2: optional `source: 'server'` (server recordings only); Phase F: optional `cameraId`.
   'recording.stored': recordingStoredDataSchema,
   'recording.failed': recordingFailedDataSchema,
   // `suppressed`: attempts on the same (connection, session) since the previous entry that were coalesced (SEC-05).
@@ -215,6 +226,7 @@ const SCHEMAS = {
   ...P3_CHAIN_SCHEMAS,
   ...P4_CHAIN_SCHEMAS,
   ...E_CHAIN_SCHEMAS,
+  ...F_CHAIN_SCHEMAS,
 } satisfies Record<AuditAction, z.ZodType>;
 
 export type AuditDataSchemas = typeof SCHEMAS;

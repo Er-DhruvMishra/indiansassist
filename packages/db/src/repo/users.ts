@@ -17,12 +17,26 @@ export type CreateUserInput = {
   authRef?: string | null;
   inviteTokenHash?: string | null;
   inviteExpiresAt?: Date | null;
+  /** Phase F section 5.2b: the inviting admin (null for the signup admin and JIT users). */
+  roleGrantedBy?: string | null;
 };
 
 export type UserPatch = Partial<
   Pick<
     UserRow,
-    'name' | 'role' | 'status' | 'passwordHash' | 'authRef' | 'inviteTokenHash' | 'inviteExpiresAt' | 'lastLoginAt' | 'deviceGroupIds'
+    | 'name'
+    | 'role'
+    | 'status'
+    | 'passwordHash'
+    | 'authRef'
+    | 'inviteTokenHash'
+    | 'inviteExpiresAt'
+    | 'lastLoginAt'
+    | 'deviceGroupIds'
+    // Phase F sections 4.2c, 5.2b.
+    | 'inviteMailedAt'
+    | 'roleSince'
+    | 'roleGrantedBy'
   >
 >;
 
@@ -42,6 +56,7 @@ export async function createUser(exec: Executor, input: CreateUserInput): Promis
       authRef: input.authRef ?? null,
       inviteTokenHash: input.inviteTokenHash ?? null,
       inviteExpiresAt: input.inviteExpiresAt ?? null,
+      roleGrantedBy: input.roleGrantedBy ?? null,
     })
     .returning();
   return row!;

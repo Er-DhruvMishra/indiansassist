@@ -71,7 +71,7 @@ describe('phase B schema', () => {
 
   it('session_host is unique per (session, hostHash) and deletable', async () => {
     const row = await p2Session();
-    const hostHash = pepperedHash(s.org.auditPepper, 'example.com');
+    const hostHash = pepperedHash(s.org.auditPepper!, 'example.com');
     await upsertSessionHost(db, { sessionId: row.id, orgId: s.org.id, hostHash, host: 'example.com' });
     await upsertSessionHost(db, { sessionId: row.id, orgId: s.org.id, hostHash, host: 'example.com' });
     expect(await sessionHostMap(db, row.id)).toEqual({ [hostHash]: 'example.com' });

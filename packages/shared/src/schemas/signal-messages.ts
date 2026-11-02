@@ -92,7 +92,8 @@ const monitorIdsSchema = z
 /**
  * `desk.hello.client` (Phase B section 2.4, Phase C section 3.1); absent means `{ kind: 'web' }`. Extensions send
  * version and browser; a native Desk (agent / Android host) sends version, os, platform, tokenSource and
- * capabilities and no browser. `os: 'android'` is native-only.
+ * capabilities and no browser. `os: 'android'` is native-only; Phase F section 17.8 adds the native `mac` (the macOS
+ * agent) and the native-only `ios` (the iOS broadcast extension).
  */
 export const deskClientSchema = z
   .strictObject({
@@ -117,14 +118,21 @@ export const deskClientSchema = z
         c.tokenSource !== undefined &&
         c.capabilities !== undefined &&
         c.browser === undefined &&
-        (c.os === 'windows' || c.os === 'android' || c.os === 'linux')),
-    { message: 'a native client sends version, os (windows | android | linux), platform, tokenSource and capabilities, no browser' },
+        (c.os === 'windows' || c.os === 'android' || c.os === 'linux' || c.os === 'mac' || c.os === 'ios')),
+    {
+      message:
+        'a native client sends version, os (windows | android | linux | mac | ios), platform, tokenSource and capabilities, no browser',
+    },
   )
   .refine(
     (c) =>
       c.kind === 'native' ||
-      (c.platform === undefined && c.tokenSource === undefined && c.capabilities === undefined && c.os !== 'android'),
-    { message: 'platform, tokenSource, capabilities and os android are native-only' },
+      (c.platform === undefined &&
+        c.tokenSource === undefined &&
+        c.capabilities === undefined &&
+        c.os !== 'android' &&
+        c.os !== 'ios'),
+    { message: 'platform, tokenSource, capabilities and os android or ios are native-only' },
   );
 
 /** `desk.consent.native` (Phase C section 3.4): the native Desk's decision. */

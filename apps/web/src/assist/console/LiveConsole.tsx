@@ -1,6 +1,6 @@
 /** The live technician console for one session (contracts section 12 /app/sessions/:id). */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { assistMayRecord, type Session, type SessionCreated } from '@indiansassist/shared';
+import { assistMayRecord, type PackageTier, type Session, type SessionCreated } from '@indiansassist/shared';
 import { useAuth } from '../../auth/AuthContext';
 import { ChatPanel } from '../../components/ChatPanel';
 import { Dialog } from '../../components/Dialog';
@@ -21,6 +21,7 @@ import { NetworkPanel } from './NetworkPanel';
 import { RemoteView } from './RemoteView';
 import { CONSOLE_RECORDING_DISABLED_TEXT, ServerRecordingBadge } from './ServerRecordingBadge';
 import { useEnterpriseLiveHooks } from './EnterpriseSlots';
+import { CameraSlot } from './PhaseFSlots';
 
 const PHASE_TEXT: Record<string, string> = {
   resuming: 'Reconnecting to the session...',
@@ -58,10 +59,22 @@ export function LiveConsole({ sessionId, signal, cached, helloReady, deskLabel, 
     if (ctrl && session) ctrl.applySession(session);
   }, [ctrl, session]);
   if (!ctrl) return <Spinner label="Opening the console" />;
-  return <ConsoleView key={sessionId} ctrl={ctrl} sessionId={sessionId} signal={signal} deskLabel={deskLabel} />;
+  return <ConsoleView key={sessionId} ctrl={ctrl} sessionId={sessionId} signal={signal} deskLabel={deskLabel} tier={cached?.tier ?? 'p1_browser'} />;
 }
 
-function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConsoleController; sessionId: string; signal: SignalClient; deskLabel: string }) {
+function ConsoleView({
+  ctrl,
+  sessionId,
+  signal,
+  deskLabel,
+  tier,
+}: {
+  ctrl: AssistConsoleController;
+  sessionId: string;
+  signal: SignalClient;
+  deskLabel: string;
+  tier: PackageTier;
+}) {
   const { me } = useAuth();
   const snap = useSyncExternalStore(ctrl.subscribe, () => ctrl.snapshot);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -216,6 +229,12 @@ function ConsoleView({ ctrl, sessionId, signal, deskLabel }: { ctrl: AssistConso
           <Card>
             <ChatPanel items={snap.chat} peerName={peerName} peerTyping={snap.peerTyping} disabled={!live} onSend={(t) => ctrl.sendChat(t)} onTyping={(a) => ctrl.setTyping(a)} />
           </Card>
+          {/* Phase F section 6.6: the phone camera (stream camera; renders nothing until then). */}
+          <CameraSlot
+            session={{ id: sessionId, live: snap.phase === 'live', consoleRecording: snap.recording === 'recording' }}
+            sendChat={(t) => ctrl.sendChat(t)}
+            tier={tier}
+          />
           <Card>
             <FilePanel
               transfers={snap.transfers}

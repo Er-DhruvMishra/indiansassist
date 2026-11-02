@@ -7,6 +7,7 @@ import { ShortcutHelp } from '../components/ShortcutHelp';
 import { Badge, Button, cx } from '../components/ui';
 import { APP_NAME } from '../config';
 import { fmtRoleName, regionLabel } from '../lib/format';
+import { ErasureBannerSlot } from './console/PhaseFSlots';
 import { AssistSignalProvider, useAssistSignal } from './signal/AssistSignalProvider';
 import { KnockToasts } from './signal/KnockPanel';
 
@@ -24,6 +25,8 @@ const NAV: { to: string; label: string; cap?: Capability; end?: boolean }[] = [
   { to: '/app/settings/sso', label: 'SSO', cap: 'sso.read' },
   { to: '/app/settings/integrations', label: 'Integrations', cap: 'integrations.read' },
   { to: '/app/settings/ai', label: 'AI' },
+  // Phase F section 13.4 (every role reads the banner notice; the page is org_admin and auditor, section 2.1).
+  { to: '/app/settings/erasure', label: 'Erasure', cap: 'erasure.read' },
   { to: '/app/account', label: 'Account' },
 ];
 
@@ -115,6 +118,8 @@ export function AppShell() {
         </nav>
       </header>
       <main id="main" tabIndex={-1} className="mx-auto max-w-7xl px-4 py-6">
+        {/* Phase F section 5.2d: the erasure notice for every signed-in user (stream erasure). */}
+        <ErasureBannerSlot role={role} />
         <Outlet />
       </main>
       <KnockToasts />

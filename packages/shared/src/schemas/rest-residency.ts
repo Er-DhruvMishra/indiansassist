@@ -1,6 +1,6 @@
 /** REST schema: the data residency report (contracts 6.3; Phase B 11.3, Phase C 13.3, Phase D 7.2, Phase E 6.2 additions). */
 import { z } from 'zod';
-import { SSO_PROTOCOLS } from '../enums.js';
+import { ERASURE_STATES, SSO_PROTOCOLS } from '../enums.js';
 import { dataCategorySchema, dataFlowSchema, residencySignatureSchema } from '../enterprise/residency.js';
 import { hex64Schema, isoTimestampSchema, kidSchema, regionSchema, uuidSchema } from './common.js';
 
@@ -80,7 +80,17 @@ export const residencyReportSchema = z.object({
     .optional(),
   /** RECORDER_TOKEN set on this node; the recorder stores into the same region bucket. */
   recorder: z.object({ enabled: z.boolean() }).optional(),
-  /** W75: erasure by pepper destruction is not built. */
-  erasure: z.object({ available: z.literal(false), note: z.string().max(300) }).optional(),
+  /**
+   * Phase F section 5.7 (non-additive): `available` widened from `z.literal(false)` (E W75); `state` and
+   * `scheduledFor` optional on the wire, always sent by a Phase F api.
+   */
+  erasure: z
+    .object({
+      available: z.boolean(),
+      state: z.enum(['none', ...ERASURE_STATES]).optional(),
+      scheduledFor: isoTimestampSchema.nullable().optional(),
+      note: z.string().max(400),
+    })
+    .optional(),
   signature: residencySignatureSchema.optional(),
 });

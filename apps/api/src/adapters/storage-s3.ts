@@ -13,11 +13,20 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { assertValidKey, HashingStream, ObjectNotFoundError, toReadable, type ObjectStorage, type PresignOpts } from './storage.js';
+import {
+  assertValidKey,
+  assertValidPrefix,
+  HashingStream,
+  ObjectNotFoundError,
+  toReadable,
+  type ObjectStorage,
+  type PresignOpts,
+} from './storage.js';
 
 export type S3StorageOptions = {
   endpoint: string;
@@ -121,5 +130,17 @@ export class S3ObjectStorage implements ObjectStorage {
   async delete(key: string): Promise<void> {
     assertValidKey(key);
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+  }
+
+  async *list(prefix: string): AsyncIterable<{ key: string; bytes: number }> {
+    assertValidPrefix(prefix);
+    let token: string | undefined;
+    do {
+      const res = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ...(token ? { ContinuationToken: token } : {}) }),
+      );
+      for (const o of res.Contents ?? []) if (o.Key) yield { key: o.Key, bytes: Number(o.Size ?? 0) };
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
   }
 }

@@ -50,7 +50,8 @@
   "playbookInterpreters": [
     "powershell",
     "cmd",
-    "sh"
+    "sh",
+    "zsh"
   ],
   "playbookErrors": [
     "timeout",
@@ -88,7 +89,9 @@
     "projection",
     "xshm",
     "xgetimage",
-    "none"
+    "none",
+    "portal",
+    "sck"
   ],
   "secFailReasons": [
     "suite",
@@ -180,7 +183,8 @@
     "clipboard",
     "elevation",
     "input_blocked",
-    "device_attest"
+    "device_attest",
+    "keep"
   ],
   "wsCloseHandedOver": 4411,
   "androidCapabilities": {
@@ -206,7 +210,8 @@
   "agentPlatforms": [
     "windows",
     "android",
-    "linux"
+    "linux",
+    "macos"
   ],
   "captureCauses": [
     "start",
@@ -214,7 +219,9 @@
     "secure_desktop",
     "recovered",
     "wayland_unsupported",
-    "x11_lost"
+    "x11_lost",
+    "portal_denied",
+    "portal_closed"
   ],
   "linuxFileNames": [
     {

@@ -11,6 +11,7 @@ import {
   AGENT_PLATFORMS,
   ELEVATION_DENY_CAUSES,
   ELEVATION_FAIL_ERRORS,
+  INSTALLER_FORMATS,
   LIMITS,
   PLAYBOOK_ERRORS,
   PLAYBOOK_INTERPRETERS,
@@ -185,6 +186,10 @@ export const P3_CHAIN_SCHEMAS = {
     arch: z.enum(AGENT_ARCHES),
     version: z.string().transform((s) => sanitiseText(s, 40)),
     sha256: hash,
+    /** Phase F section 9.5: the Linux download carried the portal companion. */
+    companion: z.boolean().optional(),
+    /** Phase F section 8.11: the installer package format (absent = the agent or an MSI). */
+    format: z.enum(INSTALLER_FORMATS).optional(),
   }),
   'token.iaconfig_issued': z.strictObject({ tokenId: id }),
 } as const;

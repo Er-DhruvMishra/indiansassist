@@ -150,9 +150,19 @@ export const agentControlRequestSchema = z.discriminatedUnion(
 
 /**
  * `ctl.event capture.cause` (section 5.1); `wayland_unsupported` and `x11_lost` are the Linux causes of Phase E
- * section 7.4. Mirrored by `ia_core::capture_decision::CaptureCause`.
+ * section 7.4; `portal_denied` and `portal_closed` the portal causes of Phase F section 9.3. Mirrored by
+ * `ia_core::capture_decision::CaptureCause`.
  */
-export const CAPTURE_CAUSES = ['start', 'dda_lost', 'secure_desktop', 'recovered', 'wayland_unsupported', 'x11_lost'] as const;
+export const CAPTURE_CAUSES = [
+  'start',
+  'dda_lost',
+  'secure_desktop',
+  'recovered',
+  'wayland_unsupported',
+  'x11_lost',
+  'portal_denied',
+  'portal_closed',
+] as const;
 export type CaptureCause = (typeof CAPTURE_CAUSES)[number];
 
 /** The new `ctl.event` kinds (section 5.1). */
@@ -165,6 +175,8 @@ export const AGENT_CONTROL_EVENT_KINDS = [
   'input_blocked',
   // Phase D rule 3.5b: the device-key attestation of the SAS of an auto-granted P4 session.
   'device_attest',
+  // Phase F section 3.4b: the Desk user's Keep choice, reported read-only to the console.
+  'keep',
 ] as const;
 const ev = <K extends string, S extends z.ZodRawShape>(kind: K, shape: S) =>
   z.strictObject({ t: z.literal('ctl.event'), kind: z.literal(kind), ts, ...shape });
@@ -191,6 +203,7 @@ export const agentControlEventSchema = z.discriminatedUnion('kind', [
     gen: z.number().int().min(0).max(65535),
     sig: z.string().regex(/^[A-Za-z0-9_-]{86}$/, 'base64url Ed25519 signature'),
   }),
+  ev('keep', { kept: z.boolean() }),
 ]);
 
 /** Section 3.8: the `control.input` kind an op is aggregated under (null: not a `control.input` op). */

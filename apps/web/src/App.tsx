@@ -33,6 +33,10 @@ const SsoSettingsPage = lazy(() => import('./assist/sso/SsoSettingsPage').then((
 const SsoContinuePage = lazy(() => import('./assist/sso/SsoContinuePage').then((m) => ({ default: m.SsoContinuePage })));
 const IntegrationsPage = lazy(() => import('./assist/integrations/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })));
 const AiPolicyPage = lazy(() => import('./assist/summary/AiPolicyPage').then((m) => ({ default: m.AiPolicyPage })));
+// Phase F (docs/specs/phase-f-contracts.md section 13.4): placeholders the mail, camera and erasure streams fill.
+const PasswordResetPage = lazy(() => import('./pages/PasswordResetPage').then((m) => ({ default: m.PasswordResetPage })));
+const CameraJoinPage = lazy(() => import('./camera/CameraJoinPage').then((m) => ({ default: m.CameraJoinPage })));
+const ErasurePage = lazy(() => import('./assist/erasure/ErasurePage').then((m) => ({ default: m.ErasurePage })));
 
 function RootRedirect() {
   const { status } = useAuth();
@@ -66,6 +70,9 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/invite" element={<InvitePage />} />
         <Route path="/sso/continue" element={<SsoContinuePage />} />
+        <Route path="/reset" element={<PasswordResetPage />} />
+        <Route path="/c" element={<CameraJoinPage />} />
+        <Route path="/c/:code" element={<CameraJoinPage />} />
         <Route path="/join" element={<JoinPage />} />
         <Route path="/download" element={<DownloadRedirect />} />
         <Route path="/room" element={<RoomLayout />}>
@@ -95,6 +102,7 @@ export function App() {
           <Route path="settings/sso" element={<Allow cap="sso.read"><SsoSettingsPage /></Allow>} />
           <Route path="settings/integrations" element={<Allow cap="integrations.read"><IntegrationsPage /></Allow>} />
           <Route path="settings/ai" element={<AiPolicyPage />} />
+          <Route path="settings/erasure" element={<Allow cap="erasure.read"><ErasurePage /></Allow>} />
           <Route path="account" element={<AccountPage />} />
         </Route>
         <Route path="*" element={<NotFound />} />

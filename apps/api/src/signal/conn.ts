@@ -72,8 +72,11 @@ export function wsTransport(ws: WebSocket): Transport {
 /** Most session ids one socket remembers a remote owner for. */
 const MAX_ROUTES = 64;
 
+/** Which participant a helloed socket is; `camera` (Phase F section 6.4) is the phone that joined as a camera. */
+export type ConnSide = 'assist' | 'desk' | 'recorder' | 'camera';
+
 export class Conn {
-  side: 'assist' | 'desk' | 'recorder' | null = null;
+  side: ConnSide | null = null;
   desk: DeskInfo | null = null;
   recorder: RecorderInfo | null = null;
   readonly openedAt = Date.now();
@@ -207,6 +210,12 @@ export type LiveP4 = {
   approvedBy: ApprovedBy | null;
 };
 
+/**
+ * Phase F section 6.4: the phone camera of a live session (at most one, `LIMITS.cameraPerSession`); null until a
+ * camera says hello. `startedAt` is set at `camera.ready`; `resumeKeyHash` is `sha256Hex` of the resume key.
+ */
+export type LiveCamera = { cameraId: string; connId: string | null; startedAt: number | null; resumeKeyHash: string };
+
 /** Server recorder state of a live session (Phase A.2 section 6). */
 export type LiveRecorder = {
   /** Open assignment: the socket asked to join, its deadline, sockets already tried this activation. */
@@ -245,6 +254,8 @@ export type Live = {
   /** Phase A.2 M1 snapshot (null = before A.2). */
   recordingMode: RecordingMode | null;
   recorder: LiveRecorder;
+  /** Phase F section 6.4: the phone camera (camera stream); null when none. */
+  camera: LiveCamera | null;
   /**
    * The session's native Desk advertises `capabilities.features` `recorder` (it answers the A.2 recorder offer). Read
    * from the stored `desk.hello.client`, so a hand-over re-evaluates it against the new Desk (Phase C section 9 R2).
@@ -357,6 +368,7 @@ export function newLive(s: LiveSource): Live {
       started: s.serverRecording === true,
       stopped: false,
     },
+    camera: null,
     deskRecorder: deskAnswersRecorder(s.deskClient),
     relayWindow: [],
     controlBuckets: {

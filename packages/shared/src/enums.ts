@@ -68,11 +68,14 @@ export const SESSION_END_REASONS = [
   'consent_required',
   'policy_timeout',
   'device_disabled',
+  // Phase F section 5.3 step 2: every live session of an org ended by its erasure.
+  'org_erased',
 ] as const;
 export type SessionEndReason = (typeof SESSION_END_REASONS)[number];
 
 /** `recorder` (Phase A.2, docs/specs/phase-a2-recorder.md section 2): the server-side recorder participant. */
-export const PARTICIPANT_ROLES = ['assist', 'desk', 'supervisor', 'recorder'] as const;
+/** `camera` (Phase F section 6.7): the phone that joined a live session as a camera only. */
+export const PARTICIPANT_ROLES = ['assist', 'desk', 'supervisor', 'recorder', 'camera'] as const;
 export type ParticipantRole = (typeof PARTICIPANT_ROLES)[number];
 
 /** `device` (Phase D conventions): events a device attests with its identity-key signature. */
@@ -116,8 +119,11 @@ export const RECORDER_STOP_REASONS = [
 ] as const;
 export type RecorderStopReason = (typeof RECORDER_STOP_REASONS)[number];
 
-/** The far end of a relayed `webrtc.*` frame on the Desk side (A.2 section 7 N2); absent = `assist`. */
-export const WEBRTC_PEERS = ['assist', 'recorder'] as const;
+/**
+ * The far end of a relayed `webrtc.*` frame on the Desk side (A.2 section 7 N2); absent = `assist`. `camera`
+ * (Phase F section 6.4): the phone camera's own peer connection with the Assist.
+ */
+export const WEBRTC_PEERS = ['assist', 'recorder', 'camera'] as const;
 export type WebrtcPeer = (typeof WEBRTC_PEERS)[number];
 
 /** `recorderId` (A.2 section 2 P4). */
@@ -308,6 +314,21 @@ export const LIMITS = {
   /** Per region (section 5.8c): the worker runs only on the region's sweeper lease holder. */
   summaryConcurrency: 2,
   webhookRotationOverlapHours: 24,
+  // Phase F section 13.1 additions.
+  passwordResetTtlMin: 30,
+  passwordResetPerHour: 3,
+  erasureApprovalTtlDays: 7,
+  erasureCoolingOffDays: 7,
+  erasureReauthMin: 15,
+  erasureApproverMinDays: 7,
+  erasureSoloCoolingOffDays: 14,
+  erasureConfirmTtlHours: 24,
+  erasureBatchRows: 1000,
+  cameraLinkTtlSec: 600,
+  cameraPerSession: 1,
+  cameraResumeSec: 60,
+  cameraMaxBitrateKbps: 1500,
+  cameraSnapshotsPerMinute: 10,
 } as const;
 
 export const DEFAULT_ANNOT_COLOR = '#f59e0b';
@@ -390,8 +411,11 @@ export type DeskClientKind = (typeof DESK_CLIENT_KINDS)[number];
 export const DESK_BROWSERS = ['chrome', 'edge', 'other'] as const;
 export type DeskBrowser = (typeof DESK_BROWSERS)[number];
 
-/** `android` (Phase C section 3.1) only with `kind: 'native'` (the `deskClientSchema` refinement). */
-export const DESK_OSES = ['windows', 'mac', 'linux', 'cros', 'other', 'android'] as const;
+/**
+ * `android` (Phase C section 3.1) only with `kind: 'native'` (the `deskClientSchema` refinement). `ios` (Phase F
+ * section 17.8): the iOS broadcast extension, native only.
+ */
+export const DESK_OSES = ['windows', 'mac', 'linux', 'cros', 'other', 'android', 'ios'] as const;
 export type DeskOs = (typeof DESK_OSES)[number];
 
 /** `os` (Phase C section 3.8): OS-level input of a native Desk; the B `input.mode` op keeps `dom` / `debugger`. */
@@ -444,3 +468,5 @@ export * from './enums-p3.js';
 export * from './enums-p4.js';
 // Phase E (docs/specs/phase-e-contracts.md section 13.1): the enterprise enumerations live in enums-e.ts.
 export * from './enums-e.js';
+// Phase F (docs/specs/phase-f-contracts.md section 13.1): the Phase F enumerations live in enums-f.ts.
+export * from './enums-f.js';

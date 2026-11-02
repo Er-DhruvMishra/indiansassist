@@ -63,3 +63,10 @@ export * from './enterprise/residency.js';
 export * from './schemas/rest-sso.js';
 export * from './schemas/rest-integrations.js';
 export * from './schemas/rest-summary.js';
+// Phase F (docs/specs/phase-f-contracts.md section 13.1)
+export * from './schemas/rest-mail.js';
+export * from './schemas/rest-erasure.js';
+export * from './schemas/rest-camera.js';
+export * from './schemas/signal-camera.js';
+export * from './erasure/certificate.js';
+export * from './touch/gestures.js';

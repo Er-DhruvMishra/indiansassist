@@ -38,6 +38,7 @@ import {
   SUMMARY_TRIGGERS,
   TICKET_PUSH_MODES,
   TICKET_PUSH_STATES,
+  ERASURE_STATES,
 } from '@indiansassist/shared';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -68,6 +69,8 @@ const TABLES = [
   'integration',
   'login_attempt',
   'org',
+  'org_erasure',
+  'password_reset',
   'playbook',
   'playbook_run',
   'recording',
@@ -123,6 +126,8 @@ const ENUMS: Record<string, readonly string[]> = {
   summary_trigger: SUMMARY_TRIGGERS,
   ticket_push_mode: TICKET_PUSH_MODES,
   ticket_push_state: TICKET_PUSH_STATES,
+  // Phase F (section 13.2)
+  erasure_state: ERASURE_STATES,
 };
 
 describe('migrations', () => {
@@ -172,10 +177,10 @@ describe('migrations', () => {
   it('are idempotent (a second migrate is a no-op)', async () => {
     await migrate(db);
     const rows = await queryRows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(rows[0]!.n).toBe(9);
+    expect(rows[0]!.n).toBe(10);
   });
 
-  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C, playbook-pins, Phase D and Phase E migrations', () => {
+  it('commit a journal with the init, append_only, open-session index, Phase B, A.2 recorder, Phase C, playbook-pins, Phase D, Phase E and Phase F migrations', () => {
     const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as {
       entries: { tag: string }[];
     };
@@ -189,6 +194,7 @@ describe('migrations', () => {
       '0006_playbook_pins',
       '0007_phase_d',
       '0008_phase_e',
+      '0009_phase_f',
     ]);
   });
 

@@ -96,6 +96,23 @@ export const API_ERROR_STATUS = {
   ai_disabled: 409,
   ai_transcript_disabled: 409,
   transcript_notice_missing: 409,
+  // ---------- Phase F (docs/specs/phase-f-contracts.md section 2.4) ----------
+  /** One code for an unknown, used, expired or superseded reset token (section 4.3). */
+  reset_invalid: 400,
+  /** Another erasure of the org is open; or the admin set is frozen while one is open (section 5.2e). */
+  erasure_exists: 409,
+  /** No eligible approver, or an ineligible approval (section 5.2b); `details.soloAvailable` (5.2f). */
+  erasure_second_admin: 409,
+  erasure_confirm_mismatch: 400,
+  erasure_confirm_invalid: 400,
+  camera_unrecordable: 409,
+  erasure_not_cancellable: 409,
+  /** Every authenticated request, login and socket hello of an org whose erasure is `executing` (section 5.3 step 1). */
+  org_erasing: 409,
+  camera_busy: 409,
+  camera_unsupported: 409,
+  /** `POST /devices/:id/sessions` to a `linux` device whose interactive state is `none` (section 8.4f). */
+  prelogin_unsupported: 409,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_STATUS;
@@ -126,6 +143,11 @@ export const SIGNAL_ERROR_CODES = [
   'device_disabled',
   'device_bad_signature',
   'capability_mismatch',
+  // Phase F section 6.4: a bad, spent or expired camera code or resume key; a second camera for a session.
+  'camera_link_invalid',
+  'camera_busy',
+  // Phase F section 2.4: the hello of an org whose erasure is executing (on /signal and /signal/device).
+  'org_erasing',
 ] as const;
 export type SignalErrorCode = (typeof SIGNAL_ERROR_CODES)[number];
 

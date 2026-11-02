@@ -33,7 +33,10 @@
 use std::collections::VecDeque;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+// Only the Windows and Linux launchers spawn (`launch` below); elsewhere playbooks are refused.
+#[cfg(any(windows, target_os = "linux"))]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -425,10 +428,10 @@ fn launch(spec: &RunSpec) -> std::io::Result<Launched> {
             c.stdin(Stdio::null());
             c
         }
-        PlaybookInterpreter::Sh => {
+        PlaybookInterpreter::Sh | PlaybookInterpreter::Zsh => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
-                "sh is not supported on Windows",
+                "sh and zsh are not supported on Windows",
             ))
         }
     };

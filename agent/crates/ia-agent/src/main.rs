@@ -64,6 +64,12 @@ fn main() {
     // the deep-link handler and the single instance.
     #[cfg(target_os = "linux")]
     linux_start(&cli, &mut candidates);
+    // apple-owned: begin
+    // Phase F §17.2: the macOS start-up (the `.iaconfig` sidecar beside `IndiansAssist.app`, the
+    // `CFBundleURLTypes` deep link, the single instance); empty until the apple stream fills it.
+    #[cfg(target_os = "macos")]
+    macos_start(&cli, &mut candidates);
+    // apple-owned: end
     let resolved = resolve(&candidates);
 
     println!("IndiansAssist agent {}", env!("CARGO_PKG_VERSION"));
@@ -74,6 +80,12 @@ fn main() {
 
     run(&cli, resolved);
 }
+
+// apple-owned: begin
+/// Phase F §17.2: the macOS start-up checks and carriers (apple stream). Empty until then.
+#[cfg(target_os = "macos")]
+fn macos_start(_cli: &Cli, _candidates: &mut Candidates) {}
+// apple-owned: end
 
 /// Phase E rule 7.3d: never as root. §7.4: a graphical session is required (a synthetic dev run
 /// needs none). §7.6 carriers: rank 3 the extension-less filename (`IndiansAssist-<region>-<dddd>-

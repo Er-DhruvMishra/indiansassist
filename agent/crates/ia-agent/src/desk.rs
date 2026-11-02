@@ -123,6 +123,16 @@ pub fn linux_caps(mode: &ScreenMode, monitors: usize) -> AgentCapabilities {
     linux_capabilities(monitors.clamp(1, 16) as u8, wayland)
 }
 
+// apple-owned: begin
+/// Phase F §17.2: the capabilities of a macOS Desk, from what TCC has granted at `desk.hello`
+/// (`ia_core::types::macos_capabilities`; the documented empty value until the apple stream
+/// fills it).
+#[cfg(target_os = "macos")]
+pub fn macos_caps(monitors: usize) -> AgentCapabilities {
+    ia_core::types::macos_capabilities(monitors.clamp(1, 16) as u8)
+}
+// apple-owned: end
+
 /// The X11 monitors of `display` (RandR 1.5, root fallback), or an empty list when the X server
 /// cannot be reached.
 #[cfg(all(target_os = "linux", feature = "x11"))]

@@ -16,6 +16,9 @@ members = [
     "crates/ia-input-x11",
     "crates/ia-ui",
     "crates/ia-agent",
+    # Phase F §17.7: the macOS stubs the apple stream fills (they compile to nothing elsewhere).
+    "crates/ia-capture-mac",
+    "crates/ia-input-mac",
 ]
 
 # Phase C contract §11.3: MSRV Rust 1.99; build host x86_64-pc-windows-msvc. Phase E §7.1 adds
@@ -115,6 +118,8 @@ ia-frame = { path = "crates/ia-frame" }
 ia-capture-x11 = { path = "crates/ia-capture-x11" }
 ia-input-x11 = { path = "crates/ia-input-x11" }
 ia-ui = { path = "crates/ia-ui" }
+ia-capture-mac = { path = "crates/ia-capture-mac" }
+ia-input-mac = { path = "crates/ia-input-mac" }
 
 # The ladder downscale and the BGRA->I420 converter are per-pixel loops: optimise them in dev /
 # test builds too, so the pump (and its loopback tests) run near real time without `--release`.

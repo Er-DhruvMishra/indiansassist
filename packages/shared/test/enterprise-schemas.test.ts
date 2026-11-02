@@ -141,10 +141,11 @@ describe('additive enum values (section 16.2)', () => {
   it('extends the A-D lists without reordering them', () => {
     expect(INTEGRATION_TYPES).toEqual(['zoho_desk', 'servicenow', 'jira', 'freshdesk', 'webhook']);
     expect(LOGIN_METHODS).toEqual(['local', 'invite', 'oidc', 'saml']);
-    expect(AGENT_PLATFORMS).toEqual(['windows', 'android', 'linux']);
-    expect(CAPTURE_PATHS).toEqual(['dda', 'gdi', 'projection', 'xshm', 'xgetimage', 'none']);
-    expect(CAPTURE_CAUSES).toEqual(['start', 'dda_lost', 'secure_desktop', 'recovered', 'wayland_unsupported', 'x11_lost']);
-    expect(ORG_SECRET_PURPOSES).toEqual(['sso-oidc-client-secret', 'sso-saml-sp-key', 'integration-credentials', 'webhook-secret']);
+    // Phase F sections 9.2, 17.8 extend these lists at their ends (phase-f-schemas.test.ts).
+    expect(AGENT_PLATFORMS.slice(0, 3)).toEqual(['windows', 'android', 'linux']);
+    expect(CAPTURE_PATHS.slice(0, 6)).toEqual(['dda', 'gdi', 'projection', 'xshm', 'xgetimage', 'none']);
+    expect(CAPTURE_CAUSES.slice(0, 6)).toEqual(['start', 'dda_lost', 'secure_desktop', 'recovered', 'wayland_unsupported', 'x11_lost']);
+    expect(ORG_SECRET_PURPOSES.slice(0, 4)).toEqual(['sso-oidc-client-secret', 'sso-saml-sp-key', 'integration-credentials', 'webhook-secret']);
     expect(AI_INFERENCE_GEO).toEqual({ 'us-east': 'us', 'in-mum': null, 'eu-fra': null });
     expect(PUBLIC_EMAIL_DOMAINS).toHaveLength(30);
     expect(SAML_NAMEID_FORMAT_URNS.persistent).toBe('urn:oasis:names:tc:SAML:2.0:nameid-format:persistent');
@@ -571,7 +572,8 @@ describe('residency additions (section 6.2)', () => {
         erasure: { available: false, note: 'not implemented' },
       }),
     ).toBe(true);
-    expect(ok(residencyReportSchema, { ...report, erasure: { available: true, note: 'x' } })).toBe(false);
+    // Phase F section 5.7 widened `available` (the one non-additive residency change).
+    expect(ok(residencyReportSchema, { ...report, erasure: { available: true, note: 'x' } })).toBe(true);
   });
 });
 

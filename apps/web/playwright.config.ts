@@ -15,6 +15,11 @@
  *
  * Ports 4000 and 5173 must be free; `E2E_API_PORT=4100` moves the API when :4000 is taken (the web app reads it
  * through VITE_API_URL). The three suites use different data dirs so they never share state.
+ *
+ * Phase F (docs/specs/phase-f-contracts.md sections 1.5, 15.9): the default suite also holds the `f-*.spec.ts` specs
+ * (`pnpm e2e:f`); the P3 suite also holds the `<stream>-p3.spec.ts` specs (`camera-p3.spec.ts`) and honours
+ * E2E_DATA_DIR (default unchanged, ./data/e2e-p3). The emulator specs (`*-emulator.spec.ts`) belong only to
+ * e2e/emulator.config.ts, the mobile and Linux suites to their own configs.
  */
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'node:path';
@@ -30,6 +35,8 @@ const apiUrl = `http://localhost:${apiPort}`;
 const webPort = process.env.E2E_WEB_PORT || '5173';
 const webUrl = `http://localhost:${webPort}`;
 const dataDir = process.env.E2E_DATA_DIR || './data/e2e';
+// Phase F section 3.5: the P3 suite honours E2E_DATA_DIR too (reset-data-p3.mjs checks it stays under ./data).
+const p3DataDir = process.env.E2E_DATA_DIR || './data/e2e-p3';
 const originEnv = {
   WEB_ORIGIN: webUrl,
   REGION_ORIGINS: `in-mum=${webUrl},eu-fra=${webUrl},us-east=${webUrl}`,
@@ -53,8 +60,9 @@ const apiEnv: Record<string, string> = p4
       PORT: apiPort,
       API_ORIGIN: apiUrl,
       METRICS_PORT: '0',
-      PGLITE_DIR: './data/e2e-p3/pglite',
-      STORAGE_FS_DIR: './data/e2e-p3/storage',
+      PGLITE_DIR: `${p3DataDir}/pglite`,
+      STORAGE_FS_DIR: `${p3DataDir}/storage`,
+      E2E_DATA_DIR: p3DataDir,
       RATE_LIMIT_DISABLED: '1',
       SIGNUP_PLAN_TIER: 'p3_portable',
       // The download grant serves the built dev agent binary (run-p3.mjs sets AGENT_DEV_STUB).
@@ -87,8 +95,9 @@ const resetCmd = p4
 export default defineConfig({
   testDir: './e2e',
   // The default suite also holds the Phase E specs (`enterprise-{sso,tickets,ai,residency}.spec.ts`, phase-e-contracts
-  // section 11), so `pnpm e2e:e` and `playwright test enterprise-<stream>` find them.
-  testMatch: p4 ? /package4\.spec\.ts$/ : p3 ? /package3\.spec\.ts$/ : /(package[12]|enterprise-[a-z]+)\.spec\.ts$/,
+  // section 11), so `pnpm e2e:e` and `playwright test enterprise-<stream>` find them, and the Phase F `f-*` specs
+  // (phase-f-contracts section 15.9). The P3 suite holds `package3.spec.ts` and the `<stream>-p3.spec.ts` specs.
+  testMatch: p4 ? /package4\.spec\.ts$/ : p3 ? /(package3|[a-z]+-p3)\.spec\.ts$/ : /(package[12]|enterprise-[a-z]+|f-[a-z]+)\.spec\.ts$/,
   outputDir: './e2e/artifacts/test-results',
   fullyParallel: false,
   workers: 1,

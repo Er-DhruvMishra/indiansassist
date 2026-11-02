@@ -114,7 +114,12 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
                         use winit::platform::x11::EventLoopBuilderExtX11;
                         b.with_any_thread(true);
                     }
-                    #[cfg(not(any(windows, target_os = "linux")))]
+                    // apple-owned: begin
+                    // Phase F §17.2: the AppKit event loop (apple stream); nothing yet.
+                    #[cfg(target_os = "macos")]
+                    let _ = b;
+                    // apple-owned: end
+                    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
                     let _ = b;
                 })),
                 ..Default::default()
@@ -1177,7 +1182,15 @@ impl IaApp {
         }
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    // apple-owned: begin
+    /// Phase F §17.2: the pill on macOS. The window level (above other windows) and the capture
+    /// exclusion (an `SCContentFilter` that leaves the agent's own windows out of the stream,
+    /// the macOS `WDA_EXCLUDEFROMCAPTURE`) are applied here by the apple stream; empty until then.
+    #[cfg(target_os = "macos")]
+    fn housekeeping(&mut self, _ctx: &egui::Context) {}
+    // apple-owned: end
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     fn housekeeping(&mut self, _ctx: &egui::Context) {}
 }
 

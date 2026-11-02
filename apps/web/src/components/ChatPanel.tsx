@@ -1,5 +1,5 @@
 /** Chat panel shared by the console and the Desk room (contracts section 8.1). */
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { ChatItem } from '../lib/link';
 import { fmtTime } from '../lib/format';
 import { Button, cx } from './ui';
@@ -11,6 +11,7 @@ export function ChatPanel({
   disabled,
   onSend,
   onTyping,
+  messageAccessory,
 }: {
   items: ChatItem[];
   peerName: string;
@@ -18,6 +19,11 @@ export function ChatPanel({
   disabled?: boolean;
   onSend: (text: string) => void;
   onTyping?: (active: boolean) => void;
+  /**
+   * Phase F section 6.1 step 2: something drawn beside a message (the P1 room's camera-link QR). Rendered after the
+   * message's time; null or absent changes nothing.
+   */
+  messageAccessory?: (message: ChatItem) => ReactNode;
 }) {
   const [text, setText] = useState('');
   const listRef = useRef<HTMLOListElement>(null);
@@ -74,6 +80,7 @@ export function ChatPanel({
             <span className="sr-only">{m.mine ? 'You' : peerName} said: </span>
             <span className="whitespace-pre-wrap break-words">{m.text}</span>
             <span className={cx('ml-2 text-[10px]', m.mine ? 'text-teal-100' : 'text-slate-600 dark:text-slate-400')}>{fmtTime(m.ts)}</span>
+            {messageAccessory?.(m)}
           </li>
         ))}
       </ol>

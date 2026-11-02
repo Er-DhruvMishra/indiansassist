@@ -108,6 +108,9 @@ export class AgentConsoleController extends AgentControllerCore {
       }
       case 'prompt':
         return this.set({ notice: e['state'] === 'shown' ? 'The user is being asked on the Desk.' : null });
+      case 'keep':
+        // Phase F section 3.4b: the Desk user's Keep choice, shown read-only by `<DeskKeepSlot>`.
+        return this.set({ kept: e['kept'] === true });
       default:
         return;
     }

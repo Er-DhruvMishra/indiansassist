@@ -183,9 +183,19 @@ fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>
     (input, clip)
 }
 
+// apple-owned: begin
+/// Phase F §17.2: CGEvent input (Accessibility granted) and the `NSPasteboard` text clipboard on
+/// macOS (feature `macos`). The no-op sinks until the apple stream fills it.
+#[cfg(all(target_os = "macos", feature = "macos"))]
+fn platform_io(_synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
+    (Box::new(NoopInput), Box::new(NoopClip))
+}
+// apple-owned: end
+
 #[cfg(not(any(
     all(windows, feature = "winapi"),
-    all(target_os = "linux", feature = "x11")
+    all(target_os = "linux", feature = "x11"),
+    all(target_os = "macos", feature = "macos")
 )))]
 fn platform_io(_synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
     (Box::new(NoopInput), Box::new(NoopClip))
@@ -3429,6 +3439,8 @@ fn path_from_u8(v: u8) -> CapturePath {
         x if x == CapturePath::Xshm as u8 => CapturePath::Xshm,
         x if x == CapturePath::Xgetimage as u8 => CapturePath::Xgetimage,
         x if x == CapturePath::None as u8 => CapturePath::None,
+        x if x == CapturePath::Portal as u8 => CapturePath::Portal,
+        x if x == CapturePath::Sck as u8 => CapturePath::Sck,
         _ => CapturePath::Gdi,
     }
 }

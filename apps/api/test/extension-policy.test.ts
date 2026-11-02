@@ -113,7 +113,7 @@ describe('POST /sessions/:id/events console reports (3.7, Y24)', () => {
     const audit = await sessionAudit(t, admin, s.sessionId);
     const tab = audit.items.find((e) => e.action === 'tab.action')!;
     expect(tab.actor.type).toBe('user');
-    expect(tab.data).toEqual({ kind: 'tabs.create', opId: OP, hostHash: pepperedHash(org.auditPepper, 'example.com') });
+    expect(tab.data).toEqual({ kind: 'tabs.create', opId: OP, hostHash: pepperedHash(org.auditPepper!, 'example.com') });
     expect(audit.items.find((e) => e.action === 'level.requested')?.reason).toBe('click the print button');
     expect(Object.values(audit.hosts).sort()).toEqual(['example.com', 'shop.example.com']);
   });

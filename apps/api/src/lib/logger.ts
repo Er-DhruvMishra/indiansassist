@@ -161,6 +161,13 @@ export const REDACT_PATHS = [
   '*.output',
   '*.ticket',
   '*.note',
+  // Phase F section 14: reset tokens and new passwords (the whole body is already redacted above; listed so a
+  // narrower body rule can never expose them), invite links and the SMTP URL with its credentials. '*.resumeKey' and
+  // '*.enrollConfig' are above. A bare '*.code' stays out (E section 14): the camera module never logs the code.
+  'body.token',
+  'body.newPassword',
+  '*.inviteUrl',
+  '*.smtpUrl',
 ];
 
 export function pathOnly(url: string | undefined): string {

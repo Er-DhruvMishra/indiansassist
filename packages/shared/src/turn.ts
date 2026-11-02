@@ -11,7 +11,8 @@ export type IceConfig = { iceServers: IceServer[]; iceTtl: number; iceExpiresAt:
 
 /** `user:<userId>` for the Assist, `desk:<sessionId>` for the Desk. */
 /** `recorder:<recorderId>` is the Phase A.2 service principal (docs/specs/phase-a2-recorder.md section 10). */
-export type TurnPrincipal = `user:${string}` | `desk:${string}` | `recorder:${string}`;
+/** `camera:<cameraId>` is the Phase F phone camera (docs/specs/phase-f-contracts.md section 6.4). */
+export type TurnPrincipal = `user:${string}` | `desk:${string}` | `recorder:${string}` | `camera:${string}`;
 
 /** `base64(HMAC-SHA1(key = secret, message = username))`. */
 export function turnCredential(secret: string, username: string): string {

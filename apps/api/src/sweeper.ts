@@ -33,12 +33,20 @@ import type { EnterpriseSweepPass } from './lib/enterprise-hooks.js';
 import { sweepTicketPushes } from './integrations/sweep.js';
 import { sweepSummaries } from './ai/worker.js';
 import { sweepSsoDomains } from './sso/sweep.js';
+import { sweepMailTokens } from './mail/sweep.js';
+import { sweepErasures } from './erasure/sweep.js';
 
 /** Phase E section 1.4: the stream passes, each a no-op until its stream fills it. */
 export const ENTERPRISE_SWEEP_PASSES: readonly [name: string, pass: EnterpriseSweepPass][] = [
   ['ticket pushes', sweepTicketPushes],
   ['summaries', sweepSummaries],
   ['sso domains', sweepSsoDomains],
+];
+
+/** Phase F section 1.4: likewise; run after the Phase E passes. */
+export const PHASE_F_SWEEP_PASSES: readonly [name: string, pass: EnterpriseSweepPass][] = [
+  ['mail tokens', sweepMailTokens],
+  ['erasures', sweepErasures],
 ];
 
 const HOUR_MS = 60 * 60_000;
@@ -86,6 +94,9 @@ export class Sweeper {
       // Phase E: ticket push retries (4.4d), the summary worker (5.8c), the domain re-check (3.2d).
       for (const [name, pass] of ENTERPRISE_SWEEP_PASSES)
         await pass(this.ctx).catch((err: unknown) => this.ctx.log.error({ err, pass: name }, 'enterprise sweep pass failed'));
+      // Phase F: stale reset tokens (4.3h), erasure expiry and execution (5.1, 5.3).
+      for (const [name, pass] of PHASE_F_SWEEP_PASSES)
+        await pass(this.ctx).catch((err: unknown) => this.ctx.log.error({ err, pass: name }, 'phase F sweep pass failed'));
       if (opts.forcePeriodic || Date.now() - this.lastPeriodic >= HOUR_MS) {
         this.lastPeriodic = Date.now();
         await this.periodicCheckpoints();

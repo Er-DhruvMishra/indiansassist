@@ -97,7 +97,7 @@ F0 lands first and contains only names, shapes, plumbing and empty hooks, no beh
 | 3 | wayland | after linux-p4 merged |
 | Mac | apple | on the user's Mac, any time after F0 merged and was pushed; it uses the Mac's memory, so it never competes with this machine's single Rust build; it pulls by git and pushes a branch the coordinator integrates |
 
-Machine facts the streams must respect (verified 2 Nov 2026): ports **4000, 4100 and 4105 are taken** and are never used by a Phase F suite; no Docker, no Postgres (PGlite only); WSL 2 Ubuntu 26.04.1 LTS with systemd as PID 1, `systemd-analyze` 259, `dpkg-deb` 1.23.7, `bwrap`, `dbus-daemon`, `Xvfb`, `xdotool`, unprivileged user namespaces available, and **no** `rpm`, `ansible`, `sway`, `pipewire` or `xdg-desktop-portal` (§8.12, §9.6 name the one-time installs); the Android emulator `Pixel7_API35` (image `google_apis` x86_64, so Chrome is present; back camera `emulated`, no front camera) driven by `IA_EMULATOR=1`.
+Machine facts the streams must respect (verified 2 Nov 2026): ports **4000, 4100 and 4105 are taken** and are never used by a Phase F suite; no Docker, no Postgres (PGlite only); WSL 2 Ubuntu 26.04.1 LTS with systemd as PID 1, `systemd-analyze` 259, `dpkg-deb` 1.23.7, `bwrap`, `dbus-daemon`, `Xvfb`, `xdotool`, unprivileged user namespaces available. **Corrected by F0 (2 Nov 2026, the user's install verified with `dpkg-query`):** the one-time WSL system packages of §8.12 and §9.6 **are installed**: `sway swaybg xdg-desktop-portal xdg-desktop-portal-wlr pipewire pipewire-bin wireplumber libpipewire-0.3-dev libspa-0.2-dev clang libclang-dev rpm ansible-core ansible-lint`; the user-level build tools **`cargo-deb` and `cargo-generate-rpm` are not yet installed** (§8.9, §8.12: until they are, the package-build gates are reported not met); the Android emulator `Pixel7_API35` (image `google_apis` x86_64, so Chrome is present; back camera `emulated`, no front camera) driven by `IA_EMULATOR=1`.
 
 | Stream | api port (`E2E_API_PORT`) | web port (`E2E_WEB_PORT`) | data dir (`E2E_DATA_DIR`) | smoke api | other |
 |---|---|---|---|---|---|
@@ -808,9 +808,9 @@ Cross-language fixtures (new): `packages/shared/test/fixtures/erasure/certificat
 
 | Change | Detail |
 |---|---|
-| pgEnums | `participant_role` add `camera`; `session_end_reason` add `org_erased` (`ALTER TYPE ... ADD VALUE`; nothing in `0009_phase_f` refers to either new value, the E 12.1 rule); new `erasure_state` (the §13.1 values) |
+| pgEnums | `participant_role` add `camera`; `session_end_reason` add `org_erased`; `playbook_interpreter` add `zsh` (it follows `PLAYBOOK_INTERPRETERS`, §17.8) (`ALTER TYPE ... ADD VALUE`; nothing in `0009_phase_f` refers to a new value, the E 12.1 rule); new `erasure_state` (the §13.1 values) |
 | `org` | `audit_pepper` **drops NOT NULL**; add `erasing_at` timestamptz null, `erased_at` timestamptz null; check `org_pepper_erased` `(audit_pepper is null) = (erased_at is not null)` |
-| `recording` | add `source` text not null default `'desk'` (check `source in ('desk','camera')`), `camera_id` uuid null (§6.5a) |
+| `recording` | add `source` text not null default `'desk'` (check `source in ('desk','camera')`), `camera_id` uuid null (§6.5a), check `recording_camera_id_present` `(source = 'camera') = (camera_id is not null)`; `recording_session_source_unique` widened from `(session_id, recorded_by)` to `(session_id, recorded_by, camera_id) NULLS NOT DISTINCT`, else a recorder could not store a camera recording beside the session's (F0, §16.3 F0-2) |
 | `user` | add `invite_mailed_at` timestamptz null; `role_since` timestamptz not null (added with default `now()`, then backfilled `= created_at` in the same migration); `role_granted_by` uuid null fk user (null for existing rows: no history is invented) |
 | `password_reset` (new) | `id` uuid pk, `user_id` fk user on delete cascade (index), `token_hash` char(64) not null unique, `expires_at` timestamptz not null, `used_at` timestamptz null, `superseded` boolean not null default false, `created_at` |
 | `org_erasure` (new) | `id` pk, `org_id` fk org (index), `state` erasure_state not null, `solo` boolean not null default false, `confirm_token_hash` char(64) null, `confirm_expires_at` timestamptz null, `reason` text null (scrubbed at step 5), `requested_by` fk user, `requested_at`, `approved_by` fk user null, `approved_at` null, `cooling_off_until` null, `cancelled_by` fk user null, `cancelled_at` null, `executed_at` null, `completed_at` null, `progress` jsonb not null default `{}`, `counts` jsonb null, `certificate` jsonb null, `failure` jsonb null, `created_at`, `updated_at`; **partial unique** `(org_id) WHERE state in ('pending_confirmation', 'pending_approval', 'cooling_off', 'executing')`; index `(state, cooling_off_until)` |
@@ -832,7 +832,7 @@ Cross-language fixtures (new): `packages/shared/test/fixtures/erasure/certificat
 | `org.erasure_requested` | user | §5.6 | `{ erasureId, solo: boolean }` |
 | `org.erasure_confirmed` | user | §5.2f, solo path | `{ erasureId, coolingOffUntil: ISO }` |
 | `org.erasure_approved` | user | §5.6 | `{ erasureId, coolingOffUntil: ISO }` |
-| `org.erasure_cancelled` | user | §5.6 | `{ erasureId, fromState: 'pending_approval' \| 'cooling_off' }` |
+| `org.erasure_cancelled` | user | §5.6 | `{ erasureId, fromState: 'pending_confirmation' \| 'pending_approval' \| 'cooling_off' }` (`pending_confirmation` added by F0: §5.1 cancels a solo erasure there, §16.3 F0-6) |
 | `org.erasure_expired` | system | §5.1 | `{ erasureId }` |
 | `org.erasure_started` | system | step 3 | `{ erasureId }` |
 | `org.erased` | system | step 6, the last entry | `{ erasureId, entriesBefore: int, counts: Record<string, int> (<= 40 keys) }` |
@@ -1035,7 +1035,7 @@ Every change is **additive** for existing callers unless the "new" column says o
 | `src/enums-p3.ts` | `AGENT_PLATFORMS`, `PLAYBOOK_INTERPRETERS` | `['windows', 'android', 'linux']`; `['powershell', 'cmd', 'sh']` | plus `'macos'`; plus `'zsh'` (§17.8) |
 | `src/schemas/signal-messages.ts` | `deskClientSchema` native refine | `os` windows, android or linux | plus `'mac'`, `'ios'` (§17.8) |
 | `src/schemas/signal-recorder.ts` | recorder messages | A.2 | plus `recorder.camera`; `recorder.hello.features` optional (§6.5a) |
-| `src/schemas/signal-recorder.ts`, `src/audit/actions-a2.ts` | `internalRecordingMetaSchema`, recording chain shapes | desk recordings only | plus optional `source: 'desk' \| 'camera'` and `cameraId` (§6.5a) |
+| `src/schemas/signal-recorder.ts`, `src/audit/actions-a2.ts` | `internalRecordingMetaSchema`, recording chain shapes | desk recordings only | `internalRecordingMetaSchema` plus optional `source: 'desk' \| 'camera'` and `cameraId` (together); the chain shapes (`recording.started`, `.stored`, `.failed`, `.server_started`, `.server_stopped`) plus optional `cameraId` only, because their `source` already means "who recorded" (`'server'`) (§6.5a; corrected by F0, §16.3 F0-1) |
 | `src/enums.ts` | `PARTICIPANT_ROLES` | `['assist', 'desk', 'supervisor', 'recorder']` | plus `'camera'` |
 | `src/enums.ts` | `SESSION_END_REASONS` | A–D reasons | plus `'org_erased'` |
 | `src/enums.ts` | `WEBRTC_PEERS` | `['assist', 'recorder']` | plus `'camera'` |
@@ -1046,7 +1046,7 @@ Every change is **additive** for existing callers unless the "new" column says o
 | `src/fleet/device.ts` | `deviceMachineSchema.platform`, `interactiveStateSchema` | `z.literal('windows')`; `{ state, idleSec, at }` | `z.enum(['windows', 'linux'])`; plus optional `display` |
 | `src/schemas/signal-device.ts` | `deviceHelloClientSchema` | no OS field | plus optional `os` |
 | `src/fleet/installer.ts` | `installerBuildSchema`, `installerFileName`, `installerDownloadQuerySchema` | Windows MSI only | optional `platform`, `format`; `installerFileName(arch, v, format = 'msi')`; optional `format` query |
-| `src/errors.ts` | `API_ERROR_STATUS`, `SIGNAL_ERROR_CODES` | A–E | plus §2.4 |
+| `src/errors.ts` | `API_ERROR_STATUS`, `SIGNAL_ERROR_CODES` | A–E | plus §2.4; `SIGNAL_ERROR_CODES` also gains `org_erasing` (the socket hellos answer it; §16.3 F0-5) |
 | `src/turn.ts` | `TurnPrincipal` | `` `user:${string}` \| `desk:${string}` \| `recorder:${string}` `` | plus `` `camera:${string}` `` (§6.4) |
 | `src/canonical.ts` | `pepperedHash` | hashes `pepperHex + ':' + value` for any input, so a null pepper yields `sha256Hex("null:" + value)` | throws when the pepper is not 64 lower-case hex (§5.3 step 6) |
 | `src/fleet/device.ts` | `serviceCapabilitiesSchema.elevation` | `z.literal('admin')` | `z.enum(['admin', 'user'])` (§8.7) |
@@ -1142,7 +1142,59 @@ Every change is **additive** for existing callers unless the "new" column says o
 | E | §4.2, §4.6, §6.2e, §7.4, §15.8, W75, W77, W82, W89 | unverified shapes; erasure not available; portal unshipped; Linux unattended deferred; fleet key without previous keys | §3.3 (W119); §5.7; §9 (W113); §3; §8 (W117); §3.1 |
 | infra | `infra/.env.example` | missing D keys | §3.1a, §11 |
 
+### 16.3 Foundation notes (F0, 2 Nov 2026)
+
+Corrections made against the code (each also applied where the section is cited):
+
+| # | Section | Old | New | Why (verified in the code) |
+|---|---|---|---|---|
+| F0-1 | §6.5a, §16.2 | the recording chain shapes gain `source: 'desk' \| 'camera'` | the chain shapes gain optional `cameraId` only; `internalRecordingMetaSchema` gains `source` and `cameraId`, present together | `recording.stored` / `.failed` already carry `source: 'server'` (who recorded, `actions-a2.ts`); one key cannot mean both |
+| F0-2 | §13.2 | `recording` gains `source`, `camera_id` | plus `recording_camera_id_present`; `recording_session_source_unique` widened to `(session_id, recorded_by, camera_id) NULLS NOT DISTINCT` | the A.2 unique `(session_id, recorded_by)` would refuse the camera recording beside the Desk's. Postgres 16 (compose) and PGlite support `NULLS NOT DISTINCT`. `getRecordingBySession` now reads Desk rows only; `insertRecording` takes an optional `cameraId` |
+| F0-3 | §13.2 | two `ADD VALUE` statements | also `playbook_interpreter` add `zsh` | the pgEnum is built from `PLAYBOOK_INTERPRETERS`, which §17.8 extends |
+| F0-4 | §5.7 | `erasure.note` keeps `max(300)` | `max(400)` | the binding §5.7 note is 308 characters |
+| F0-5 | §2.4 | `SIGNAL_ERROR_CODES` += `camera_link_invalid`, `camera_busy` | plus `org_erasing` | the `/signal` and `/signal/device` hellos answer `org_erasing`, and a socket `error` carries a `SignalErrorCode` |
+| F0-6 | §13.3 | `org.erasure_cancelled.fromState` has two values | plus `pending_confirmation` | §5.1 lets a solo erasure be cancelled before confirmation |
+
+Where the gate and the hooks sit, beyond the §1.4 wording:
+
+- **The `org_erasing` gate (§5.3 step 1).** `authenticate` answers `409 org_erasing` to every authenticated request (reads too). The login gate is in `mintSession` (`plugins/auth.ts`), which password, invite and SSO logins all call, so `routes/auth.ts` and `sso/complete.ts` are not edited. The Assist socket is refused at the `/signal` upgrade with HTTP 409 in `signal/hub.ts`; a null principal would have answered `not_authenticated`. `principalFromAuthSessionId` (the bridge) returns null. `device.hello` answers `error org_erasing` and closes `4403`. It is not counted in `ia_device_hello_total`, which has no label for it.
+- **Not gated by F0, with no owner in §1.4: the Desk's `desk.hello` and the P4 worker hello.** Step 2 revokes every token and ends every session within the same execution, so what is left open is the gap between step 1 and step 2. **Proposal:** the erasure stream adds a one-line `erasing_at` check to `signal/desk.ts` and `fleet/worker.ts`, or this file accepts step 2 as the gate.
+- `assertNoOpenErasure(ctx, org, change, exec?)` (`erasure/guard.ts`) takes `AdminSetChange` (`invite { role }`, `role { userId, from, to }`, `status { userId, role, from, to }`). It is called before each of the three changes and allows everything until the erasure stream fills it. `role_since` / `role_granted_by` are written at the invite (`roleGrantedBy` = the inviter) and on a role change that changes the role.
+- **The stream hooks.** The route plugins are `PHASE_F_ROUTE_PLUGINS` (app.ts) and the sweep passes `PHASE_F_SWEEP_PASSES` (sweeper.ts). On the `camera` hub side, `CAMERA_CLIENT_TYPES` dispatches to `signal/camera.ts` (`handleCameraHello` refuses and closes `4403`; the other handlers and both routers answer `error forbidden`). A `camera.hello` on a Desk-only socket is refused. In `handleWebrtc`, a Desk frame tagged `peer: 'camera'` is refused, so no Desk can speak as the camera. `Live.camera` is `LiveCamera | null`, and `ConnSide` names the four sides. `context.ts` needed no addition.
+- **Pure helpers landed whole, because no stream owns these files after F0.** `rest-camera.ts`: `normaliseCameraCode` (Crockford; `U` is refused), `formatCameraCode`, `cameraCommit`, `cameraSecurityCode` and the `ia.cam` frame schema. The repo functions of §13.2a are also landed whole (plain reads and writes). `listDueErasures` returns `cooling_off` erasures past `cooling_off_until` plus `executing` ones; expiry is left to the erasure stream. `ObjectStorage.list(prefix)` requires a prefix ending in `/`.
+- **Stubs that throw `NotBuiltError`, now widened to `PhaseFStream`.** In `erasure/certificate.ts`: `erasureSigningInput`, `signErasureCertificate`, `verifyErasureCertificate`. In `touch/gestures.ts`: `createGestureRecognizer`, `mapGestureToOps`. The gesture types (`TouchSample`, `GestureConfig` with `DEFAULT_GESTURE_CONFIG`, `GestureDesk`, `GestureMode`, `GestureEvent`, `GestureOutput`) are the foundation's proposal, and mobile may refine them in the same change as this file.
+- **Names added beside §13.1.**
+  - enums: `OPEN_ERASURE_STATES`, `CAMERA_STATES`, `INSTALLER_PLATFORMS`, `DEVICE_HELLO_OSES`, `RECORDING_TRACK_SOURCES` (`RECORDING_SOURCES` already names who recorded).
+  - recorder: `RECORDER_FEATURES`, `recorderCameraSchema`.
+  - camera: `cameraRecordingSchema`, `cameraResumeKeySchema`.
+  - erasure: `erasureNoticeSchema`, `erasureStatusReplySchema`, `erasureConfirmSchema`, `chainDigestQuerySchema`.
+  - mail: `mailTokenSchema`.
+  - audit: `fActionHasSession`.
+  - integrations: `INTEGRATION_VERIFICATION`, keyed by the four vendor types (`webhook` has no vendor).
+  - the Linux-only `companion` is enforced by a refinement on `agentBuildSchema` and on the dist manifest row.
+- **Optional on the wire until mail lands.** `inviteResponseSchema.mailed` stays optional, so the A invite reply is unchanged until mail sends it. `userSchema.inviteMailedAt` is always sent (`toUser`).
+- **Config.** `fleet.previousKeys`, `mail.requireTls`, `erasure.devCoolingOffSec`, `backupRetentionDays`. An empty `MAIL_FROM` means the default. `SMTP_REQUIRE_TLS=false` is refused in production only for a non-loopback relay.
+- **apple (§17.7).**
+  - `native_interpreters` already existed in `ia-core/playbook.rs`, so it is split by `cfg` and the macOS definition sits in the marked block. `macos_capabilities` is new beside `linux_capabilities`.
+  - The pump's `lost` arm has no block: its `_ => false` covers macOS until apple adds a variant.
+  - Marked blocks also sit in `ia-platform/src/lib.rs` and `ia-service/src/lib.rs` (the module declarations).
+  - `ia-ui` has a macOS `Tray` stub (`new` returns `None`) and a macOS event-loop arm. This is the apple session's first macOS build finding.
+  - `ia-agent/src/pbrun.rs` imports `Command` and `Stdio` only on Windows and Linux. This is the second finding.
+  - `packaging/macos/.gitkeep` was already tracked.
+  - The macOS bodies have not been compiled; the build host has no macOS target.
+- **The apple download branch has no owner.** `routes/download.ts` `CONTENT_TYPES` gains `macos: 'application/zip'`, because it is a record over `AGENT_PLATFORMS`. The macOS served name and archive branch of that file (§17.2) has no owner among the streams that own `routes/download.ts` (linux-p4, wayland); the apple session raises it here when it reaches it.
+- **web.**
+  - `KeepState` reads `kept: boolean | null`, carried by a `kept` field the foundation added to the agent console snapshot and its `keep` event handling (`agentState.ts`, `agentConsoleController.ts`; mobile owns both from now on).
+  - The slot props are `CameraSlot { session: { id, live, consoleRecording }, sendChat, tier }`, `ErasureBannerSlot { role }`, `ResidencyErasureSlot { erasure }` and `CameraLinkAccessory { message }`.
+  - The default Playwright config keeps its 4000 default, so only the Phase F configs refuse 4000/4100/4105.
+- **Root scripts.** `linux:pkg` runs `node packaging/linux/build.mjs`, which linux-p4 creates.
+
 ---
+
+**Coordinator decisions on the F0 notes (2 Nov 2026, binding).**
+- The `org_erasing` refusal on `desk.hello` (`apps/api/src/signal/desk.ts`) and on the P4 worker hello (`apps/api/src/fleet/worker.ts`) belongs to the **erasure** stream: one guard call each, answered with the signal error `org_erasing` that F0 added. Those two lines join the erasure row of §1.4. Token revocation in §5.3 step 2 stays as a second line of defence, not the only one.
+- The macOS branch of `apps/api/src/routes/download.ts` and `services/agent-dist.ts` (serving the macOS agent and the PKG) belongs to the **apple** stream. Because the apple session works on the Mac, its edits to those two files are limited to a `// apple-owned: begin` / `// apple-owned: end` block that the coordinator places on integration; until then the macOS download is reported "not served".
+- The `kept` field F0 added to `apps/web/src/assist/console/agent/agentState.ts` and `agentConsoleController.ts` is accepted as an F0 shape; from now on both files are owned by **mobile**, and the fixes stream's `KeepState.tsx` reads `kept` through `<DeskKeepSlot>` only.
 
 ## 17. macOS agent, macOS unattended and the iOS app (stream apple)
 

@@ -11,9 +11,17 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { checkMainCompose, checkTurnHostCompose, parseEnvFile } from './infra/compose.mjs';
+import {
+  checkApiEnvParity,
+  checkMainCompose,
+  checkTurnHostCompose,
+  composeApiEnvKeys,
+  configEnvKeys,
+  parseEnvFile,
+} from './infra/compose.mjs';
 import {
   checkNginx,
+  checkPhaseFLocations,
   checkRegionAgreement,
   checkReplayerLocation,
   checkSecurityHeaders,
@@ -112,16 +120,45 @@ export function validateInfra(root = ROOT) {
     }
     if ((env.get('AUTH_PROVIDER') ?? 'local') !== 'local') problems.push('AUTH_PROVIDER must be local (Phase E W86)');
     if (env.get('AI_ANTHROPIC_MAX_RETRIES') !== '0') problems.push('AI_ANTHROPIC_MAX_RETRIES must default to 0');
+    // Phase F (docs/specs/phase-f-contracts.md sections 3.1a, 11): the D keys Compose was missing and the F keys.
+    for (const k of [
+      'AGENT_MSI_DIST_DIR',
+      'FLEET_DATA_KEY',
+      'FLEET_DATA_KEYS_PREVIOUS',
+      'DEVICE_HELLO_RATE',
+      'WAKE_CONFIRM_SEC',
+      'VAULT_ADDR',
+      'VAULT_ROLE_ID',
+      'VAULT_SECRET_ID',
+      'MAIL_DRIVER',
+      'SMTP_URL',
+      'MAIL_FROM',
+      'SMTP_REQUIRE_TLS',
+      'BACKUP_RETENTION_DAYS',
+    ]) {
+      if (!env.has(k)) problems.push(`${k} is not documented (Phase F 3.1a)`);
+    }
+    for (const k of ['FLEET_DATA_KEY', 'FLEET_DATA_KEYS_PREVIOUS', 'VAULT_SECRET_ID', 'SMTP_URL']) {
+      if (env.get(k)) problems.push(`${k} must be empty in the example (no default secrets)`);
+    }
+    if (env.get('ERASURE_DEV_COOLING_OFF_SEC')) {
+      problems.push('ERASURE_DEV_COOLING_OFF_SEC must not be set in the production example (development only)');
+    }
+    if (env.get('SMTP_REQUIRE_TLS') !== 'true') problems.push('SMTP_REQUIRE_TLS must default to true (Phase F 4.1b)');
     return problems;
   });
   run('region origins / extension manifest', () => checkRegionAgreement(env, buildManifest));
   run('infra/docker-compose.yml', () => checkMainCompose(read('infra/docker-compose.yml'), env));
+  run('api env parity (config.ts envSchema vs compose api)', () =>
+    checkApiEnvParity(configEnvKeys(read('apps/api/src/config.ts')), composeApiEnvKeys(read('infra/docker-compose.yml'))),
+  );
   run('infra/docker-compose.turn-host.yml', () => checkTurnHostCompose(read('infra/docker-compose.turn-host.yml')));
   run('infra/coturn/turnserver.conf', () => checkTurnserverConf(read('infra/coturn/turnserver.conf')));
   run('infra/nginx/*.conf', () => [
     ...checkNginx(read('infra/nginx/nginx.conf'), read('infra/nginx/web.conf'), read('infra/nginx/proxy-common.conf')),
     ...checkSecurityHeaders(read('infra/nginx/security-headers.conf')),
     ...checkReplayerLocation(read('infra/nginx/web.conf')),
+    ...checkPhaseFLocations(read('infra/nginx/web.conf')),
   ]);
   return groups;
 }

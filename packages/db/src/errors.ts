@@ -75,6 +75,18 @@ export function isUniqueViolation(err: unknown, constraint?: string): boolean {
   return false;
 }
 
+/**
+ * Phase F section 5.3 step 6: the org's erasure destroyed its audit pepper. `insertAuditEntry` refuses it (no entry
+ * can follow `org.erased`), and the api's `piiHash` refuses it (a null pepper would yield an unpeppered hash).
+ */
+export class OrgErasedError extends DbError {
+  readonly orgId: string;
+  constructor(orgId: string) {
+    super('org_erased', `org ${orgId} was erased`);
+    this.orgId = orgId;
+  }
+}
+
 /** Phase E section 13.2a: a named summary version that is not `ready` (maps to `409 summary_not_ready`). */
 export class SummaryNotReadyError extends DbError {
   readonly sessionId: string;

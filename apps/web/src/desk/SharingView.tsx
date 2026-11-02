@@ -4,6 +4,7 @@
  * consent; chat, voice (opt-in, default off) and files below; favicon switches while sharing.
  */
 import { useEffect, useState } from 'react';
+import { CameraLinkAccessory } from '../camera/CameraLinkAccessory';
 import { ChatPanel } from '../components/ChatPanel';
 import { FilePanel } from '../components/FilePanel';
 import { DESK_SHORTCUTS, ShortcutHelp, shouldIgnoreKey } from '../components/ShortcutHelp';
@@ -112,7 +113,14 @@ export function SharingView({ ctrl, snap }: { ctrl: DeskController; snap: DeskSn
         )}
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
-            <ChatPanel items={snap.chat} peerName={tech} peerTyping={snap.peerTyping} onSend={(t) => ctrl.sendChat(t)} onTyping={(a) => ctrl.setTyping(a)} />
+            <ChatPanel
+              items={snap.chat}
+              peerName={tech}
+              peerTyping={snap.peerTyping}
+              onSend={(t) => ctrl.sendChat(t)}
+              onTyping={(a) => ctrl.setTyping(a)}
+              messageAccessory={(m) => <CameraLinkAccessory message={m} />}
+            />
           </Card>
           <div className="flex flex-col gap-4">
             <Card>

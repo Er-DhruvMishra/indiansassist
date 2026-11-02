@@ -209,6 +209,8 @@ describe('contract example payloads (REST)', () => {
       consent_required: 0,
       policy_timeout: 0,
       device_disabled: 0,
+      // Phase F section 5.3 step 2
+      org_erased: 0,
     };
     expect(
       sessionStatsResponseSchema.parse({

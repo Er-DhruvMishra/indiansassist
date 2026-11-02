@@ -98,7 +98,8 @@ export type QualityPreset = (typeof QUALITY_PRESETS)[number];
 /** `service` (Phase D section 4.2): the P4 desktop worker's credential handed over by the installed service. */
 export const TOKEN_SOURCES = ['arg', 'deeplink', 'sidecar', 'filename', 'clipboard', 'manual', 'service'] as const;
 export type TokenSource = (typeof TOKEN_SOURCES)[number];
-export const PLAYBOOK_INTERPRETERS = ['powershell', 'cmd', 'sh'] as const;
+/** `zsh` (Phase F section 17.8): the macOS agent's default shell. */
+export const PLAYBOOK_INTERPRETERS = ['powershell', 'cmd', 'sh', 'zsh'] as const;
 export type PlaybookInterpreter = (typeof PLAYBOOK_INTERPRETERS)[number];
 export const PLAYBOOK_ERRORS = [
   'timeout',
@@ -124,13 +125,17 @@ export const ELEVATION_FAIL_ERRORS = [
 export type ElevationFailError = (typeof ELEVATION_FAIL_ERRORS)[number];
 export const NAV_ACTIONS = ['back', 'home', 'recents', 'notifications'] as const;
 export type NavAction = (typeof NAV_ACTIONS)[number];
-/** `xshm`, `xgetimage`, `none` (Phase E section 7.2, 7.4): the Linux X11 paths and the Wayland no-screen path. */
-export const CAPTURE_PATHS = ['dda', 'gdi', 'projection', 'xshm', 'xgetimage', 'none'] as const;
+/**
+ * `xshm`, `xgetimage`, `none` (Phase E section 7.2, 7.4): the Linux X11 paths and the Wayland no-screen path.
+ * `portal` (Phase F section 9.2): xdg-desktop-portal ScreenCast over PipeWire; `sck` (Phase F section 17.8):
+ * macOS ScreenCaptureKit.
+ */
+export const CAPTURE_PATHS = ['dda', 'gdi', 'projection', 'xshm', 'xgetimage', 'none', 'portal', 'sck'] as const;
 export type CapturePath = (typeof CAPTURE_PATHS)[number];
 
 /** Phase C section 2.2: agent build platforms and architectures of `manifest.json`. */
-/** `linux` (Phase E section 7.6): the per-download .tar.gz of the x64 ELF. */
-export const AGENT_PLATFORMS = ['windows', 'android', 'linux'] as const;
+/** `linux` (Phase E section 7.6): the per-download .tar.gz of the x64 ELF. `macos` (Phase F section 17.8). */
+export const AGENT_PLATFORMS = ['windows', 'android', 'linux', 'macos'] as const;
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];
 export const AGENT_ARCHES = ['x64', 'arm64', 'universal'] as const;
 export type AgentArch = (typeof AGENT_ARCHES)[number];

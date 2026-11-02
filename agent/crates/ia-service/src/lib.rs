@@ -40,6 +40,12 @@ pub mod session;
 #[cfg(all(windows, feature = "service"))]
 pub mod win;
 
+// apple-owned: begin
+/// Phase F §17.3: the macOS LaunchDaemon half (feature `macos-service`, apple stream).
+#[cfg(target_os = "macos")]
+pub mod macos;
+// apple-owned: end
+
 /// The service name the MSI registers and the watchdog watches (§4.1).
 pub const SERVICE_NAME: &str = "IndiansAssistAgent";
 /// The display name shown in `services.msc`.

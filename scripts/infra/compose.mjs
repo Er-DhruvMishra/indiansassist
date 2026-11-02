@@ -129,7 +129,109 @@ export const API_ENV_VARS = [
   'EXTENSION_MIN_VERSION',
   'MIRROR_RELAY_BUDGET_BYTES',
   'SIGNUP_PLAN_TIER',
+  // Phase F section 3.1a (the C, D and F keys Compose was missing; closes E W89)
+  'AGENT_DIST_DIR',
+  'AGENT_MSI_DIST_DIR',
+  'AGENT_MIN_VERSION',
+  'AGENT_ANDROID_APP_URL',
+  'FLEET_DATA_KEY',
+  'FLEET_DATA_KEYS_PREVIOUS',
+  'DEVICE_HELLO_RATE',
+  'WAKE_CONFIRM_SEC',
+  'VAULT_ADDR',
+  'VAULT_ROLE_ID',
+  'VAULT_SECRET_ID',
+  'MAIL_DRIVER',
+  'SMTP_URL',
+  'MAIL_FROM',
+  'SMTP_REQUIRE_TLS',
+  'BACKUP_RETENTION_DAYS',
 ];
+
+/**
+ * Phase F section 3.1b: `envSchema` keys of apps/api/src/config.ts that Compose deliberately does not pass, because
+ * they exist only for development, tests and local fakes (several refuse to boot with NODE_ENV=production).
+ */
+export const DEV_ONLY_ENV = [
+  'NODE_ID',
+  'PGLITE_DIR',
+  'AGENT_DEV_STUB',
+  'EGRESS_ALLOW_HTTP',
+  'EGRESS_ALLOW_LOOPBACK',
+  'SSO_DEV_DNS_SERVERS',
+  'ERASURE_DEV_COOLING_OFF_SEC',
+];
+
+/**
+ * The keys of the `envSchema` object literal in apps/api/src/config.ts (the text, not the module: the check runs
+ * without building the api). Reads the `const envSchema = z.object({ ... });` block, skips comments and nested
+ * brackets, and returns every top-level `KEY:` name. Throws when the block cannot be found.
+ */
+export function configEnvKeys(configText) {
+  const start = configText.search(/const\s+envSchema\s*=\s*z\.object\(\s*\{/);
+  if (start < 0) throw new Error('config.ts: const envSchema = z.object({ ... }) not found');
+  let i = configText.indexOf('{', start) + 1;
+  let depth = 1;
+  let body = '';
+  while (i < configText.length && depth > 0) {
+    const two = configText.slice(i, i + 2);
+    if (two === '//') {
+      const nl = configText.indexOf('\n', i);
+      i = nl < 0 ? configText.length : nl;
+      continue;
+    }
+    if (two === '/*') {
+      const end = configText.indexOf('*/', i + 2);
+      i = end < 0 ? configText.length : end + 2;
+      continue;
+    }
+    const ch = configText[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < configText.length && configText[j] !== ch) j += configText[j] === '\\' ? 2 : 1;
+      body += depth === 1 ? '""' : '';
+      i = j + 1;
+      continue;
+    }
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') depth--;
+    if (depth === 1 || (depth === 0 && ch === '}')) body += ch;
+    else if (depth > 1 && body.slice(-1) !== '#') body += '#';
+    i++;
+  }
+  if (depth !== 0) throw new Error('config.ts: envSchema block is not closed');
+  const keys = [];
+  const re = /(?:^|[,{\s])([A-Z][A-Z0-9_]*)\s*:/g;
+  let m;
+  while ((m = re.exec(body)) !== null) keys.push(m[1]);
+  if (keys.length === 0) throw new Error('config.ts: envSchema has no keys');
+  return keys;
+}
+
+/** The keys the Compose `api` service passes in `environment`. */
+export function composeApiEnvKeys(text) {
+  const { model } = parseCompose(text, 'docker-compose.yml');
+  return Object.keys(envOf(model.services?.api));
+}
+
+/**
+ * Phase F section 3.1b: every `envSchema` key must be passed by the Compose `api` service or be in `DEV_ONLY_ENV`,
+ * so a key added to config.ts cannot silently run its default (or fail to boot) in production.
+ */
+export function checkApiEnvParity(configKeys, composeKeys, devOnly = DEV_ONLY_ENV) {
+  const passed = new Set(composeKeys);
+  const allowed = new Set(devOnly);
+  const problems = [];
+  for (const k of configKeys) {
+    if (!passed.has(k) && !allowed.has(k)) {
+      problems.push(`api: config.ts envSchema key ${k} is not passed by docker-compose.yml (Phase F 3.1b parity)`);
+    }
+  }
+  for (const k of devOnly) {
+    if (passed.has(k)) problems.push(`api: ${k} is development only and must not be passed by docker-compose.yml`);
+  }
+  return problems;
+}
 
 const SECRET_KEY = /(PASSWORD|SECRET|TOKEN_SIGNING_KEY$|ACCESS_KEY|ADMIN_TOKEN)/;
 const usesVar = (value, name) => new RegExp(`\\$\\{${name}(?=[}:?-])`).test(String(value ?? ''));
@@ -203,6 +305,20 @@ export function checkMainCompose(text, envExample) {
   }
   if (!usesVar(envOf(services.migrate).MIGRATE_DATABASE_URL, 'POSTGRES_OWNER_PASSWORD')) {
     problems.push('migrate: MIGRATE_DATABASE_URL must use the owner role');
+  }
+  // Phase F section 3.1a: the fleet key is required (no silent dev default in production), and the agent builds come
+  // from read-only mounts.
+  if (!/^\$\{FLEET_DATA_KEY:\?/.test(String(api.FLEET_DATA_KEY ?? ''))) {
+    problems.push('api: FLEET_DATA_KEY must be required (${FLEET_DATA_KEY:?...}) (Phase F 3.1a)');
+  }
+  lit('AGENT_DIST_DIR', '/data/agent-dist');
+  lit('AGENT_MSI_DIST_DIR', '/data/agent-msi');
+  const apiVols = (services.api?.volumes ?? []).map((v) => (typeof v === 'string' ? v : `${v.source}:${v.target}`));
+  for (const [src, dst] of [
+    ['./data/agent-dist', '/data/agent-dist'],
+    ['./data/agent-msi', '/data/agent-msi'],
+  ]) {
+    if (!apiVols.includes(`${src}:${dst}:ro`)) problems.push(`api: must mount ${src}:${dst}:ro (Phase F 3.1a)`);
   }
   if (!String(api.S3_ENDPOINT).includes('http://seaweedfs:8333')) {
     problems.push('api: S3_ENDPOINT must default to the seaweedfs service (contract X6)');

@@ -67,6 +67,8 @@ export type AgentSnapshot = {
   net: NetStats;
   glassMs: number | null;
   captureNotice: string | null;
+  /** Phase F section 3.4b: the last `ctl.event keep` value of the session (null: none received). Read-only. */
+  kept: boolean | null;
   chat: ChatItem[];
   peerTyping: boolean;
   transfers: Transfer[];
@@ -105,6 +107,7 @@ export const AGENT_INITIAL: AgentSnapshot = {
   net: EMPTY_STATS,
   glassMs: null,
   captureNotice: null,
+  kept: null,
   chat: [],
   peerTyping: false,
   transfers: [],

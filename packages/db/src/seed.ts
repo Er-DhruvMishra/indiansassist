@@ -62,7 +62,7 @@ export async function createOrgWithAdmin(exec: Executor, opts: SeedOrgOptions = 
         actor: { type: 'user', id: user.id, label: user.name },
         action: 'auth.signup',
         region: org.dataRegion,
-        data: { emailHash: pepperedHash(org.auditPepper, email.toLowerCase()) },
+        data: { emailHash: pepperedHash(org.auditPepper!, email.toLowerCase()) },
       });
     }
     return { org, user, seat };

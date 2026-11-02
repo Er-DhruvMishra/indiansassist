@@ -19,6 +19,8 @@ export type InsertRecordingInput = {
   durationMs?: number | null;
   uploadId?: string | null;
   uploadExpiresAt?: Date | null;
+  /** Phase F section 6.5a: a recording of the phone camera's track (`source: 'camera'` with its `cameraId`). */
+  cameraId?: string | null;
 };
 
 /** `<region>/<orgId>/<sessionId>/<recordingId>.<ext>` (section 9; `jsonl.gz` for rrweb mirror recordings, Phase B 4.7). */
@@ -42,6 +44,8 @@ export async function insertRecording(exec: Executor, input: InsertRecordingInpu
       durationMs: input.durationMs ?? null,
       uploadId: input.uploadId ?? null,
       uploadExpiresAt: input.uploadExpiresAt ?? null,
+      source: input.cameraId ? 'camera' : 'desk',
+      cameraId: input.cameraId ?? null,
       status: 'uploading',
     })
     .returning();
@@ -53,7 +57,10 @@ export async function getRecording(exec: Executor, id: string): Promise<Recordin
   return row ?? null;
 }
 
-/** The session's recording of one source (default the Assist's, Phase A behaviour). */
+/**
+ * The session's Desk recording of one source (default the Assist's, Phase A behaviour). Phase F section 6.5a: camera
+ * recordings (`source = 'camera'`) are never returned here; the camera stream reads them by `cameraId`.
+ */
 export async function getRecordingBySession(
   exec: Executor,
   sessionId: string,
@@ -62,7 +69,7 @@ export async function getRecordingBySession(
   const [row] = await exec
     .select()
     .from(recording)
-    .where(and(eq(recording.sessionId, sessionId), eq(recording.recordedBy, source)))
+    .where(and(eq(recording.sessionId, sessionId), eq(recording.recordedBy, source), eq(recording.source, 'desk')))
     .limit(1);
   return row ?? null;
 }

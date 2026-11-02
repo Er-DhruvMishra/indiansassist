@@ -27,7 +27,7 @@ import {
 } from '@indiansassist/shared';
 import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 import type { Executor } from '../client.js';
-import { AuditRegionMismatchError, NotFoundError } from '../errors.js';
+import { AuditRegionMismatchError, NotFoundError, OrgErasedError } from '../errors.js';
 import { auditEntry, org, session, type AuditEntryRow } from '../schema/index.js';
 import { clampLimit, seqBefore, seqCursorOf, toPage, type Page, type PageQuery } from './page.js';
 
@@ -78,8 +78,14 @@ export async function insertAuditEntry(exec: Executor, input: AuditInput): Promi
     // and a session transition on the same session can never wait on each other in opposite orders (40P01).
     if (sessionId) await tx.execute(sql`select id from ${session} where ${session.id} = ${sessionId} for update`);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${input.orgId}::text))`);
-    const [o] = await tx.select({ dataRegion: org.dataRegion }).from(org).where(eq(org.id, input.orgId)).limit(1);
+    const [o] = await tx
+      .select({ dataRegion: org.dataRegion, erasedAt: org.erasedAt })
+      .from(org)
+      .where(eq(org.id, input.orgId))
+      .limit(1);
     if (!o) throw new NotFoundError('org', input.orgId);
+    // Phase F section 13.2: `org.erased` is the last entry an erased org's chain will ever have.
+    if (o.erasedAt) throw new OrgErasedError(input.orgId);
     if (o.dataRegion !== input.region) throw new AuditRegionMismatchError(o.dataRegion, input.region);
     const [tail] = await tx
       .select({ seq: auditEntry.seq, hash: auditEntry.hash })

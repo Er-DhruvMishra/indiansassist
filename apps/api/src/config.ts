@@ -61,6 +61,18 @@ const int = (def: number) =>
       return n;
     });
 
+const DEFAULT_MAIL_FROM = 'IndiansAssist <no-reply@localhost>';
+
+/** True when an SMTP URL's host is a loopback name or address (section 4.1b). */
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
 const envSchema = z.object({
   NODE_ENV: str('development'),
   PORT: int(4000),
@@ -128,7 +140,7 @@ const envSchema = z.object({
   VAULT_SECRET_ID: str(''),
   MAIL_DRIVER: z.enum(['log', 'smtp']).optional().default('log'),
   SMTP_URL: str(''),
-  MAIL_FROM: str('IndiansAssist <no-reply@localhost>'),
+  MAIL_FROM: str(DEFAULT_MAIL_FROM),
   DEVICE_HELLO_RATE: int(500),
   WAKE_CONFIRM_SEC: int(LIMITS.wakeConfirmSec),
   // Phase E (docs/specs/phase-e-contracts.md sections 2.1, 2.2, 5.2a, 10)
@@ -153,6 +165,15 @@ const envSchema = z.object({
   AI_ANTHROPIC_MODEL: str('claude-opus-5-5'),
   AI_ANTHROPIC_TIMEOUT_MS: int(90_000),
   AI_ANTHROPIC_MAX_RETRIES: int(0),
+  // Phase F (docs/specs/phase-f-contracts.md sections 3.1c, 4.1b, 5.2c, 11)
+  /** Comma list of `<keyId>:<64 hex>`, open-only (fleet-key rotation, section 3.1c). */
+  FLEET_DATA_KEYS_PREVIOUS: str(''),
+  /** Unset: true in production, else false (section 4.1b). */
+  SMTP_REQUIRE_TLS: z.string().optional(),
+  /** Development only: a positive integer of seconds replaces the 7-day cooling-off (section 5.2c). */
+  ERASURE_DEV_COOLING_OFF_SEC: str(''),
+  /** The operator's backup retention in days, stated in the erasure certificate ('' = not stated). */
+  BACKUP_RETENTION_DAYS: str(''),
 });
 
 export type Env = z.output<typeof envSchema>;
@@ -206,10 +227,24 @@ export type Config = {
   recorderToken: string;
   /** Phase C: agent builds (`manifest.json` + files), the minimum agent version and the Android store link. */
   agent: { distDir: string; minVersion: string; androidAppUrl: string | null; devStub: string | null };
-  /** Phase D: the fleet data key (MACs at rest), branded MSI artifacts, wake confirmation window, hello rate. */
-  fleet: { dataKey: Buffer; dataKeyId: string; msiDistDir: string; wakeConfirmSec: number; deviceHelloRate: number };
-  /** Phase D rule 6.4d: the consent-receipt mailer. */
-  mail: { driver: 'log' | 'smtp'; smtpUrl: string; from: string };
+  /**
+   * Phase D: the fleet data key (MACs at rest), branded MSI artifacts, wake confirmation window, hello rate. Phase F
+   * section 3.1c: `previousKeys`, the open-only keys of `FLEET_DATA_KEYS_PREVIOUS`.
+   */
+  fleet: {
+    dataKey: Buffer;
+    dataKeyId: string;
+    previousKeys: { keyId: string; key: Buffer }[];
+    msiDistDir: string;
+    wakeConfirmSec: number;
+    deviceHelloRate: number;
+  };
+  /** Phase D rule 6.4d: the consent-receipt mailer; Phase F section 4.1b `requireTls`. */
+  mail: { driver: 'log' | 'smtp'; smtpUrl: string; from: string; requireTls: boolean };
+  /** Phase F section 5.2c: the development cooling-off override (null = the contract's days). */
+  erasure: { devCoolingOffSec: number | null };
+  /** Phase F section 11: `BACKUP_RETENTION_DAYS` (null = not stated). */
+  backupRetentionDays: number | null;
   /** Phase D rule 9.8: the credential vault (OpenBao / Vault AppRole); '' addr = not configured. */
   vault: { addr: string; roleId: string; secretId: string };
   /** Phase E section 2.1: the org-secret key (current), the open-only previous keys and the fingerprint key. */
@@ -400,7 +435,40 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
   }
   const fleetKeyMatch = /^(?:([A-Za-z0-9_-]{1,16}):)?([0-9a-fA-F]{64})$/.exec(fleetKeyRaw);
   if (!fleetKeyMatch) problems.push('FLEET_DATA_KEY must be 64 hex chars, optionally prefixed with "<keyId>:"');
+  // Phase F section 3.1c: open-only previous fleet keys; with any, the current key names its id explicitly.
+  const previousFleetKeys: { keyId: string; key: Buffer }[] = [];
+  for (const entry of splitUrlList(e.FLEET_DATA_KEYS_PREVIOUS)) {
+    const m = KEYED_HEX64.exec(entry);
+    if (!m) problems.push('FLEET_DATA_KEYS_PREVIOUS entries must be "<keyId>:<64 hex>"');
+    else if (fleetKeyMatch?.[1] !== undefined && m[1] === fleetKeyMatch[1])
+      problems.push(`FLEET_DATA_KEYS_PREVIOUS repeats the current key id ${m[1]}`);
+    else if (previousFleetKeys.some((k) => k.keyId === m[1])) problems.push(`FLEET_DATA_KEYS_PREVIOUS repeats the key id ${m[1]}`);
+    else previousFleetKeys.push({ keyId: m[1]!, key: Buffer.from(m[2]!, 'hex') });
+  }
+  if (splitUrlList(e.FLEET_DATA_KEYS_PREVIOUS).length > 0 && fleetKeyMatch && fleetKeyMatch[1] === undefined)
+    problems.push('FLEET_DATA_KEY must carry an explicit "<keyId>:" prefix when FLEET_DATA_KEYS_PREVIOUS is set');
   if (e.MAIL_DRIVER === 'smtp' && e.SMTP_URL === '') problems.push('SMTP_URL is required with MAIL_DRIVER=smtp');
+  // Phase F section 4.1b: TLS to the SMTP relay is required in production unless the relay is on loopback.
+  const smtpRequireTls =
+    e.SMTP_REQUIRE_TLS === undefined || e.SMTP_REQUIRE_TLS.trim() === ''
+      ? production
+      : /^(1|true|yes|on)$/i.test(e.SMTP_REQUIRE_TLS.trim());
+  if (production && e.MAIL_DRIVER === 'smtp' && !smtpRequireTls && e.SMTP_URL !== '' && !isLoopbackUrl(e.SMTP_URL))
+    problems.push('SMTP_REQUIRE_TLS=false needs a loopback SMTP host with NODE_ENV=production');
+  // Phase F section 5.2c: the cooling-off override exists only for development tests and smokes.
+  let erasureDevCoolingOffSec: number | null = null;
+  if (e.ERASURE_DEV_COOLING_OFF_SEC !== '') {
+    const n = Number(e.ERASURE_DEV_COOLING_OFF_SEC);
+    if (production) problems.push('ERASURE_DEV_COOLING_OFF_SEC must not be set with NODE_ENV=production');
+    else if (!Number.isInteger(n) || n <= 0) problems.push('ERASURE_DEV_COOLING_OFF_SEC must be a positive integer of seconds');
+    else erasureDevCoolingOffSec = n;
+  }
+  let backupRetentionDays: number | null = null;
+  if (e.BACKUP_RETENTION_DAYS !== '') {
+    const n = Number(e.BACKUP_RETENTION_DAYS);
+    if (!Number.isInteger(n) || n <= 0 || n > 36_500) problems.push('BACKUP_RETENTION_DAYS must be a positive integer of days');
+    else backupRetentionDays = n;
+  }
   if (e.VAULT_ADDR !== '' && (e.VAULT_ROLE_ID === '' || e.VAULT_SECRET_ID === ''))
     problems.push('VAULT_ROLE_ID and VAULT_SECRET_ID are required with VAULT_ADDR');
   // Phase E W86: the oidc stub and AUTH_PROVIDER=oidc are retired.
@@ -534,11 +602,15 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     fleet: {
       dataKey: Buffer.from(fleetKeyMatch![2]!, 'hex'),
       dataKeyId: fleetKeyMatch![1] ?? 'k1',
+      previousKeys: previousFleetKeys,
       msiDistDir: abs(e.AGENT_MSI_DIST_DIR),
       wakeConfirmSec: e.WAKE_CONFIRM_SEC > 0 ? e.WAKE_CONFIRM_SEC : LIMITS.wakeConfirmSec,
       deviceHelloRate: e.DEVICE_HELLO_RATE > 0 ? e.DEVICE_HELLO_RATE : 500,
     },
-    mail: { driver: e.MAIL_DRIVER, smtpUrl: e.SMTP_URL, from: e.MAIL_FROM },
+    // Phase F section 3.1a: compose passes `${MAIL_FROM:-}`, and `str(def)` keeps '', so an empty value is the default.
+    mail: { driver: e.MAIL_DRIVER, smtpUrl: e.SMTP_URL, from: e.MAIL_FROM !== '' ? e.MAIL_FROM : DEFAULT_MAIL_FROM, requireTls: smtpRequireTls },
+    erasure: { devCoolingOffSec: erasureDevCoolingOffSec },
+    backupRetentionDays,
     vault: { addr: e.VAULT_ADDR.replace(/\/+$/, ''), roleId: e.VAULT_ROLE_ID, secretId: e.VAULT_SECRET_ID },
     orgSecrets: {
       keyId: orgKeyMatch![1]!,

@@ -35,6 +35,23 @@ export type ZohoDataCenter = { id: string; deskHost: string; accountsHost: strin
  */
 export const ZOHO_DATA_CENTERS: readonly ZohoDataCenter[] = [];
 
+/**
+ * Phase F section 3.3 V4: the vendor-documentation verification record per ticketing type. `verified` is true only
+ * when no cell of the type is unconfirmed; `sources` are vendor documentation pages with the date read. The
+ * foundation lands every row unverified; the fixes stream fills the rows.
+ */
+export type IntegrationVerification = {
+  verified: boolean;
+  sources: readonly { url: string; readOn: string }[];
+  unconfirmed: readonly string[];
+};
+export const INTEGRATION_VERIFICATION: Readonly<Record<Exclude<IntegrationType, 'webhook'>, IntegrationVerification>> = {
+  zoho_desk: { verified: false, sources: [], unconfirmed: [] },
+  servicenow: { verified: false, sources: [], unconfirmed: [] },
+  jira: { verified: false, sources: [], unconfirmed: [] },
+  freshdesk: { verified: false, sources: [], unconfirmed: [] },
+};
+
 /** An http(s) origin with no path, query or userinfo (`https:` enforced by the egress guard, section 2.2 G1). */
 const originUrl = z
   .string()

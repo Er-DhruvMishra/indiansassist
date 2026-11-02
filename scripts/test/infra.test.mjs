@@ -30,7 +30,7 @@ const env = parseEnvFile(read('infra/.env.example'));
 describe('shipped infra passes every check', () => {
   it('validateInfra reports no problems', () => {
     const groups = validateInfra(ROOT);
-    expect(groups.map((g) => g.name)).toHaveLength(6);
+    expect(groups.map((g) => g.name)).toHaveLength(7);
     for (const g of groups) expect(g.problems, g.name).toEqual([]);
   });
 

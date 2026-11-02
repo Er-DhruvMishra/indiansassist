@@ -256,7 +256,8 @@ export function operatorFlows(config: AppContext['config'], thirdPartyIce: reado
       host: hostOf(config.mail.smtpUrl),
       leavesInfrastructure: true,
       leavesRegion: 'unknown',
-      dataSent: 'consent receipts and break-glass notices',
+      // Phase F section 4.1d.
+      dataSent: 'consent receipts, invitations, password-reset links and break-glass and erasure notices',
     });
   if (config.vault.addr !== '')
     out.push({

@@ -1,7 +1,9 @@
 /**
  * User routes (contracts sections 2.4, 6.6): list, invite (seat with tier capped by org.plan_tier), role change
  * (seat created / updated / removed, last org_admin protected) and status change (disable cascades to cookie
- * sessions, tokens, their live sessions and the user's Assist sockets).
+ * sessions, tokens, their live sessions and the user's Assist sockets). Phase F rule 5.2e: each of the three asks
+ * `assertNoOpenErasure` first (the admin set is frozen while an erasure is open; the erasure stream owns the body),
+ * and rule 5.2b: `role_since` / `role_granted_by` are written at the invite and on every role change.
  */
 import {
   inviteRequestSchema,
@@ -41,6 +43,7 @@ import { parseOr400 } from '../lib/validate.js';
 import { authenticate } from '../plugins/auth.js';
 import { afterTokenRevoked, revokeTokenRow } from '../services/token-revoke.js';
 import { clearBreakGlass, countUsableBreakGlass } from '../sso/repo.js';
+import { assertNoOpenErasure } from '../erasure/guard.js';
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -77,6 +80,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
     const body = parseOr400(inviteRequestSchema, req.body);
     const seatTier: PackageTier | null = roleHasSeat(body.role) ? (body.tier ?? 'p1_browser') : null;
     if (seatTier) checkTier(p.org, seatTier);
+    await assertNoOpenErasure(ctx, p.org, { kind: 'invite', role: body.role });
     if (await findUserByEmail(ctx.db, body.email)) fail('email_taken', 'an account with this email exists');
     const secret = randomSecret(32);
     try {
@@ -89,6 +93,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
           status: 'invited',
           inviteTokenHash: sha256Hex(secret),
           inviteExpiresAt: new Date(Date.now() + INVITE_TTL_MS),
+          roleGrantedBy: p.user.id,
         });
         if (seatTier) await createSeat(tx, { orgId: p.org.id, userId: u.id, tier: seatTier });
         await writeAudit(ctx, tx, p.org, {
@@ -110,6 +115,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
     const p = await authenticate(ctx, req, ['org_admin']);
     const body = parseOr400(roleChangeRequestSchema, req.body);
     const target = await orgUser(ctx, p.org, req.params.id);
+    await assertNoOpenErasure(ctx, p.org, { kind: 'role', userId: target.id, from: target.role, to: body.role });
     if (target.role === 'org_admin' && body.role !== 'org_admin' && target.status === 'active') {
       if ((await countOrgAdmins(ctx.db, p.org.id, 'active')) <= 1) fail('last_org_admin', 'the org needs an admin');
     }
@@ -119,7 +125,10 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
     const toTier: PackageTier | null = roleHasSeat(body.role) ? (body.tier ?? seat?.tier ?? 'p1_browser') : null;
     if (toTier) checkTier(p.org, toTier);
     const updated = await ctx.db.transaction(async (tx) => {
-      const u = await updateUser(tx, target.id, { role: body.role });
+      const u = await updateUser(tx, target.id, {
+        role: body.role,
+        ...(body.role !== target.role ? { roleSince: new Date(), roleGrantedBy: p.user.id } : {}),
+      });
       // Rule 3.7e: break-glass is an org_admin flag; a demotion clears it in the same transaction.
       if (demotesBreakGlass) await clearBreakGlass(tx, target.id);
       if (toTier && seat) await updateSeat(tx, target.id, { tier: toTier });
@@ -143,6 +152,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
     const body = parseOr400(statusChangeRequestSchema, req.body);
     const target = await orgUser(ctx, p.org, req.params.id);
     if (target.status === body.status) return toUser(target);
+    await assertNoOpenErasure(ctx, p.org, { kind: 'status', userId: target.id, role: target.role, from: target.status, to: body.status });
     if (body.status === 'disabled' && target.role === 'org_admin' && target.status === 'active') {
       if ((await countOrgAdmins(ctx.db, p.org.id, 'active')) <= 1) fail('last_org_admin', 'the org needs an admin');
     }

@@ -51,6 +51,12 @@ x11 = ["ia-capture-x11/x11", "ia-input-x11/x11"]
 linux-os = ["ia-platform/linux-os"]
 # The egui/eframe consent window, pill, panel and tray icon.
 gui = ["ia-ui/gui"]
+# apple-owned: begin
+# Phase F §17.2 / §17.7: the macOS agent (ScreenCaptureKit capture, CGEvent input). The macOS
+# build is `--no-default-features --features ia-agent/media,ia-agent/macos,ia-agent/gui,ia-agent/dev`
+# (§17.6). Compiles to nothing off macOS.
+macos = ["ia-capture-mac/macos", "ia-input-mac/macos"]
+# apple-owned: end
 
 [dependencies]
 ia-core.workspace = true
@@ -89,6 +95,12 @@ cpal = { workspace = true, optional = true }
 # Phase E §7.8: the Linux `sh` runner (setsid, killpg, the fd-3 pipe) and the root refusal.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+
+# Phase F §17.7: owned by the apple stream (the macOS capture and input crates, and later the
+# objc2 family, §10).
+[target.'cfg(target_os = "macos")'.dependencies]
+ia-capture-mac.workspace = true
+ia-input-mac.workspace = true
 
 # The Win32 calls the binary makes itself (§8.4 playbook job object, owner-only run file,
 # token queries; §6.1 rename-without-replace). Pure bindings; no extra DLL is imported.

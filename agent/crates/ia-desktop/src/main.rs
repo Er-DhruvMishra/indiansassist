@@ -58,6 +58,14 @@ fn main() {
         return;
     }
 
+    // apple-owned: begin
+    // Phase F §17.3: the macOS LaunchAgent worker reaches the daemon over its Unix socket
+    // (`/var/run/indiansassist/worker.sock`) rather than `--service-pipe`; the apple stream
+    // fills `macos_entry` (empty until then, so the pipe path below runs unchanged).
+    #[cfg(target_os = "macos")]
+    macos_entry(&args);
+    // apple-owned: end
+
     let Some(suffix) = pipe_suffix(&args) else {
         eprintln!(
             "ia-desktop is launched by the IndiansAssist service with --service-pipe <32 hex>; \
@@ -92,6 +100,12 @@ fn harden_dll_search() {
 
 #[cfg(not(windows))]
 fn harden_dll_search() {}
+
+// apple-owned: begin
+/// Phase F §17.3: the macOS worker entry (apple stream). Empty until then.
+#[cfg(target_os = "macos")]
+fn macos_entry(_args: &[String]) {}
+// apple-owned: end
 
 /// The two loader calls, declared here rather than pulling the whole `windows` crate into a
 /// binary whose only other Win32 use is through its dependencies.

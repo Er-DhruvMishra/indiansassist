@@ -2183,10 +2183,12 @@ dependencies = [
  "cpal",
  "futures-util",
  "hex",
+ "ia-capture-mac",
  "ia-capture-win",
  "ia-capture-x11",
  "ia-core",
  "ia-frame",
+ "ia-input-mac",
  "ia-input-win",
  "ia-input-x11",
  "ia-platform",
@@ -2209,6 +2211,10 @@ dependencies = [
  "windows 0.58.0",
  "zeroize",
 ]
+
+[[package]]
+name = "ia-capture-mac"
+version = "0.3.0"
 
 [[package]]
 name = "ia-capture-win"
@@ -2279,6 +2285,10 @@ version = "0.3.0"
 dependencies = [
  "ia-platform",
 ]
+
+[[package]]
+name = "ia-input-mac"
+version = "0.3.0"
 
 [[package]]
 name = "ia-input-win"

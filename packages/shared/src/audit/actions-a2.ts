@@ -13,13 +13,23 @@ const int = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const recorderId = z.string().regex(RECORDER_ID_RE, 'invalid recorderId');
 /** Present only on server recordings, so Phase A entries keep their exact shape. */
 const source = z.literal('server').optional();
+/**
+ * Phase F section 6.5a: present only on a recording of the phone camera's track (`recording.source = 'camera'`),
+ * so every Desk recording keeps its exact shape. `source` above already names who recorded (`server`), so the
+ * camera track is marked by `cameraId` alone (Phase F section 16.3, foundation note F0-3).
+ */
+export const recordingCameraIdSchema = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'expected a lower-case uuid')
+  .optional();
+const cameraId = recordingCameraIdSchema;
 
 export const A2_AUDIT_ACTIONS = ['recording.server_started', 'recording.server_stopped'] as const;
 export type A2AuditAction = (typeof A2_AUDIT_ACTIONS)[number];
 
 export const A2_CHAIN_SCHEMAS = {
-  'recording.server_started': z.strictObject({ recorderId, recordingMode: z.enum(['server', 'both']) }),
-  'recording.server_stopped': z.strictObject({ recorderId, reason: z.enum(RECORDER_STOP_REASONS) }),
+  'recording.server_started': z.strictObject({ recorderId, recordingMode: z.enum(['server', 'both']), cameraId }),
+  'recording.server_stopped': z.strictObject({ recorderId, reason: z.enum(RECORDER_STOP_REASONS), cameraId }),
 } satisfies Record<A2AuditAction, z.ZodType>;
 
 /** `recording.stored` (Phase A 5.3 plus A.2 `source`). */
@@ -30,6 +40,7 @@ export const recordingStoredDataSchema = z.strictObject({
   mime: text(255),
   storageKey: text(),
   source,
+  cameraId,
 });
 
 /** `recording.failed` (Phase A 5.3 plus A.2 `source`). */
@@ -37,6 +48,7 @@ export const recordingFailedDataSchema = z.strictObject({
   recordingId: text(),
   error: text(SANITISE_LIMITS.error),
   source,
+  cameraId,
 });
 
 /** Audit actor of the recorder service (section 2 P3). */

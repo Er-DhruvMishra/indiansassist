@@ -11,6 +11,7 @@ import { endSessionFlow } from '../services/session-end.js';
 import type { Conn, Live } from './conn.js';
 import { forbiddenKey } from './forbidden.js';
 import type { SignalHub } from './hub.js';
+import { routeCameraRecorderWebrtc, routeCameraWebrtc } from './camera.js';
 
 /** The live entry when `conn` is the registered participant of `sessionId`; otherwise replies forbidden. */
 export async function authorizeSession(
@@ -22,7 +23,13 @@ export async function authorizeSession(
 ): Promise<Live | null> {
   const live = hub.live.get(sessionId);
   const registered =
-    conn.side === 'assist' ? live?.assistConnId : conn.side === 'recorder' ? live?.recorder.connId : live?.deskConnId;
+    conn.side === 'assist'
+      ? live?.assistConnId
+      : conn.side === 'recorder'
+        ? live?.recorder.connId
+        : conn.side === 'camera'
+          ? live?.camera?.connId
+          : live?.deskConnId;
   if (live && registered === conn.id) return live;
   await refuse(hub, conn, sessionId, messageType, re);
   return null;
@@ -80,6 +87,15 @@ export async function handleWebrtc(hub: SignalHub, conn: Conn, msg: WebrtcMsg): 
   if (live.state !== 'active')
     return conn.error('consent_required', 'media is relayed only after accept and consent', msg.id);
   const { peer, ...rest } = msg;
+  // Phase F section 6.4 / 6.5a: the phone camera's own peer connections (camera <-> the session's Assist, and
+  // camera <-> the joined recorder); routing lives in camera.ts. No other side may speak as or to the camera.
+  if (conn.side === 'camera')
+    return peer === 'recorder' ? routeCameraRecorderWebrtc(hub, conn, live, msg) : routeCameraWebrtc(hub, conn, live, msg);
+  if (peer === 'camera') {
+    if (conn.side === 'assist') return routeCameraWebrtc(hub, conn, live, msg);
+    if (conn.side === 'recorder') return routeCameraRecorderWebrtc(hub, conn, live, msg);
+    return conn.error('forbidden', 'only the Assist and the recorder exchange media with the camera', msg.id);
+  }
   if (conn.side === 'recorder') {
     if (!live.recorder.joined) return conn.error('consent_required', 'the recorder is not joined', msg.id);
     return hub.conn(live.deskConnId)?.send({ ...rest, peer: 'recorder' });

@@ -1,6 +1,19 @@
 /** Tenancy and identity tables (contracts section 4.2): org, user, technician_seat, auth_session, login_attempt. */
 import { sql } from 'drizzle-orm';
-import { boolean, char, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  char,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
 import { DEFAULT_AI_POLICY, DEFAULT_UNATTENDED_POLICY, type LoginMethod } from '@indiansassist/shared';
 import { packageTierEnum, recordingModeEnum, regionEnum, userRoleEnum, userStatusEnum } from './enums.js';
 
@@ -31,7 +44,8 @@ export const org = pgTable(
     dataRegion: regionEnum('data_region').notNull(),
     planTier: packageTierEnum('plan_tier').notNull().default('p1_browser'),
     branding: jsonb('branding').$type<OrgBranding>().notNull().default({}),
-    auditPepper: char('audit_pepper', { length: 64 }).notNull(),
+    /** Phase F section 5.3 step 6: set NULL by an erasure (the `org_pepper_erased` check ties it to `erased_at`). */
+    auditPepper: char('audit_pepper', { length: 64 }),
     ssoConfig: jsonb('sso_config').$type<Record<string, unknown>>(),
     /** Phase B 11.1: stored extension policy, merged over DEFAULT_EXTENSION_POLICY on every read. */
     extensionPolicy: jsonb('extension_policy').$type<Record<string, unknown>>().notNull().default({}),
@@ -64,12 +78,16 @@ export const org = pgTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default({ ...DEFAULT_AI_POLICY }),
+    // Phase F section 13.2: an erasure froze the org (step 1) and completed it (step 6).
+    erasingAt: tstz('erasing_at'),
+    erasedAt: tstz('erased_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   () => [
     check('org_slug_format', sql`slug ~ '^[a-z0-9-]{3,40}$'`),
     check('org_recording_retention_days_range', sql`recording_retention_days is null or recording_retention_days between 1 and 3650`),
+    check('org_pepper_erased', sql`(audit_pepper is null) = (erased_at is not null)`),
   ],
 );
 
@@ -94,6 +112,12 @@ export const user = pgTable(
     deviceGroupIds: uuid('device_group_ids').array(),
     /** Phase E section 3.7d: a break-glass org_admin (at most LIMITS.ssoBreakGlassMax per org). */
     ssoBreakGlass: boolean('sso_break_glass').notNull().default(false),
+    /** Phase F section 4.2c: the last successful invitation mail. */
+    inviteMailedAt: tstz('invite_mailed_at'),
+    /** Phase F section 5.2b: set at creation and on every role change (backfilled to `created_at`). */
+    roleSince: tstz('role_since').notNull().defaultNow(),
+    /** Phase F section 5.2b: the inviter, or the actor of the last role change; null for the signup admin. */
+    roleGrantedBy: uuid('role_granted_by').references((): AnyPgColumn => user.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

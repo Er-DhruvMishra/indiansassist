@@ -49,6 +49,8 @@ pub const AGENT_CONTROL_EVENT_KINDS: &[&str] = &[
     "elevation",
     "input_blocked",
     "device_attest",
+    // Phase F §3.4b: the Desk user's Keep choice (the fixes stream sends it).
+    "keep",
 ];
 
 /// Whether `op` is one of the native ops (anything else: `not_supported`).

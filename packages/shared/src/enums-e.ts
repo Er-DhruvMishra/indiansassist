@@ -87,6 +87,8 @@ export const ORG_SECRET_PURPOSES = [
   'sso-saml-sp-key',
   'integration-credentials',
   'webhook-secret',
+  // Phase F section 5.3 step 1: what later erasure steps need from rows they scrub, sealed in `progress.carry`.
+  'erasure-carry',
 ] as const;
 export type OrgSecretPurpose = (typeof ORG_SECRET_PURPOSES)[number];
 

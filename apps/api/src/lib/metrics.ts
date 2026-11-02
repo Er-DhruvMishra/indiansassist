@@ -6,9 +6,12 @@
  * dashboard or alert never has to wait for the first event for the series to exist, and the label names of the
  * contract are always visible on `/metrics`. Phase E (docs/specs/phase-e-contracts.md section 11) adds six series the
  * foundation registers zero-initialised and the streams increment: `ia_sso_logins_total`, `ia_egress_requests_total`,
- * `ia_ticket_pushes_total`, `ia_summaries_total`, `ia_summary_seconds`, `ia_redactions_total`.
+ * `ia_ticket_pushes_total`, `ia_summaries_total`, `ia_summary_seconds`, `ia_redactions_total`. Phase F
+ * (docs/specs/phase-f-contracts.md section 12) adds four, the same way: `ia_mail_sent_total`,
+ * `ia_password_resets_total`, `ia_erasures_total`, `ia_camera_sessions_total`.
  */
 import {
+  MAIL_KINDS,
   EGRESS_PURPOSES,
   INTEGRATION_TYPES,
   REDACTION_KINDS,
@@ -53,6 +56,18 @@ export const SUMMARY_METRIC_PROVIDERS = ['local', 'anthropic'] as const;
 export const SUMMARY_METRIC_RESULTS = ['ready', ...SUMMARY_FAIL_CAUSES] as const;
 const SUMMARY_SECONDS_BUCKETS = [1, 2, 5, 10, 20, 40, 80, 160];
 
+/** Phase F section 4.1e: `ia_mail_sent_total.result`. */
+export const MAIL_SENT_RESULTS = ['sent', 'failed', 'no_mailer'] as const;
+export type MailSentResult = (typeof MAIL_SENT_RESULTS)[number];
+/** Phase F section 12: `ia_password_resets_total.result`. */
+export const PASSWORD_RESET_RESULTS = ['mailed', 'sso_notice', 'throttled', 'send_failed', 'no_mailer', 'unknown', 'confirmed', 'invalid'] as const;
+export type PasswordResetResult = (typeof PASSWORD_RESET_RESULTS)[number];
+/** Phase F section 12: `ia_erasures_total.state` counts the terminal transitions. */
+export const ERASURE_METRIC_STATES = ['completed', 'cancelled', 'expired'] as const;
+/** Phase F section 6.7: the tiers a camera can join and `ia_camera_sessions_total.result`. */
+export const CAMERA_METRIC_TIERS = ['p1_browser', 'p3_portable', 'p4_installed'] as const;
+export const CAMERA_METRIC_RESULTS = ['live', 'declined', 'no_camera', 'expired', 'error'] as const;
+
 /** Section 13.5: a heartbeat is due every 30 s +- 5 s, so the interesting mass is 25-35 s and the tail is a stall. */
 const HEARTBEAT_LAG_BUCKETS = [15, 25, 30, 35, 45, 60, 90, 120, 300, 900];
 
@@ -83,6 +98,11 @@ export type Metrics = {
   summaries: Counter<'provider' | 'result'>;
   summarySeconds: Histogram<'provider'>;
   redactions: Counter<'kind'>;
+  /** Phase F section 12. */
+  mailSent: Counter<'kind' | 'result'>;
+  passwordResets: Counter<'result'>;
+  erasures: Counter<'state'>;
+  cameraSessions: Counter<'tier' | 'result'>;
 };
 
 export function createMetrics(opts: { defaults?: boolean } = {}): Metrics {
@@ -162,6 +182,20 @@ export function createMetrics(opts: { defaults?: boolean } = {}): Metrics {
       registers,
     }),
     redactions: new Counter({ name: 'ia_redactions_total', help: 'Redaction placeholders inserted, by kind', labelNames: ['kind'], registers }),
+    mailSent: new Counter({ name: 'ia_mail_sent_total', help: 'Mails by kind and outcome', labelNames: ['kind', 'result'], registers }),
+    passwordResets: new Counter({
+      name: 'ia_password_resets_total',
+      help: 'Password reset requests and confirmations by outcome',
+      labelNames: ['result'],
+      registers,
+    }),
+    erasures: new Counter({ name: 'ia_erasures_total', help: 'Org erasures reaching a terminal state', labelNames: ['state'], registers }),
+    cameraSessions: new Counter({
+      name: 'ia_camera_sessions_total',
+      help: 'Phone camera sessions by tier and outcome',
+      labelNames: ['tier', 'result'],
+      registers,
+    }),
   };
   for (const result of DEVICE_HELLO_RESULTS) m.deviceHello.inc({ result }, 0);
   for (const method of WAKE_METRIC_METHODS) for (const result of WAKE_METRIC_RESULTS) m.wakeAttempts.inc({ method, result }, 0);
@@ -177,6 +211,11 @@ export function createMetrics(opts: { defaults?: boolean } = {}): Metrics {
     m.summarySeconds.zero({ provider });
   }
   for (const kind of REDACTION_KINDS) m.redactions.inc({ kind }, 0);
+  // Phase F section 12: likewise.
+  for (const kind of MAIL_KINDS) for (const result of MAIL_SENT_RESULTS) m.mailSent.inc({ kind, result }, 0);
+  for (const result of PASSWORD_RESET_RESULTS) m.passwordResets.inc({ result }, 0);
+  for (const state of ERASURE_METRIC_STATES) m.erasures.inc({ state }, 0);
+  for (const tier of CAMERA_METRIC_TIERS) for (const result of CAMERA_METRIC_RESULTS) m.cameraSessions.inc({ tier, result }, 0);
   return m;
 }
 

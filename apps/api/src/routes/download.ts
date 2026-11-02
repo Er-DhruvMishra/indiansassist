@@ -78,6 +78,8 @@ const CONTENT_TYPES: Record<AgentPlatform, string> = {
   windows: 'application/vnd.microsoft.portable-executable',
   android: 'application/vnd.android.package-archive',
   linux: LINUX_ARCHIVE_CONTENT_TYPE,
+  // Phase F section 17.2: the per-download stored zip of the macOS bundle (served once the apple stream ships it).
+  macos: 'application/zip',
 };
 
 /** Parses a single `bytes=a-b` range; null = whole file, 'bad' = unsatisfiable. */

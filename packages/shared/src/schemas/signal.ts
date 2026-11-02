@@ -6,6 +6,7 @@ import * as m from './signal-messages.js';
 import * as r from './signal-recorder.js';
 import * as p3 from './signal-messages-p3.js';
 import * as p4 from './signal-device.js';
+import * as cam from './signal-camera.js';
 
 /** Every signaling message, each `t` exactly once. */
 export const signalMessageSchema = z.discriminatedUnion('t', [
@@ -67,6 +68,14 @@ export const signalMessageSchema = z.discriminatedUnion('t', [
   p4.deviceWakeFailedSchema,
   p4.amtSolDataAssistSchema,
   p4.sessionLocalUserArrivedSchema,
+  // Phase F sections 6.4, 6.5a: the phone camera and the recorder's camera assignment.
+  cam.cameraHelloSchema,
+  cam.cameraReadySchema,
+  cam.cameraStopSchema,
+  cam.cameraHelloOkSchema,
+  cam.cameraStateSchema,
+  cam.cameraClosedSchema,
+  r.recorderCameraSchema,
 ]);
 export type SignalMessage = z.infer<typeof signalMessageSchema>;
 export type SignalType = SignalMessage['t'];
@@ -102,6 +111,9 @@ export const clientSignalMessageSchema = z.discriminatedUnion('t', [
   r.recorderHelloSchema,
   r.recorderJoinSchema,
   r.recorderLeaveSchema,
+  cam.cameraHelloSchema,
+  cam.cameraReadySchema,
+  cam.cameraStopSchema,
 ]);
 export type ClientSignalMessage = z.infer<typeof clientSignalMessageSchema>;
 
@@ -144,6 +156,10 @@ export const serverSignalMessageSchema = z.discriminatedUnion('t', [
   p4.deviceWakeFailedSchema,
   p4.amtSolDataAssistSchema,
   p4.sessionLocalUserArrivedSchema,
+  cam.cameraHelloOkSchema,
+  cam.cameraStateSchema,
+  cam.cameraClosedSchema,
+  r.recorderCameraSchema,
 ]);
 export type ServerSignalMessage = z.infer<typeof serverSignalMessageSchema>;
 
@@ -188,6 +204,12 @@ export const DESK_CLIENT_TYPES = [
   'desk.consent_monitors',
   'desk.elevation',
 ] as const satisfies readonly ClientSignalMessage['t'][];
+
+/** Phase F section 6.4: message types a camera socket may send (defined in signal-camera.ts, checked here). */
+export { CAMERA_CLIENT_TYPES } from './signal-camera.js';
+type CameraTypesAreClientTypes = (typeof cam.CAMERA_CLIENT_TYPES)[number] extends ClientSignalMessage['t'] ? true : never;
+const cameraTypesAreClientTypes: CameraTypesAreClientTypes = true;
+void cameraTypesAreClientTypes;
 
 /** Frames that never consume the per-connection frame bucket (Phase B Y25). */
 export const BUCKET_EXEMPT_TYPES = ['ping', 'pong', 'session.end', 'desk.consent'] as const satisfies readonly ClientSignalMessage['t'][];

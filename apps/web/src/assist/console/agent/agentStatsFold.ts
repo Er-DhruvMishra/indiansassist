@@ -77,4 +77,7 @@ export const CAPTURE_PATH_LABEL: Record<AgentStats['capturePath'], string> = {
   xshm: 'X11 shared memory',
   xgetimage: 'X11 (compatibility)',
   none: 'No screen shared',
+  // Phase F sections 9.2, 17.8: the Wayland portal path and macOS ScreenCaptureKit.
+  portal: 'Wayland screen sharing (portal)',
+  sck: 'ScreenCaptureKit',
 };

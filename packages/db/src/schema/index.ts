@@ -45,3 +45,8 @@ export type SessionSummaryRow = typeof tables.sessionSummary.$inferSelect;
 export type NewSessionSummaryRow = typeof tables.sessionSummary.$inferInsert;
 export type TicketPushRow = typeof tables.ticketPush.$inferSelect;
 export type NewTicketPushRow = typeof tables.ticketPush.$inferInsert;
+// Phase F (docs/specs/phase-f-contracts.md section 13.2)
+export type PasswordResetRow = typeof tables.passwordReset.$inferSelect;
+export type NewPasswordResetRow = typeof tables.passwordReset.$inferInsert;
+export type OrgErasureRow = typeof tables.orgErasure.$inferSelect;
+export type NewOrgErasureRow = typeof tables.orgErasure.$inferInsert;

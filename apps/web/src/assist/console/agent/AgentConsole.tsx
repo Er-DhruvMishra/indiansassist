@@ -29,6 +29,7 @@ import { PlaybookPanel } from './PlaybookPanel';
 import { SasConfirmDialog, SAS_STOP_TEXT } from './SasConfirmDialog';
 import { controlBlocker, hasFeature, levelAllows, levelChip, sasOk } from './agentState';
 import { NoScreenSlot, useEnterpriseLiveHooks } from '../EnterpriseSlots';
+import { CameraSlot, DeskKeepSlot } from '../PhaseFSlots';
 import { PolicyState, UnattendedBanner, type UnattendedSessionInfo } from './UnattendedBanner';
 import type { OverlayActions } from './InputOverlay';
 
@@ -154,6 +155,8 @@ export function AgentConsoleView({
       {snap.error && <Alert>{snap.error}</Alert>}
       {snap.captureNotice && <Alert tone="amber">{snap.captureNotice}</Alert>}
       {elevated && <Alert tone="blue">{ELEVATED_NOTE}</Alert>}
+      {/* Phase F section 3.4b: the Desk user's Keep choice, read-only (stream fixes; renders nothing until then). */}
+      <DeskKeepSlot kept={snap.kept} />
       <div className="grid gap-4 xl:grid-cols-[1fr_24rem]">
         <Card>
           <div className="mb-3 flex flex-col gap-2">
@@ -248,6 +251,9 @@ export function AgentConsoleView({
           <Card>
             <ChatPanel items={snap.chat} peerName={peerName} peerTyping={snap.peerTyping} disabled={!secured} onSend={(t) => ctrl.sendChat(t)} onTyping={(a) => ctrl.setTyping(a)} />
           </Card>
+          {/* Phase F section 6.6: the phone camera (stream camera; renders nothing until then). The P3/P4 console has no
+              console recorder, so the camera is recorded only by the server recorder here (section 6.5a). */}
+          <CameraSlot session={{ id: sessionId, live: snap.phase === 'live', consoleRecording: false }} sendChat={(t) => ctrl.sendChat(t)} tier={tier} />
           <Card>
             <FilePanel
               transfers={snap.transfers}

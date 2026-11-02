@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 import { AGENT_VERSION_RE } from '../agent/download.js';
+import { INSTALLER_FORMATS, INSTALLER_PLATFORMS, type InstallerFormat } from '../enums.js';
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/, 'expected 64 lower-case hex chars');
 const version = z.string().regex(AGENT_VERSION_RE, 'expected MAJOR.MINOR.PATCH');
@@ -15,8 +16,13 @@ const version = z.string().regex(AGENT_VERSION_RE, 'expected MAJOR.MINOR.PATCH')
 export const INSTALLER_ARCHES = ['x64', 'arm64'] as const;
 export type InstallerArch = (typeof INSTALLER_ARCHES)[number];
 
-/** One downloadable installer (`GET /download/installer`). */
+/**
+ * One downloadable installer (`GET /download/installer`). `platform` and `format` (Phase F sections 8.11, 17.8) are
+ * optional; absent = `windows` / `msi`.
+ */
 export const installerBuildSchema = z.strictObject({
+  platform: z.enum(INSTALLER_PLATFORMS).optional(),
+  format: z.enum(INSTALLER_FORMATS).optional(),
   arch: z.enum(INSTALLER_ARCHES),
   version,
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -47,12 +53,20 @@ export const installerDistManifestSchema = z.object({
 });
 export type InstallerDistManifest = z.infer<typeof installerDistManifestSchema>;
 
-/** The dist file name of an installer, as `docs/release.md` publishes it: `IndiansAssist-Agent-0.4.0-windows-x64.msi`. */
-export function installerFileName(arch: InstallerArch, v: string): string {
-  return `IndiansAssist-Agent-${v}-windows-${arch}.msi`;
+/**
+ * The dist file name of an installer, as `docs/release.md` publishes it: `IndiansAssist-Agent-0.4.0-windows-x64.msi`;
+ * Phase F section 8.9 `IndiansAssist-Agent-0.5.0-linux-x64.deb` / `.rpm`; section 17.3 `...-macos-arm64.pkg`.
+ */
+export function installerFileName(arch: InstallerArch, v: string, format: InstallerFormat = 'msi'): string {
+  const os = format === 'msi' ? 'windows' : format === 'pkg' ? 'macos' : 'linux';
+  return `IndiansAssist-Agent-${v}-${os}-${arch}.${format}`;
 }
 
-/** `GET /api/v1/download/installer/:arch` query: which enrollment token the download is audited against. */
+/**
+ * `GET /api/v1/download/installer/:arch` query: which enrollment token the download is audited against, and
+ * (Phase F section 8.11) the package format, absent = `msi`.
+ */
 export const installerDownloadQuerySchema = z.object({
   tokenId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'expected a lower-case uuid'),
+  format: z.enum(INSTALLER_FORMATS).optional(),
 });

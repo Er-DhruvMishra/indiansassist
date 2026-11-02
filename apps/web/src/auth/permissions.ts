@@ -30,7 +30,12 @@ export type Capability =
   | 'integrations.push'
   | 'ai.admin'
   | 'summary.write'
-  | 'summary.read';
+  | 'summary.read'
+  // Phase F section 2.1
+  | 'users.invite_mail'
+  | 'erasure.read'
+  | 'erasure.admin'
+  | 'camera.use';
 
 const MATRIX: Record<Capability, readonly UserRole[]> = {
   'tokens.create': ['technician', 'senior_technician', 'org_admin'],
@@ -76,6 +81,15 @@ const MATRIX: Record<Capability, readonly UserRole[]> = {
   /** Summary generate / regenerate, transcript upload, edit. */
   'summary.write': ['technician', 'senior_technician', 'org_admin'],
   'summary.read': ['technician', 'senior_technician', 'org_admin', 'auditor'],
+  // Phase F section 2.1 ("the session's Assist" scoping of the camera is the server's, not the client's).
+  /** Invite by email, resend an invitation. */
+  'users.invite_mail': ['org_admin'],
+  /** The full erasure record (every other role reads only the banner notice, which needs no capability). */
+  'erasure.read': ['org_admin', 'auditor'],
+  /** Erasure request, approve, confirm, cancel. */
+  'erasure.admin': ['org_admin'],
+  /** Phone camera link create / revoke and snapshot record. */
+  'camera.use': ['technician', 'senior_technician', 'org_admin'],
 };
 
 export function can(role: UserRole | null | undefined, cap: Capability): boolean {

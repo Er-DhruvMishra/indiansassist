@@ -12,6 +12,11 @@
 //! boundary, the decision behind it is a pure function in the crate that owns it.
 
 pub mod linux;
+// apple-owned: begin
+/// Phase F §17.2: the macOS impls of the traits (apple stream).
+#[cfg(target_os = "macos")]
+pub mod macos;
+// apple-owned: end
 pub mod protocol;
 pub mod selfdelete;
 pub mod service;

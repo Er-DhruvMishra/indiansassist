@@ -53,6 +53,9 @@ import { aiRoutes } from './ai/routes.js';
 import { integrationRoutes } from './integrations/routes.js';
 import { residencyRoutes } from './routes/residency.js';
 import { ssoRoutes } from './sso/routes.js';
+import { mailRoutes } from './mail/routes.js';
+import { erasureRoutes } from './erasure/routes.js';
+import { cameraRoutes } from './camera/routes.js';
 import type { Region } from '@indiansassist/shared';
 
 /**
@@ -60,6 +63,9 @@ import type { Region } from '@indiansassist/shared';
  * stream without editing this file again.
  */
 export const ENTERPRISE_ROUTE_PLUGINS: readonly EnterpriseRoutePlugin[] = [ssoRoutes, integrationRoutes, aiRoutes, residencyRoutes];
+
+/** Phase F section 1.4: likewise, one route plugin per TypeScript stream that serves routes. */
+export const PHASE_F_ROUTE_PLUGINS: readonly EnterpriseRoutePlugin[] = [mailRoutes, erasureRoutes, cameraRoutes];
 
 export type BuildAppOptions = {
   config: Config;
@@ -166,6 +172,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await fleetAdminRoutes(app, ctx);
   // Phase E (docs/specs/phase-e-contracts.md section 1.4)
   for (const plugin of ENTERPRISE_ROUTE_PLUGINS) await plugin(app, ctx);
+  // Phase F (docs/specs/phase-f-contracts.md section 1.4)
+  for (const plugin of PHASE_F_ROUTE_PLUGINS) await plugin(app, ctx);
 
   ctx.hub.attach(app);
   await ctx.hub.start();

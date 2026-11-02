@@ -100,7 +100,8 @@ impl QualityPreset {
 }
 
 /// `CAPTURE_PATHS` (contract §4.4; Phase E §7.2/§7.4 adds the Linux X11 paths and the
-/// Wayland no-screen path as names only, the linux stream wires them).
+/// Wayland no-screen path as names only, the linux stream wires them; Phase F §9.2 adds the
+/// portal path (wayland stream) and §17.8 the macOS ScreenCaptureKit path (apple stream), names only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapturePath {
@@ -110,16 +111,20 @@ pub enum CapturePath {
     Xshm,
     Xgetimage,
     None,
+    Portal,
+    Sck,
 }
 
 impl CapturePath {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Dda,
         Self::Gdi,
         Self::Projection,
         Self::Xshm,
         Self::Xgetimage,
         Self::None,
+        Self::Portal,
+        Self::Sck,
     ];
 }
 
@@ -137,17 +142,19 @@ impl NavAction {
     pub const ALL: [Self; 4] = [Self::Back, Self::Home, Self::Recents, Self::Notifications];
 }
 
-/// `PLAYBOOK_INTERPRETERS` (contract §8.1). Windows runs powershell/cmd; sh is Android/E.
+/// `PLAYBOOK_INTERPRETERS` (contract §8.1). Windows runs powershell/cmd; sh is Android/E;
+/// zsh (Phase F §17.8) is the macOS shell, a name only until the apple stream runs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybookInterpreter {
     Powershell,
     Cmd,
     Sh,
+    Zsh,
 }
 
 impl PlaybookInterpreter {
-    pub const ALL: [Self; 3] = [Self::Powershell, Self::Cmd, Self::Sh];
+    pub const ALL: [Self; 4] = [Self::Powershell, Self::Cmd, Self::Sh, Self::Zsh];
 }
 
 /// `SEC_FAIL_REASONS` (contract §1.3).
@@ -272,6 +279,22 @@ pub fn linux_capabilities(monitors: u8, wayland: bool) -> AgentCapabilities {
         interpreters: vec![PlaybookInterpreter::Sh],
     }
 }
+
+// apple-owned: begin
+/// Phase F §17.2: the macOS `desk.hello.client.capabilities`, from what TCC has granted at
+/// `desk.hello`. The documented empty value until the apple stream fills it: no features.
+#[cfg(target_os = "macos")]
+pub fn macos_capabilities(monitors: u8) -> AgentCapabilities {
+    AgentCapabilities {
+        monitors: monitors.clamp(1, 16),
+        elevation: ElevationLevel::User,
+        features: Vec::new(),
+        encoders: vec![VideoEncoder::Vp8, VideoEncoder::Vp9],
+        hw_encoder: false,
+        interpreters: Vec::new(),
+    }
+}
+// apple-owned: end
 
 /// `P3_DATA_CHANNEL_LABELS`, created by the Desk once per peer connection (contract §1.3).
 pub const P3_DATA_CHANNEL_LABELS: &[&str] = &[
