@@ -5,14 +5,37 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Phase F section 17.2 (stream apple): macOS ScreenCaptureKit capture. An F0 stub: compiles to nothing until the apple stream fills it, and to nothing off macOS."
+description = "macOS screen capture (Phase F section 17.2, stream apple): the display geometry and frame-size decisions (pure, tested on every host), and ScreenCaptureKit capture behind the `macos` feature on macOS."
 
 [features]
 default = []
-# Enabled by `ia-agent/macos`; the apple stream names what it turns on.
-macos = []
+# ScreenCaptureKit capture. Compiles to nothing off macOS.
+macos = [
+    "dep:objc2",
+    "dep:block2",
+    "dep:dispatch2",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-graphics",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+    "dep:objc2-screen-capture-kit",
+]
 
 [dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-frame.workspace = true
+tracing.workspace = true
 
 # Phase F §17.7: owned by the apple stream (the objc2 family, §10, macOS-target only).
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", optional = true }
+block2 = { version = "0.6.2", optional = true }
+dispatch2 = { version = "0.3.1", optional = true, default-features = false, features = ["std", "objc2"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSError", "NSObject", "NSString"] }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CGDirectDisplay", "CGError", "CGWindow"] }
+objc2-core-media = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-video", "CMBase", "CMSampleBuffer", "CMTime"] }
+objc2-core-video = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-screen-capture-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "dispatch2", "libc", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media", "SCShareableContent", "SCStream"] }

@@ -184,11 +184,19 @@ fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>
 }
 
 // apple-owned: begin
-/// Phase F §17.2: CGEvent input (Accessibility granted) and the `NSPasteboard` text clipboard on
-/// macOS (feature `macos`). The no-op sinks until the apple stream fills it.
+/// Phase F §17.2: CGEvent input (with the pre-injection guard over the agent's own windows) and
+/// the `NSPasteboard` text clipboard on macOS; no-op sinks when capture is synthetic, as on
+/// Windows and Linux. Input is advertised only with the Accessibility grant (`desk.rs`), and
+/// without it Quartz drops posted events, so a sink without the grant does nothing.
 #[cfg(all(target_os = "macos", feature = "macos"))]
-fn platform_io(_synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
-    (Box::new(NoopInput), Box::new(NoopClip))
+fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
+    if synthetic {
+        return (Box::new(NoopInput), Box::new(NoopClip));
+    }
+    (
+        Box::new(ia_input_mac::MacInput::new()),
+        Box::new(ia_input_mac::MacClipboard::new()),
+    )
 }
 // apple-owned: end
 
