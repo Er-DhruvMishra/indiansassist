@@ -8,11 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		27D76FC8E2618342DF4B8ACC /* IASec in Frameworks */ = {isa = PBXBuildFile; productRef = E9BD65E9C6DFF166D6514251 /* IASec */; };
+		2C917E4AD3EEC125DE8A1DBB /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = C6D7B7E91A3926F05F440B65 /* WebRTC */; };
+		37632D237CBF34293F06AC81 /* PeerSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C5E0C9C0E309A3970177D9 /* PeerSession.swift */; };
 		41A9CE62809E59DA097801B7 /* GiveHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295912CC0D9F92A73CC15E2D /* GiveHelpView.swift */; };
 		435CB6F314E728254E708C40 /* IndiansAssistApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9D4C1C22B63692214B4E717 /* IndiansAssistApp.swift */; };
 		69739AD291C22FF489B0F93B /* IASession in Frameworks */ = {isa = PBXBuildFile; productRef = 8DC9ADE7FAFCA1B912E0B9B5 /* IASession */; };
 		79D11F2A92E3F72BABADFB15 /* IndiansAssistBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		818417E1F31581D8D286D9D4 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66ADE443354D80640C48F5B0 /* SampleHandler.swift */; };
+		86C3B4131DF76A6D90429131 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = CF22ECEC2AC15CB9DE047242 /* WebRTC */; };
 		A8FF2F99FF4CBD1475B7E188 /* SignalSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D3248E376D0C9D9F22408E8 /* SignalSocket.swift */; };
 		A9D7E363DF88423232F6E5D3 /* IASession in Frameworks */ = {isa = PBXBuildFile; productRef = B0EA2C067BE828D417C1E28D /* IASession */; };
 		B398BD168750DBA72F88A9BB /* GetHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5892E4C1582929C5CDDD6D76 /* GetHelpView.swift */; };
@@ -62,6 +65,7 @@
 		C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = IndiansAssistBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C9D4C1C22B63692214B4E717 /* IndiansAssistApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndiansAssistApp.swift; sourceTree = "<group>"; };
 		CA513686190CF1B7C19DA147 /* IndiansAssist.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IndiansAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4C5E0C9C0E309A3970177D9 /* PeerSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSession.swift; sourceTree = "<group>"; };
 		F33AD50D27F2FE453B5B79D3 /* IndiansAssist.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = IndiansAssist.entitlements; sourceTree = "<group>"; };
 		FD669A423475EE7CF31181E8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -73,6 +77,7 @@
 			files = (
 				A9D7E363DF88423232F6E5D3 /* IASession in Frameworks */,
 				F2FEE6E8B2C734A3FDA95D0B /* IASec in Frameworks */,
+				86C3B4131DF76A6D90429131 /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -83,6 +88,7 @@
 				69739AD291C22FF489B0F93B /* IASession in Frameworks */,
 				27D76FC8E2618342DF4B8ACC /* IASec in Frameworks */,
 				F194A6755ECEDE0EC6057C80 /* ReplayKit.framework in Frameworks */,
+				2C917E4AD3EEC125DE8A1DBB /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -103,6 +109,7 @@
 			children = (
 				4E493590721A4046770BC6AE /* IndiansAssistBroadcast.entitlements */,
 				FD669A423475EE7CF31181E8 /* Info.plist */,
+				E4C5E0C9C0E309A3970177D9 /* PeerSession.swift */,
 				66ADE443354D80640C48F5B0 /* SampleHandler.swift */,
 				4D3248E376D0C9D9F22408E8 /* SignalSocket.swift */,
 			);
@@ -171,6 +178,7 @@
 			packageProductDependencies = (
 				B0EA2C067BE828D417C1E28D /* IASession */,
 				BDA7D9A78DAC3344052AEE7D /* IASec */,
+				CF22ECEC2AC15CB9DE047242 /* WebRTC */,
 			);
 			productName = IndiansAssist;
 			productReference = CA513686190CF1B7C19DA147 /* IndiansAssist.app */;
@@ -191,6 +199,7 @@
 			packageProductDependencies = (
 				8DC9ADE7FAFCA1B912E0B9B5 /* IASession */,
 				E9BD65E9C6DFF166D6514251 /* IASec */,
+				C6D7B7E91A3926F05F440B65 /* WebRTC */,
 			);
 			productName = IndiansAssistBroadcast;
 			productReference = C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */;
@@ -225,6 +234,7 @@
 			mainGroup = 8B11C9C307ACF7B71D5489C1;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				5A09D5D6D30D76AEAEDA6AE8 /* XCRemoteSwiftPackageReference "WebRTC" */,
 				90927AFFB7ECC515FC2D6C97 /* XCLocalSwiftPackageReference "IndiansAssistKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -243,6 +253,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				37632D237CBF34293F06AC81 /* PeerSession.swift in Sources */,
 				818417E1F31581D8D286D9D4 /* SampleHandler.swift in Sources */,
 				A8FF2F99FF4CBD1475B7E188 /* SignalSocket.swift in Sources */,
 			);
@@ -508,6 +519,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		5A09D5D6D30D76AEAEDA6AE8 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC";
+			requirement = {
+				kind = exactVersion;
+				version = 155.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		8DC9ADE7FAFCA1B912E0B9B5 /* IASession */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -520,6 +542,16 @@
 		BDA7D9A78DAC3344052AEE7D /* IASec */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = IASec;
+		};
+		C6D7B7E91A3926F05F440B65 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A09D5D6D30D76AEAEDA6AE8 /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+		CF22ECEC2AC15CB9DE047242 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A09D5D6D30D76AEAEDA6AE8 /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
 		};
 		E9BD65E9C6DFF166D6514251 /* IASec */ = {
 			isa = XCSwiftPackageProductDependency;

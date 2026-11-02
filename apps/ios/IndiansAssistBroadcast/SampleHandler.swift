@@ -7,10 +7,9 @@ import ReplayKit
 /// hand-off the app wrote after its consent screen, and holds the signal socket itself (the app is suspended while
 /// another app is shown). Everything runs on one serial queue; DeskMachine decides, this class executes its effects.
 ///
-/// Media: the WebRTC peer, the `ia.sec` handshake on its data channel and the video track (at most 1280 px on the long
-/// edge at 15 fps, within the extension's memory limit) are added with the pinned WebRTC package; until then the
-/// session reaches `active` without video.
-final class SampleHandler: RPBroadcastSampleHandler {
+/// Media is `PeerSession` (WebRTC 155, pinned): the screen track at most 1280 px on the long edge at 15 fps, the seven
+/// channels, and the `ia.sec` handshake on its channel.
+final class SampleHandler: RPBroadcastSampleHandler, PeerSessionEvents {
     private let queue = DispatchQueue(label: "com.indiansassist.broadcast")
     private let notes = SessionNoteStore.appGroup()
     private var machine: DeskMachine?
@@ -19,6 +18,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var pollTimer: DispatchSourceTimer?
     private var reconnectDelay: TimeInterval = 1
     private var note = SessionNote(state: "connecting")
+    private var peer: PeerSession?
+    private var gen = 0
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         queue.async { self.start() }
@@ -29,7 +30,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
-        // Video frames go to the WebRTC track once it exists; audio is never sent (the microphone button is hidden).
+        // Video only; audio is never sent (the microphone button is hidden). The peer is read on the session queue.
+        guard sampleBufferType == .video else { return }
+        queue.sync { self.peer?.push(sampleBuffer) }
     }
 
     private func start() {
@@ -73,8 +76,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
             if let signalURL { socket?.connect(signalURL) }
         case let .send(msg):
             socket?.send(msg)
-        case .sendCtrl:
-            break // the control channel exists with the peer (pending WebRTC)
+        case let .sendCtrl(msg):
+            peer?.sendText("ia.ctrl", msg)
         case .startPolling:
             startPolling()
         case .stopPolling:
@@ -85,10 +88,21 @@ final class SampleHandler: RPBroadcastSampleHandler {
             note = SessionNote(state: "starting", technician: info.technician)
             save()
             run(.consentAccepted)
-        case .startMedia, .rebuildPeer, .refreshIce, .peerSignal:
+        case let .startMedia(ice):
+            startPeer(ice: ice, restart: false)
             note.state = "active"
             save()
-        case .teardown, .flushOutbox, .recording:
+        case let .rebuildPeer(ice):
+            gen += 1
+            startPeer(ice: ice, restart: true)
+        case let .refreshIce(ice):
+            peer?.setIce(ice, restartIce: true)
+        case let .peerSignal(msg):
+            peer?.onSignal(msg)
+        case .teardown:
+            peer?.close()
+            peer = nil
+        case .flushOutbox, .recording:
             break
         case let .chatRelay(msg):
             if let text = msg["text"]?.stringValue {
@@ -108,6 +122,37 @@ final class SampleHandler: RPBroadcastSampleHandler {
             finish(endMessage(info))
         }
     }
+
+    private func startPeer(ice: [IceServer], restart: Bool) {
+        peer?.close()
+        guard let sid = machine?.sessionId else { return }
+        let p = PeerSession(ice: ice, sessionId: sid, gen: gen, queue: queue, events: self)
+        peer = p
+        p.start(restart: restart)
+    }
+
+    // MARK: PeerSessionEvents (on the session queue)
+
+    func sendSignal(_ msg: JSONValue) {
+        socket?.send(msg)
+    }
+
+    func established(sas: String) {
+        note.state = "secured"
+        save()
+    }
+
+    func secFailed(_ reason: String) {
+        run(.secFailed(reason: reason))
+    }
+
+    func chat(_ line: String) {
+        note.chat.append(String(line.prefix(500)))
+        note.chat = Array(note.chat.suffix(50))
+        save()
+    }
+
+    func recording(_ on: Bool) {}
 
     private func closed(_ code: Int) {
         run(.socketClosed(code: code))

@@ -15,16 +15,16 @@ public func obj(_ pairs: [(String, JSONValue?)]) -> JSONValue {
 }
 
 extension JSONValue {
-    static func str(_ s: String?) -> JSONValue? { s.map(JSONValue.string) }
-    static func num(_ n: Int64) -> JSONValue { .int(n) }
-    static func flag(_ b: Bool?) -> JSONValue? { b.map(JSONValue.bool) }
+    public static func str(_ s: String?) -> JSONValue? { s.map(JSONValue.string) }
+    public static func num(_ n: Int64) -> JSONValue { .int(n) }
+    public static func flag(_ b: Bool?) -> JSONValue? { b.map(JSONValue.bool) }
 
-    var boolValue: Bool? {
+    public var boolValue: Bool? {
         if case let .bool(b) = self { return b }
         return nil
     }
 
-    var arrayValue: [JSONValue]? {
+    public var arrayValue: [JSONValue]? {
         if case let .array(a) = self { return a }
         return nil
     }

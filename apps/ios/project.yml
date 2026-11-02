@@ -20,6 +20,11 @@ settings:
 packages:
   IndiansAssistKit:
     path: IndiansAssistKit
+  # Section 17.4: Google's WebRTC as a binary xcframework (BSD-3-Clause), pinned exactly; SwiftPM checks the
+  # binaryTarget checksum (155.0.0: cb9adacf2d6bbf598d1d9e3e6c16d8fb97ca987b5b697746891828f9dc068ffe).
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    exactVersion: 155.0.0
 targets:
   IndiansAssist:
     type: application
@@ -34,6 +39,10 @@ targets:
       - target: IndiansAssistBroadcast
         embed: true
         codeSign: true
+      # WebRTC is a dynamic framework: an extension cannot embed one, so the app links it and Xcode embeds it in the app's Frameworks folder
+      # and the extension loads it through @executable_path/../../Frameworks.
+      - package: WebRTC
+        product: WebRTC
     entitlements:
       path: IndiansAssist/IndiansAssist.entitlements
       properties:
@@ -74,6 +83,9 @@ targets:
       - package: IndiansAssistKit
         product: IASec
       - sdk: ReplayKit.framework
+      - package: WebRTC
+        product: WebRTC
+        embed: false
     entitlements:
       path: IndiansAssistBroadcast/IndiansAssistBroadcast.entitlements
       properties:
