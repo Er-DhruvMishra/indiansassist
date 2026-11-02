@@ -129,6 +129,25 @@ fn source_wire(src: TokenSource) -> &'static str {
 /// The `desk.hello` capabilities of this Desk: C §3.1 on Windows, Phase E §7.5 on Linux (the
 /// RandR monitor count in an X11 session, the no-screen set on Wayland).
 fn desk_capabilities(cli: &Cli, has_voice: bool) -> ia_core::types::AgentCapabilities {
+    // apple-owned: begin
+    // Phase F §17.2: what TCC has granted, over the active displays (everything when synthetic).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = has_voice;
+        #[cfg(feature = "macos")]
+        let monitors = if cli.synthetic_capture {
+            1
+        } else {
+            crate::desk::macos_monitors().len().max(1)
+        };
+        #[cfg(not(feature = "macos"))]
+        let monitors = 1;
+        let caps = crate::desk::macos_caps(monitors, cli.synthetic_capture);
+        tracing::info!(monitors = caps.monitors, features = ?caps.features, "macos capabilities");
+        return caps;
+    }
+    // apple-owned: end
+    #[allow(unreachable_code)]
     if !cfg!(target_os = "linux") {
         return windows_capabilities(1, false, has_voice);
     }

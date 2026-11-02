@@ -248,6 +248,7 @@ impl SckCapturer {
             Err(_) => return Err("startCapture timed out".into()),
         }
         tracing::info!(monitor_id, width, height, "ScreenCaptureKit stream started");
+        self.lost = false;
         self.streams.insert(
             monitor_id,
             Stream {

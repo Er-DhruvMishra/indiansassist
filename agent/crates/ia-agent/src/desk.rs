@@ -84,6 +84,11 @@ pub fn video_ids(ids: &[u32]) -> Vec<u32> {
 
 /// `desk.hello.client.os` for a native Desk on this target (§7.3a).
 pub fn native_os() -> &'static str {
+    // apple-owned: begin
+    #[cfg(target_os = "macos")]
+    return "mac";
+    // apple-owned: end
+    #[allow(unreachable_code)]
     if cfg!(target_os = "linux") {
         "linux"
     } else {
@@ -106,6 +111,12 @@ pub fn pretty_name(os_release: &str) -> Option<String> {
 /// `desk.hello.client.platform.osVersion`: `10.0` on Windows (as before), the os-release
 /// `PRETTY_NAME` on Linux (fallback `Linux`).
 pub fn os_version() -> String {
+    // apple-owned: begin
+    // Phase F §17.2: the macOS product version (`kern.osproductversion`, for example `15.4`).
+    #[cfg(target_os = "macos")]
+    return macos_product_version().unwrap_or_else(|| "macOS".to_string());
+    // apple-owned: end
+    #[allow(unreachable_code)]
     if cfg!(target_os = "linux") {
         std::fs::read_to_string("/etc/os-release")
             .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
@@ -138,6 +149,33 @@ pub fn macos_caps(monitors: usize, synthetic: bool) -> AgentCapabilities {
         macos_grants()
     };
     ia_core::types::macos_capabilities(monitors.clamp(1, 16) as u8, grants)
+}
+
+/// `sysctlbyname("kern.osproductversion")`, cut to 32 printable characters.
+#[cfg(target_os = "macos")]
+pub fn macos_product_version() -> Option<String> {
+    let mut buf = [0u8; 64];
+    let mut len = buf.len();
+    // SAFETY: a NUL-terminated name and a buffer of `len` bytes; `len` receives the size written.
+    let rc = unsafe {
+        libc::sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || len == 0 {
+        return None;
+    }
+    let v: String = String::from_utf8_lossy(&buf[..len])
+        .trim_end_matches('\0')
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect();
+    (!v.is_empty()).then_some(v)
 }
 
 /// The live TCC state (no prompt is shown).

@@ -236,6 +236,10 @@ impl CaptureSource {
         match self {
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.lost(),
+            // apple-owned: begin
+            #[cfg(all(target_os = "macos", feature = "macos"))]
+            CaptureSource::Sck(c) => c.lost(),
+            // apple-owned: end
             _ => false,
         }
     }
