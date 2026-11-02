@@ -410,7 +410,7 @@ mod tests {
             "requiresElevation": false,
             "bodyHash": hash,
             "body": body,
-            "interpreter": "powershell",
+            "interpreter": if cfg!(windows) { "powershell" } else { "sh" },
             "timeoutSec": 30,
         });
         let action = ia_core::queue::playbook_action(&payload).unwrap();
