@@ -20,11 +20,20 @@ final class AppModel: ObservableObject {
     }
 
     private let group = UserDefaults(suiteName: JoinHandoff.appGroup)
+    private let handoffs = HandoffStore.appGroup()
 
     init() {
         let info = Bundle.main.infoDictionary ?? [:]
         apiOrigin = UserDefaults.standard.string(forKey: "server.api") ?? (info["IAApiOrigin"] as? String ?? "")
         webOrigin = UserDefaults.standard.string(forKey: "server.web") ?? (info["IAWebOrigin"] as? String ?? "")
+        // A code never stays on disk: a hand-off the extension never took is removed at launch.
+        handoffs?.clear()
+    }
+
+    /// "Use another code": the consent is withdrawn and any hand-off not yet taken is removed.
+    func cancel() {
+        handoffs?.clear()
+        consented = false
     }
 
     /// Hosts a web join link may come from: the configured web origin's host (with its port when it has one).
@@ -52,20 +61,20 @@ final class AppModel: ObservableObject {
         guard JoinInput.parseLink(url.absoluteString, allowedHosts: allowedHosts) != nil else { return }
         codeText = url.absoluteString
         tokenSource = .deeplink
-        consented = false
+        cancel()
         route = [.getHelp]
     }
 
     /// The person accepted the consent screen: write the hand-off the extension starts from.
     func consent() -> Bool {
-        guard let code = parsedCode(), let group else { return false }
+        guard let code = parsedCode(), let handoffs else { return false }
         let handoff = JoinHandoff(code: code.value, tokenSource: tokenSource, apiOrigin: apiOrigin, consentedAt: Date())
         guard handoff.signalUrl != nil else {
             codeError = "The server address is not valid. Check it under Server."
             return false
         }
         do {
-            try handoff.save(to: group)
+            try handoffs.write(handoff)
         } catch {
             codeError = "The code could not be handed to the screen-sharing extension."
             return false

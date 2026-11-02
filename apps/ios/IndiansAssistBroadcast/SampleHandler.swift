@@ -33,7 +33,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     private func start() {
-        guard let group, let handoff = JoinHandoff.take(from: group), handoff.isFresh(now: Date()),
+        // Read once and deleted before /signal is opened; a stale or unreadable one is deleted and ignored.
+        guard let handoff = HandoffStore.appGroup()?.take(now: Date()),
               let url = handoff.signalUrl.flatMap(URL.init(string:)),
               let source = TokenSource(rawValue: handoff.tokenSource) else {
             finish("Open IndiansAssist and enter your support code first, then start sharing from there.")

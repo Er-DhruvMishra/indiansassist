@@ -6,7 +6,6 @@ import Foundation
 public struct JoinHandoff: Codable, Equatable {
     /// The App Group shared by the app and the extension.
     public static let appGroup = "group.com.indiansassist.ios"
-    static let key = "join.handoff"
     /// A hand-off older than this is ignored: the person tapped Get help and walked away.
     public static let maxAge: TimeInterval = 10 * 60
 
@@ -43,16 +42,47 @@ public struct JoinHandoff: Codable, Equatable {
         return age >= 0 && age <= Self.maxAge
     }
 
-    public func save(to defaults: UserDefaults) throws {
-        defaults.set(try JSONEncoder().encode(self), forKey: Self.key)
+}
+
+/// The join code never stays on disk (the Phase C rule for the C section 2.4 sidecar): the hand-off is one file in the
+/// App Group container, written with complete file protection, read once and deleted before the extension opens
+/// `/signal`; a stale one is deleted and ignored, and the app removes any leftover on launch and on cancel. Never in
+/// UserDefaults.
+public struct HandoffStore {
+    public static let fileName = "join-handoff.json"
+    public let file: URL
+
+    public init(directory: URL) {
+        file = directory.appendingPathComponent(Self.fileName)
     }
 
-    /// Reads and removes the hand-off (it is used once).
-    public static func take(from defaults: UserDefaults) -> JoinHandoff? {
-        guard let data = defaults.data(forKey: key) else { return nil }
-        defaults.removeObject(forKey: key)
-        return try? JSONDecoder().decode(JoinHandoff.self, from: data)
+    /// The store in the shared App Group container; nil when the entitlement is missing.
+    public static func appGroup() -> HandoffStore? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: JoinHandoff.appGroup).map(HandoffStore.init)
     }
+
+    /// Writes the hand-off atomically. `.complete`: readable only while the device is unlocked, which it is, since the
+    /// person has just tapped Start Broadcast. (File protection has no effect on macOS, where the tests run.)
+    public func write(_ handoff: JoinHandoff) throws {
+        let data = try JSONEncoder().encode(handoff)
+        try data.write(to: file, options: [.atomic, .completeFileProtection])
+    }
+
+    /// Reads the hand-off and deletes the file before returning, whatever it holds. A hand-off older than
+    /// `JoinHandoff.maxAge`, from the future, or unreadable is deleted and gives nil.
+    public func take(now: Date) -> JoinHandoff? {
+        let data = try? Data(contentsOf: file)
+        clear()
+        guard let data, let h = try? JSONDecoder().decode(JoinHandoff.self, from: data), h.isFresh(now: now) else { return nil }
+        return h
+    }
+
+    /// Removes any hand-off (app launch, cancel).
+    public func clear() {
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    public var exists: Bool { FileManager.default.fileExists(atPath: file.path) }
 }
 
 /// What the extension reports back to the app (shown when the person returns to it): the session's state, the

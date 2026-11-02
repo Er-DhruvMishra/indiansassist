@@ -53,7 +53,7 @@ struct GetHelpView: View {
                     }
                 }
                 Section {
-                    Button("Use another code", role: .cancel) { model.consented = false }
+                    Button("Use another code", role: .cancel) { model.cancel() }
                 }
             }
         }
