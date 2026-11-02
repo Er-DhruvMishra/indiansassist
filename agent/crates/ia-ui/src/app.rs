@@ -83,6 +83,14 @@ impl UiHandle {
 
 /// Start the UI thread with the consent window open.
 pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
+    // apple-owned: begin
+    // Phase F §17.2: AppKit runs only on the main thread, so on macOS the window is run by the
+    // main-thread host (`macos_main_thread_host`) rather than on a thread of its own.
+    #[cfg(target_os = "macos")]
+    if mac_host::enabled() {
+        return mac_host::spawn(req, emit);
+    }
+    // apple-owned: end
     let (tx, rx) = channel();
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let slot = ctx_slot.clone();
@@ -146,6 +154,124 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
         thread,
     }
 }
+
+// apple-owned: begin
+/// Phase F §17.2: run the UI on the main thread of a macOS agent. Call [`macos_main_thread_enable`]
+/// before the agent's work moves to another thread, then [`macos_main_thread_host`] on the main
+/// thread: every [`spawn`] from then on hands its window to the host, and `UiHandle` keeps its
+/// shape (its `thread` is a watcher that ends when the window does).
+#[cfg(target_os = "macos")]
+pub fn macos_main_thread_enable() {
+    mac_host::enable();
+}
+
+/// Phase F §17.2: run UI windows on this (the main) thread until `done()` holds.
+#[cfg(target_os = "macos")]
+pub fn macos_main_thread_host(done: impl Fn() -> bool) {
+    mac_host::host(done);
+}
+
+#[cfg(target_os = "macos")]
+mod mac_host {
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Duration;
+
+    use eframe::egui::{self, ViewportBuilder, WindowLevel};
+
+    use super::{ConsentRequest, Emit, IaApp, UiEvent, UiHandle, CONSENT_TITLE};
+
+    type Job = Box<dyn FnOnce() + Send>;
+    type Queue = (Sender<Job>, Mutex<Option<Receiver<Job>>>);
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static QUEUE: OnceLock<Queue> = OnceLock::new();
+
+    fn queue() -> &'static Queue {
+        QUEUE.get_or_init(|| {
+            let (tx, rx) = channel();
+            (tx, Mutex::new(Some(rx)))
+        })
+    }
+
+    pub fn enable() {
+        let _ = queue();
+        ENABLED.store(true, Ordering::SeqCst);
+    }
+
+    pub fn enabled() -> bool {
+        ENABLED.load(Ordering::SeqCst)
+    }
+
+    pub fn host(done: impl Fn() -> bool) {
+        let Some(rx) = queue().1.lock().ok().and_then(|mut g| g.take()) else {
+            return;
+        };
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(job) => job(),
+                Err(RecvTimeoutError::Timeout) if done() => return,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+
+    /// [`super::spawn`] on macOS: the same window, run by the main-thread host.
+    pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
+        let (tx, rx) = channel();
+        let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
+        let slot = ctx_slot.clone();
+        let (done_tx, done_rx) = channel::<()>();
+        let job: Job = Box::new(move || {
+            let emit: Rc<Emit> = Rc::new(emit);
+            let app_emit = emit.clone();
+            let options = eframe::NativeOptions {
+                viewport: ViewportBuilder::default()
+                    .with_title(CONSENT_TITLE)
+                    .with_inner_size([520.0, 720.0])
+                    .with_resizable(false)
+                    .with_maximize_button(false)
+                    .with_minimize_button(false)
+                    .with_window_level(WindowLevel::AlwaysOnTop)
+                    .with_active(true),
+                centered: true,
+                renderer: eframe::Renderer::Glow,
+                ..Default::default()
+            };
+            let result = eframe::run_native(
+                CONSENT_TITLE,
+                options,
+                Box::new(move |cc| {
+                    if let Ok(mut g) = slot.lock() {
+                        *g = Some(cc.egui_ctx.clone());
+                    }
+                    Ok(Box::new(IaApp::new(req, rx, app_emit)))
+                }),
+            );
+            match result {
+                Ok(()) => emit(UiEvent::Closed),
+                Err(e) => emit(UiEvent::Failed(e.to_string())),
+            }
+            let _ = done_tx.send(());
+        });
+        let _ = queue().0.send(job);
+        let thread = std::thread::Builder::new()
+            .name("ia-ui-watch".into())
+            .spawn(move || {
+                let _ = done_rx.recv();
+            })
+            .ok();
+        UiHandle {
+            tx,
+            ctx: ctx_slot,
+            thread,
+        }
+    }
+}
+// apple-owned: end
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -540,6 +666,11 @@ impl IaApp {
             for w in &self.req.warnings {
                 ui.colored_label(Color32::from_rgb(230, 190, 40), w);
             }
+            // apple-owned: begin
+            // Phase F §17.2: the two macOS permission steps (Screen Recording, Accessibility).
+            #[cfg(target_os = "macos")]
+            crate::tray::tcc_steps(ui);
+            // apple-owned: end
             ui.separator();
             ui.label(RichText::new("Screens to share").strong());
             for m in &mut self.consent.monitors {

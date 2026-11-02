@@ -78,8 +78,44 @@ fn main() {
         None => println!("No support code supplied; the connect window would prompt for one."),
     }
 
+    // apple-owned: begin
+    // Phase F §17.2: AppKit windows run only on the main thread, so on macOS the agent's work
+    // moves to a worker thread and the main thread hosts the UI.
+    #[cfg(all(target_os = "macos", feature = "gui"))]
+    let Some(resolved) = macos_run_on_worker(&cli, resolved) else {
+        return;
+    };
+    // apple-owned: end
     run(&cli, resolved);
 }
+
+// apple-owned: begin
+/// Run [`run`] on a worker thread while the main thread hosts the UI windows; returns `None`
+/// when that is done (the caller then returns), so `run` is never called twice.
+#[cfg(all(target_os = "macos", feature = "gui"))]
+fn macos_run_on_worker(
+    cli: &Cli,
+    resolved: Option<ia_agent::tokensource::Resolved>,
+) -> Option<Option<ia_agent::tokensource::Resolved>> {
+    ia_ui::app::macos_main_thread_enable();
+    let cli = cli.clone();
+    let worker = match std::thread::Builder::new()
+        .name("ia-agent".into())
+        .spawn(move || run(&cli, resolved))
+    {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("the agent thread could not start: {e}");
+            std::process::exit(1);
+        }
+    };
+    ia_ui::app::macos_main_thread_host(|| worker.is_finished());
+    if worker.join().is_err() {
+        std::process::exit(1);
+    }
+    None
+}
+// apple-owned: end
 
 // apple-owned: begin
 /// Phase F §17.2: the macOS start-up. Never as root; the signed `IndiansAssist.iaconfig` sidecar
