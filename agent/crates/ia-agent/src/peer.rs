@@ -57,6 +57,15 @@ fn build_api(has_recorder: bool) -> Result<webrtc::api::API, webrtc::Error> {
     se.set_sctp_max_message_size_can_send(SctpMaxMessageSize::Bounded(
         limits::SEC_FRAME_MAX_BYTES as u32,
     ));
+    // Dev builds only (Phase F §17.6): `IA_ICE_LOOPBACK` restricts ICE to loopback candidates,
+    // so in-process and same-host tests never wait on a host firewall prompt (the macOS
+    // Application Firewall holds inbound UDP to an unsigned, freshly built binary). A release
+    // build never restricts ICE.
+    #[cfg(feature = "dev")]
+    if std::env::var_os("IA_ICE_LOOPBACK").is_some() {
+        se.set_include_loopback_candidate(true);
+        se.set_ip_filter(Box::new(|ip: std::net::IpAddr| ip.is_loopback()));
+    }
     Ok(APIBuilder::new()
         .with_media_engine(me)
         .with_interceptor_registry(registry)

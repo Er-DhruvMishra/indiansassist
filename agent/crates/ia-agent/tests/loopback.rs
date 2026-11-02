@@ -419,8 +419,8 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
     let (mut desk_pb, mut assist_pb) = channel_pair(&kd, &ka, "ia.playbook");
 
     // The platform's own interpreter: PowerShell on Windows, the Phase E §7.8 `sh` runner on
-    // Linux (body on fd 3, stdin /dev/null, process group).
-    let (body, interp, interp_wire) = if cfg!(target_os = "linux") {
+    // Linux and macOS (body on fd 3, stdin /dev/null, process group).
+    let (body, interp, interp_wire) = if !cfg!(windows) {
         ("echo ok", PlaybookInterpreter::Sh, "sh")
     } else {
         (
@@ -640,6 +640,8 @@ mod media_loopback {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn two_peers_handshake_and_a_vp8_keyframe_arrives() {
+        // Loopback-only ICE (dev feature): no host-firewall prompt on macOS, same result elsewhere.
+        std::env::set_var("IA_ICE_LOOPBACK", "1");
         let desk = AgentPeer::new(PeerRole::Desk, &[1], false, Default::default())
             .await
             .expect("desk peer");
@@ -734,6 +736,8 @@ mod media_loopback {
     /// §5.1 encrypted-control path the serve loop runs, proven end to end with no OS input.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn encrypted_control_round_trip_over_real_peers() {
+        // Loopback-only ICE (dev feature): no host-firewall prompt on macOS, same result elsewhere.
+        std::env::set_var("IA_ICE_LOOPBACK", "1");
         use ia_agent::live::ControlServer;
         use ia_core::consent::LiveConsent;
         use ia_core::secchan::{Operator, SecChannelSet};
