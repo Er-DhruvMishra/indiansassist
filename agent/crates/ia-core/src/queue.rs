@@ -403,7 +403,7 @@ mod tests {
             "body": body,
             // The installed service is Windows-only (D §11.1); the pin check is the same on
             // every host, so the test uses the interpreter the agent on this host runs.
-            "interpreter": if cfg!(target_os = "linux") { "sh" } else { "powershell" },
+            "interpreter": if cfg!(windows) { "powershell" } else { "sh" },
             "timeoutSec": 60,
         });
         let a = playbook_action(&payload).expect("a dispatched payload");

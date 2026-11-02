@@ -727,7 +727,7 @@ mod tests {
         }
         assert_eq!(
             native_interpreters().contains(&PlaybookInterpreter::Sh),
-            cfg!(target_os = "linux")
+            cfg!(any(target_os = "linux", target_os = "macos"))
         );
     }
 
