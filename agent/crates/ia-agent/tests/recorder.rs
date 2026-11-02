@@ -85,9 +85,15 @@ async fn fake_recorder() -> (Arc<RTCPeerConnection>, Arc<Mutex<Seen>>) {
     )
     .unwrap();
     let registry = register_default_interceptors(Registry::new(), &mut me).unwrap();
+    // Loopback-only ICE, as the agent side gets from IA_ICE_LOOPBACK: no host-firewall prompt on
+    // macOS, the same result elsewhere.
+    let mut se = webrtc::api::setting_engine::SettingEngine::default();
+    se.set_include_loopback_candidate(true);
+    se.set_ip_filter(Box::new(|ip: std::net::IpAddr| ip.is_loopback()));
     let api = APIBuilder::new()
         .with_media_engine(me)
         .with_interceptor_registry(registry)
+        .with_setting_engine(se)
         .build();
     let pc = Arc::new(api.new_peer_connection(Default::default()).await.unwrap());
     for kind in [RTPCodecType::Video, RTPCodecType::Audio] {
@@ -152,6 +158,7 @@ async fn wait_for(seen: &Arc<Mutex<Seen>>, secs: u64, what: &str, pred: impl Fn(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn recorder_peer_receives_vp8_from_the_shared_and_the_second_encoder() {
+    std::env::set_var("IA_ICE_LOOPBACK", "1");
     // The recorder offers first (A.2 N1), vanilla ICE over loopback host candidates.
     let (rec_pc, seen) = fake_recorder().await;
     let offer = offer_gathered(&rec_pc).await;
