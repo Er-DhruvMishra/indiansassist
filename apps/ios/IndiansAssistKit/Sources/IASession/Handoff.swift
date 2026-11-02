@@ -86,26 +86,66 @@ public struct HandoffStore {
 }
 
 /// What the extension reports back to the app (shown when the person returns to it): the session's state, the
-/// technician, chat lines and received file names. Never the code, never keys.
+/// technician's display name, chat lines and received file names. Never the code, never keys.
 public struct SessionNote: Codable, Equatable {
-    static let key = "session.note"
     public var state: String
     public var technician: String?
     public var chat: [String]
     public var files: [String]
+    /// When the extension last wrote it (seconds since 1970).
+    public var updatedAt: Double
 
-    public init(state: String, technician: String? = nil, chat: [String] = [], files: [String] = []) {
+    public init(state: String, technician: String? = nil, chat: [String] = [], files: [String] = [], updatedAt: Date = Date()) {
         self.state = state
         self.technician = technician
         self.chat = chat
         self.files = files
+        self.updatedAt = updatedAt.timeIntervalSince1970
+    }
+}
+
+/// Chat is end-to-end encrypted in every other client (C section 1.3; the server never stores it), so the note is
+/// never in UserDefaults (an unencrypted plist that goes into backups): it is one file in the App Group container,
+/// written with complete file protection and excluded from backup, overwritten at the start of each session, deleted
+/// when the person dismisses the summary and, at the next launch, when it is older than a day.
+public struct SessionNoteStore {
+    public static let fileName = "session-note.json"
+    public static let maxAge: TimeInterval = 24 * 60 * 60
+    public let file: URL
+
+    public init(directory: URL) {
+        file = directory.appendingPathComponent(Self.fileName)
     }
 
-    public func save(to defaults: UserDefaults) {
-        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.key) }
+    public static func appGroup() -> SessionNoteStore? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: JoinHandoff.appGroup).map(SessionNoteStore.init)
     }
 
-    public static func load(from defaults: UserDefaults) -> SessionNote? {
-        defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(SessionNote.self, from: $0) }
+    /// Replaces the note (a new session starts with a fresh one, so nothing of the last session remains).
+    public func write(_ note: SessionNote) throws {
+        try JSONEncoder().encode(note).write(to: file, options: [.atomic, .completeFileProtection])
+        var url = file
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
     }
+
+    public func load() -> SessionNote? {
+        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(SessionNote.self, from: $0) }
+    }
+
+    /// The person dismissed the summary.
+    public func clear() {
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// At launch: a note older than `maxAge` (or unreadable, or from the future) is deleted.
+    public func clearIfStale(now: Date) {
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        guard let note = load() else { return clear() }
+        let age = now.timeIntervalSince1970 - note.updatedAt
+        if age < 0 || age > Self.maxAge { clear() }
+    }
+
+    public var exists: Bool { FileManager.default.fileExists(atPath: file.path) }
 }

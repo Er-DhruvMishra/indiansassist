@@ -19,8 +19,8 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(webOrigin, forKey: "server.web") }
     }
 
-    private let group = UserDefaults(suiteName: JoinHandoff.appGroup)
     private let handoffs = HandoffStore.appGroup()
+    private let notes = SessionNoteStore.appGroup()
 
     init() {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -28,6 +28,14 @@ final class AppModel: ObservableObject {
         webOrigin = UserDefaults.standard.string(forKey: "server.web") ?? (info["IAWebOrigin"] as? String ?? "")
         // A code never stays on disk: a hand-off the extension never took is removed at launch.
         handoffs?.clear()
+        // The last session's summary is kept for a day at most.
+        notes?.clearIfStale(now: Date())
+    }
+
+    /// The person dismissed the session summary: it is deleted.
+    func dismissNote() {
+        notes?.clear()
+        note = nil
     }
 
     /// "Use another code": the consent is withdrawn and any hand-off not yet taken is removed.
@@ -84,6 +92,6 @@ final class AppModel: ObservableObject {
     }
 
     func refreshNote() {
-        if let group { note = SessionNote.load(from: group) }
+        note = notes?.load()
     }
 }

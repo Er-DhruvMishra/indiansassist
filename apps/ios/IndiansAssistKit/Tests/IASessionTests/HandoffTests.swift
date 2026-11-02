@@ -3,13 +3,6 @@ import XCTest
 @testable import IASession
 
 final class HandoffTests: XCTestCase {
-    func defaults() -> UserDefaults {
-        let name = "ia.test.\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: name)!
-        d.removePersistentDomain(forName: name)
-        return d
-    }
-
     func store() throws -> HandoffStore {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ia-handoff-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -85,10 +78,51 @@ final class HandoffTests: XCTestCase {
         XCTAssertFalse(h.isFresh(now: then.addingTimeInterval(-5)), "from the future")
     }
 
-    func testTheSessionNoteRoundTrips() {
-        let d = defaults()
-        let n = SessionNote(state: "active", technician: "Asha", chat: ["hi"], files: ["a.txt"])
-        n.save(to: d)
-        XCTAssertEqual(SessionNote.load(from: d), n)
+    func noteStore() throws -> SessionNoteStore {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ia-note-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return SessionNoteStore(directory: dir)
+    }
+
+    func testANewSessionOverwritesTheLastNote() throws {
+        let s = try noteStore()
+        try s.write(SessionNote(state: "ended", technician: "Asha", chat: ["old secret"], files: ["old.txt"]))
+        try s.write(SessionNote(state: "connecting"))
+        let note = s.load()
+        XCTAssertEqual(note?.state, "connecting")
+        XCTAssertEqual(note?.chat, [], "nothing of the last session remains")
+        XCTAssertEqual(note?.files, [])
+        XCTAssertNil(note?.technician)
+    }
+
+    func testDismissingTheSummaryDeletesTheNote() throws {
+        let s = try noteStore()
+        try s.write(SessionNote(state: "ended", technician: "Asha", chat: ["hi"], files: ["a.txt"]))
+        XCTAssertEqual(s.load()?.technician, "Asha")
+        s.clear()
+        XCTAssertFalse(s.exists)
+        XCTAssertNil(s.load())
+    }
+
+    func testOnLaunchANoteOlderThanADayIsDeletedAndAFreshOneKept() throws {
+        let s = try noteStore()
+        let then = Date(timeIntervalSince1970: 1_800_000_000)
+        try s.write(SessionNote(state: "ended", chat: ["hi"], updatedAt: then))
+        s.clearIfStale(now: then.addingTimeInterval(60 * 60))
+        XCTAssertTrue(s.exists, "an hour old is kept")
+        s.clearIfStale(now: then.addingTimeInterval(SessionNoteStore.maxAge + 1))
+        XCTAssertFalse(s.exists, "over a day old is deleted")
+        try Data("garbage".utf8).write(to: s.file)
+        s.clearIfStale(now: then)
+        XCTAssertFalse(s.exists, "an unreadable note is deleted")
+    }
+
+    func testTheNoteIsExcludedFromBackupAndNeverInUserDefaults() throws {
+        let s = try noteStore()
+        try s.write(SessionNote(state: "active", chat: ["a private chat line"]))
+        let excluded = try s.file.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+        XCTAssertEqual(excluded, true)
+        XCTAssertFalse(UserDefaults.standard.dictionaryRepresentation().description.contains("a private chat line"))
     }
 }

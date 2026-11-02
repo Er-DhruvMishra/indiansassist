@@ -12,7 +12,7 @@ import ReplayKit
 /// session reaches `active` without video.
 final class SampleHandler: RPBroadcastSampleHandler {
     private let queue = DispatchQueue(label: "com.indiansassist.broadcast")
-    private let group = UserDefaults(suiteName: JoinHandoff.appGroup)
+    private let notes = SessionNoteStore.appGroup()
     private var machine: DeskMachine?
     private var socket: SignalSocket?
     private var signalURL: URL?
@@ -47,6 +47,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
             tokenSource: source
         )
         machine = DeskMachine(client: client, deskLabel: nil)
+        // A new session starts with a fresh note: nothing of the last one remains.
+        note = SessionNote(state: "connecting")
+        save()
         signalURL = url
         let s = SignalSocket(queue: queue)
         s.onOpen = { [weak self] in
@@ -127,7 +130,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     private func save() {
-        if let group { note.save(to: group) }
+        note.updatedAt = Date().timeIntervalSince1970
+        try? notes?.write(note)
     }
 
     private func endMessage(_ info: EndInfo) -> String {

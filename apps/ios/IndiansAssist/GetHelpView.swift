@@ -50,6 +50,7 @@ struct GetHelpView: View {
                         Text(note.technician.map { "\(note.state.capitalized) with \($0)" } ?? note.state.capitalized)
                         ForEach(note.chat, id: \.self) { Text($0) }
                         ForEach(note.files, id: \.self) { Label($0, systemImage: "doc") }
+                        Button("Dismiss summary", role: .destructive) { model.dismissNote() }
                     }
                 }
                 Section {

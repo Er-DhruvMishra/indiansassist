@@ -46,8 +46,18 @@ hand-off the app writes after its consent screen. The code follows the Phase C r
   future, or unreadable is deleted and ignored;
 - the app **removes any leftover on launch and when the person picks "Use another code"**.
 
-`HandoffTests` covers read-once, expiry and cleanup. What flows back to the app (`SessionNote`: the state, the
-technician, chat lines, received file names) never contains the code or a key.
+What flows back to the app is the session summary (`SessionNote`: the state, the technician's display name, chat
+lines, received file names; never the code or a key). Chat is end-to-end encrypted in every other client (C section
+1.3), so the summary gets the same care (`SessionNoteStore`):
+
+- one file `session-note.json` in the App Group container, written with `FileProtectionType.complete` and
+  **excluded from backup**, never in UserDefaults (an unencrypted plist that goes into backups);
+- **overwritten at the start of each session**, so nothing of the last session remains;
+- **deleted when the person dismisses the summary**, and at the next launch when it is **older than 24 hours**.
+
+`HandoffTests` covers both files: read-once, expiry and launch cleanup of the hand-off; overwrite, dismissal and the
+24-hour cleanup of the summary; backup exclusion; and neither ever reaching UserDefaults. UserDefaults holds only the
+two server addresses.
 
 ## Testing limits
 
