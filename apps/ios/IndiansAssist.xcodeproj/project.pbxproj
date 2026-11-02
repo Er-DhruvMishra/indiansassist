@@ -1,0 +1,531 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		27D76FC8E2618342DF4B8ACC /* IASec in Frameworks */ = {isa = PBXBuildFile; productRef = E9BD65E9C6DFF166D6514251 /* IASec */; };
+		41A9CE62809E59DA097801B7 /* GiveHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295912CC0D9F92A73CC15E2D /* GiveHelpView.swift */; };
+		435CB6F314E728254E708C40 /* IndiansAssistApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9D4C1C22B63692214B4E717 /* IndiansAssistApp.swift */; };
+		69739AD291C22FF489B0F93B /* IASession in Frameworks */ = {isa = PBXBuildFile; productRef = 8DC9ADE7FAFCA1B912E0B9B5 /* IASession */; };
+		79D11F2A92E3F72BABADFB15 /* IndiansAssistBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		818417E1F31581D8D286D9D4 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66ADE443354D80640C48F5B0 /* SampleHandler.swift */; };
+		A8FF2F99FF4CBD1475B7E188 /* SignalSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D3248E376D0C9D9F22408E8 /* SignalSocket.swift */; };
+		A9D7E363DF88423232F6E5D3 /* IASession in Frameworks */ = {isa = PBXBuildFile; productRef = B0EA2C067BE828D417C1E28D /* IASession */; };
+		B398BD168750DBA72F88A9BB /* GetHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5892E4C1582929C5CDDD6D76 /* GetHelpView.swift */; };
+		B5C55E1B0067F1AE0A3AD0B1 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A23174E9E7C313F70D90C36 /* QRScannerView.swift */; };
+		BE7FD8BBE888C8094140ADD4 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217D4117F55C368F3588F445 /* AppModel.swift */; };
+		F194A6755ECEDE0EC6057C80 /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 85BAD05691DB7837033066F7 /* ReplayKit.framework */; };
+		F2FEE6E8B2C734A3FDA95D0B /* IASec in Frameworks */ = {isa = PBXBuildFile; productRef = BDA7D9A78DAC3344052AEE7D /* IASec */; };
+		F83FECF6827B4C5D50FA99BC /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C6C1E148C2CA40E4BA79202 /* HomeView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C5DE357CA1939EF6A109B71E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EF74ECEF3F11B399A54EA3D7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C836785C824ECD3939C02507;
+			remoteInfo = IndiansAssistBroadcast;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		CED340291EEDD25E1BD108AF /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				79D11F2A92E3F72BABADFB15 /* IndiansAssistBroadcast.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		217D4117F55C368F3588F445 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		295912CC0D9F92A73CC15E2D /* GiveHelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GiveHelpView.swift; sourceTree = "<group>"; };
+		3A23174E9E7C313F70D90C36 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		3AE5C7174EB8DB22B8CE3A4D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		44F839D058433C8BBC443F5A /* IndiansAssistKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = IndiansAssistKit; path = IndiansAssistKit; sourceTree = SOURCE_ROOT; };
+		4D3248E376D0C9D9F22408E8 /* SignalSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalSocket.swift; sourceTree = "<group>"; };
+		4E493590721A4046770BC6AE /* IndiansAssistBroadcast.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = IndiansAssistBroadcast.entitlements; sourceTree = "<group>"; };
+		5892E4C1582929C5CDDD6D76 /* GetHelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetHelpView.swift; sourceTree = "<group>"; };
+		66ADE443354D80640C48F5B0 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		85BAD05691DB7837033066F7 /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
+		8C6C1E148C2CA40E4BA79202 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = IndiansAssistBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C9D4C1C22B63692214B4E717 /* IndiansAssistApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndiansAssistApp.swift; sourceTree = "<group>"; };
+		CA513686190CF1B7C19DA147 /* IndiansAssist.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IndiansAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F33AD50D27F2FE453B5B79D3 /* IndiansAssist.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = IndiansAssist.entitlements; sourceTree = "<group>"; };
+		FD669A423475EE7CF31181E8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E37E15AB44C57A9D70C11EA4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A9D7E363DF88423232F6E5D3 /* IASession in Frameworks */,
+				F2FEE6E8B2C734A3FDA95D0B /* IASec in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2B35A8B6B645FD58CCD3D28 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				69739AD291C22FF489B0F93B /* IASession in Frameworks */,
+				27D76FC8E2618342DF4B8ACC /* IASec in Frameworks */,
+				F194A6755ECEDE0EC6057C80 /* ReplayKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0273B599C3E59DF671EBC803 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CA513686190CF1B7C19DA147 /* IndiansAssist.app */,
+				C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		0C5B5E7AC6BAAC77DA92DBD9 /* IndiansAssistBroadcast */ = {
+			isa = PBXGroup;
+			children = (
+				4E493590721A4046770BC6AE /* IndiansAssistBroadcast.entitlements */,
+				FD669A423475EE7CF31181E8 /* Info.plist */,
+				66ADE443354D80640C48F5B0 /* SampleHandler.swift */,
+				4D3248E376D0C9D9F22408E8 /* SignalSocket.swift */,
+			);
+			path = IndiansAssistBroadcast;
+			sourceTree = "<group>";
+		};
+		4402D981ED209B99C1614F2D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				85BAD05691DB7837033066F7 /* ReplayKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		469C8E793E411AF7E107EF51 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				44F839D058433C8BBC443F5A /* IndiansAssistKit */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		828D9942A75DE58661FB9EDF /* IndiansAssist */ = {
+			isa = PBXGroup;
+			children = (
+				217D4117F55C368F3588F445 /* AppModel.swift */,
+				5892E4C1582929C5CDDD6D76 /* GetHelpView.swift */,
+				295912CC0D9F92A73CC15E2D /* GiveHelpView.swift */,
+				8C6C1E148C2CA40E4BA79202 /* HomeView.swift */,
+				F33AD50D27F2FE453B5B79D3 /* IndiansAssist.entitlements */,
+				C9D4C1C22B63692214B4E717 /* IndiansAssistApp.swift */,
+				3AE5C7174EB8DB22B8CE3A4D /* Info.plist */,
+				3A23174E9E7C313F70D90C36 /* QRScannerView.swift */,
+			);
+			path = IndiansAssist;
+			sourceTree = "<group>";
+		};
+		8B11C9C307ACF7B71D5489C1 = {
+			isa = PBXGroup;
+			children = (
+				828D9942A75DE58661FB9EDF /* IndiansAssist */,
+				0C5B5E7AC6BAAC77DA92DBD9 /* IndiansAssistBroadcast */,
+				469C8E793E411AF7E107EF51 /* Packages */,
+				4402D981ED209B99C1614F2D /* Frameworks */,
+				0273B599C3E59DF671EBC803 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		71BFF8409EF80D1A2E2FE2EC /* IndiansAssist */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F89900EF11EECD28377D511D /* Build configuration list for PBXNativeTarget "IndiansAssist" */;
+			buildPhases = (
+				A8B2DDFB288834C4C74BF665 /* Sources */,
+				E37E15AB44C57A9D70C11EA4 /* Frameworks */,
+				CED340291EEDD25E1BD108AF /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				36E5672D8C08EF2C97938B53 /* PBXTargetDependency */,
+			);
+			name = IndiansAssist;
+			packageProductDependencies = (
+				B0EA2C067BE828D417C1E28D /* IASession */,
+				BDA7D9A78DAC3344052AEE7D /* IASec */,
+			);
+			productName = IndiansAssist;
+			productReference = CA513686190CF1B7C19DA147 /* IndiansAssist.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C836785C824ECD3939C02507 /* IndiansAssistBroadcast */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 826D1C83382D62AC5923F8C6 /* Build configuration list for PBXNativeTarget "IndiansAssistBroadcast" */;
+			buildPhases = (
+				7E123E4E28E4BF8D8D036CCF /* Sources */,
+				F2B35A8B6B645FD58CCD3D28 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = IndiansAssistBroadcast;
+			packageProductDependencies = (
+				8DC9ADE7FAFCA1B912E0B9B5 /* IASession */,
+				E9BD65E9C6DFF166D6514251 /* IASec */,
+			);
+			productName = IndiansAssistBroadcast;
+			productReference = C75DDA1800C32D422CEA3CCA /* IndiansAssistBroadcast.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EF74ECEF3F11B399A54EA3D7 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					71BFF8409EF80D1A2E2FE2EC = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					C836785C824ECD3939C02507 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 6692394EDAA43C8FE11DC6C1 /* Build configuration list for PBXProject "IndiansAssist" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 8B11C9C307ACF7B71D5489C1;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				90927AFFB7ECC515FC2D6C97 /* XCLocalSwiftPackageReference "IndiansAssistKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 0273B599C3E59DF671EBC803 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				71BFF8409EF80D1A2E2FE2EC /* IndiansAssist */,
+				C836785C824ECD3939C02507 /* IndiansAssistBroadcast */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7E123E4E28E4BF8D8D036CCF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				818417E1F31581D8D286D9D4 /* SampleHandler.swift in Sources */,
+				A8FF2F99FF4CBD1475B7E188 /* SignalSocket.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A8B2DDFB288834C4C74BF665 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BE7FD8BBE888C8094140ADD4 /* AppModel.swift in Sources */,
+				B398BD168750DBA72F88A9BB /* GetHelpView.swift in Sources */,
+				41A9CE62809E59DA097801B7 /* GiveHelpView.swift in Sources */,
+				F83FECF6827B4C5D50FA99BC /* HomeView.swift in Sources */,
+				435CB6F314E728254E708C40 /* IndiansAssistApp.swift in Sources */,
+				B5C55E1B0067F1AE0A3AD0B1 /* QRScannerView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		36E5672D8C08EF2C97938B53 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C836785C824ECD3939C02507 /* IndiansAssistBroadcast */;
+			targetProxy = C5DE357CA1939EF6A109B71E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		428DBAAE988372014AFD9D37 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = IndiansAssistBroadcast/IndiansAssistBroadcast.entitlements;
+				INFOPLIST_FILE = IndiansAssistBroadcast/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.indiansassist.ios.broadcast;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6D2B1AC095BFA8E571738D5E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = IndiansAssist/IndiansAssist.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = IndiansAssist/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.indiansassist.ios;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C9D35DE8CAC167DB066D8207 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.3.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		D44240DF48BB38BE29639514 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.3.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D76EA5AE29E123A7A918BCD3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = IndiansAssist/IndiansAssist.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = IndiansAssist/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.indiansassist.ios;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E350A295D332B87905EB1866 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = IndiansAssistBroadcast/IndiansAssistBroadcast.entitlements;
+				INFOPLIST_FILE = IndiansAssistBroadcast/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.indiansassist.ios.broadcast;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6692394EDAA43C8FE11DC6C1 /* Build configuration list for PBXProject "IndiansAssist" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D44240DF48BB38BE29639514 /* Debug */,
+				C9D35DE8CAC167DB066D8207 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		826D1C83382D62AC5923F8C6 /* Build configuration list for PBXNativeTarget "IndiansAssistBroadcast" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				428DBAAE988372014AFD9D37 /* Debug */,
+				E350A295D332B87905EB1866 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F89900EF11EECD28377D511D /* Build configuration list for PBXNativeTarget "IndiansAssist" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D76EA5AE29E123A7A918BCD3 /* Debug */,
+				6D2B1AC095BFA8E571738D5E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		90927AFFB7ECC515FC2D6C97 /* XCLocalSwiftPackageReference "IndiansAssistKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = IndiansAssistKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8DC9ADE7FAFCA1B912E0B9B5 /* IASession */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IASession;
+		};
+		B0EA2C067BE828D417C1E28D /* IASession */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IASession;
+		};
+		BDA7D9A78DAC3344052AEE7D /* IASec */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IASec;
+		};
+		E9BD65E9C6DFF166D6514251 /* IASec */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IASec;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = EF74ECEF3F11B399A54EA3D7 /* Project object */;
+}

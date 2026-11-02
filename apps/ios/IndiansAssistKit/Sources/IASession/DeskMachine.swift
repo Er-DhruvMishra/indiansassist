@@ -76,6 +76,8 @@ public final class DeskMachine {
     public static let wsTokenBusy = 4409
     public static let wsSessionEnded = 4410
     public static let wsHandedOver = 4411
+    /// Closes after which the socket is not reopened.
+    public static let terminalCloses: Set<Int> = [wsUnauthenticated, wsForbidden, wsTokenBusy, wsSessionEnded, wsHandedOver]
     public static let fatalErrors: Set<String> = [
         "token_malformed", "token_bad_signature", "token_not_found", "token_gone", "token_busy", "region_mismatch",
         "join_unsupported", "forbidden", "session_not_found", "not_authenticated",
