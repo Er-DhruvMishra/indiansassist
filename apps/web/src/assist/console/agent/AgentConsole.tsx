@@ -232,7 +232,7 @@ export function AgentConsoleView({
             </Card>
           )}
           <Card>
-            <ClipboardToggle on={snap.clipboardSync} allowed={ctrl.clipboardAllowed} received={snap.clipboardReceived} onToggle={(on) => ctrl.setClipboardSync(on)} />
+            <ClipboardToggle on={snap.clipboardSync} allowed={ctrl.clipboardAllowed} supported={hasFeature(snap, 'clipboard')} received={snap.clipboardReceived} onToggle={(on) => ctrl.setClipboardSync(on)} />
           </Card>
           <Card>
             <PlaybookPanel

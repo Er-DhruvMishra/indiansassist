@@ -418,7 +418,17 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
     let (mut desk_ctl, mut assist_ctl) = channel_pair(&kd, &ka, "ia.control");
     let (mut desk_pb, mut assist_pb) = channel_pair(&kd, &ka, "ia.playbook");
 
-    let body = "Write-Output 'ok'";
+    // The platform's own interpreter: PowerShell on Windows, the Phase E §7.8 `sh` runner on
+    // Linux (body on fd 3, stdin /dev/null, process group).
+    let (body, interp, interp_wire) = if cfg!(target_os = "linux") {
+        ("echo ok", PlaybookInterpreter::Sh, "sh")
+    } else {
+        (
+            "Write-Output 'ok'",
+            PlaybookInterpreter::Powershell,
+            "powershell",
+        )
+    };
     let body_hash = hex::encode(Sha256::digest(body.as_bytes()));
     let run_id = "ab".repeat(16);
     let pb_id = "11111111-1111-1111-1111-111111111111";
@@ -434,7 +444,7 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
     let req = serde_json::json!({
         "t": "ctl.req", "id": run_id, "op": "playbook.run",
         "args": { "runId": run_id, "playbookId": pb_id, "bodyHash": body_hash,
-                  "body": body, "interpreter": "powershell", "requiresElevation": false,
+                  "body": body, "interpreter": interp_wire, "requiresElevation": false,
                   "timeoutSec": 120 }
     })
     .to_string();
@@ -469,7 +479,7 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
         playbook_id,
         body_hash: bh,
         body: b,
-        interpreter: PlaybookInterpreter::Powershell,
+        interpreter: interp,
         requires_elevation,
         timeout_sec: 120,
         args: Default::default(),
@@ -478,12 +488,12 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
 
     // Run it for real through the hardened runner (job object, stdin body, paced output) and
     // relay every pb.output and the pb.end over the encrypted ia.playbook channel (§8.5).
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let (outputs, exit) = {
         let dir = std::env::temp_dir().join(format!("ia-loopback-pb-{}", rand::random::<u32>()));
         let (events, end) = ia_agent::pbrun::run_collect(ia_agent::pbrun::RunSpec {
             run_id: rid.clone(),
-            interpreter: PlaybookInterpreter::Powershell,
+            interpreter: interp,
             body: run.body.clone(),
             env: vec![],
             secret_env: vec![],
@@ -508,7 +518,7 @@ fn fake_assist_playbook_run_streams_output_and_exit_code() {
             .collect();
         (outs, end.exit)
     };
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     let (outputs, exit) = (
         vec![PbOutput {
             t: "pb.output".into(),

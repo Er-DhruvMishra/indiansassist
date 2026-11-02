@@ -1,4 +1,4 @@
-# IndiansAssist Windows agent and installed service (`agent/`)
+# IndiansAssist agent (Windows, and Linux X11 since Phase E) and installed service (`agent/`)
 
 Two products in one Cargo workspace, because they are mostly the same code:
 
@@ -229,6 +229,81 @@ spawns `%SystemRoot%\System32\cmd.exe /c <stub> <pid> <exe>` with
 test** (the e2e passes `--no-self-delete`); only the decision, the stub text, the `%TEMP%`-under-profile
 check and the stub name are unit-tested. The elevated child's `MoveFileEx` path is Phase-D-adjacent work.
 
+
+## Linux portable agent (Phase E, `docs/specs/phase-e-contracts.md` §7)
+
+The Phase C portable agent also builds for **x86_64 Linux with an X11 session**. It uses the same serve loop,
+protocol, `ia.sec` handshake, consent window, pill and panel, file transfer, chat and playbooks. Only these parts are
+Linux-specific:
+
+| Crate | Linux part |
+|---|---|
+| `ia-frame` (new) | the pure frame code moved out of `ia-capture-win` (`convert`, `scale`, `canvas`; re-exported there, so no Windows caller changed) |
+| `ia-capture-x11` (new) | RandR 1.5 monitors → `MonitorInfo` and tile-hash change detection (pure); behind `x11`: MIT-SHM `ShmGetImage` into a memfd segment (fallback `GetImage`) and the XFixes cursor, over x11rb's pure-Rust connection (no libX11 link) |
+| `ia-input-x11` (new) | the W3C `code` → evdev table (fixture `packages/shared/test/fixtures/agent/x11-keymap.json`), the pointer and button mapping, and the rule 7.3c injection-guard decision (pure); behind `x11`: XTEST input, Unicode text through a spare keycode, the live agent-window guard (`_NET_WM_PID`), and the clipboard through arboard plus XFixes selection events |
+| `ia-platform::linux` | `display_server()` (§7.4), XDG paths, the `.desktop` / `mimeapps.list` handler and its restore, the self-delete plan and archive-sibling rule, and the single-instance name and peer checks (pure); behind `linux-os`: the file writes, the abstract socket with `SO_PEERCRED` and `/proc/<pid>/exe` checks, and `apply_self_delete` |
+| `ia-ui` | the eframe X11 backend; the tray is `ksni` (StatusNotifierItem over D-Bus, no GTK; best effort, none without a watcher), `tray-icon` is a Windows-only dependency; the pill is marked a utility window, kept above and off the taskbar through EWMH (`x11help`); the 750 ms post-map input gate (`model::MapGate`); on Linux a press that reaches an agent window counts as physical, because the X11 sink never injects onto one |
+| `ia-agent` | `desk.rs` (screen mode, `os: 'linux'`, os-release `PRETTY_NAME`, the §7.5 capabilities); the `CaptureSource::X11` pump arm and `ctl.event capture` (`xshm` / `xgetimage` / `x11_lost`); the X11 input and clipboard sinks; the Wayland path (no video track, `capture { path: 'none', cause: 'wayland_unsupported' }`, the consent-window notice); the `sh` runner (`/bin/sh /dev/fd/3`, body in a sealed memfd on fd 3, stdin `/dev/null`, `setsid`, `killpg` SIGTERM then SIGKILL after 2 s); the root refusal; the filename and clipboard carriers; the handler registration and single instance at start; the Linux self-delete; `voice` split out of `media` (`novoice.rs` stands in), so no ALSA |
+
+Features on Linux: `media`, `x11`, `gui`, `linux-os` (plus `dev` for the local-testing switches). The `x11`,
+`linux-os` and Linux-only dependencies compile to nothing on Windows, so the Windows `--all-features` gates are
+unchanged. `rust-toolchain.toml` now says `stable`: each host uses its own rustup default triple.
+
+### Build and gates in WSL (from `agent/`)
+
+```sh
+source scripts/linux-env.sh   # CARGO_TARGET_DIR inside WSL, FEATS / FEATS_RELEASE, Zig on PATH
+cargo fmt --all --check
+cargo clippy --workspace --exclude ia-desktop --exclude ia-service --all-targets --no-default-features --features "$FEATS" -- -D warnings
+T="$(mktemp -d)"; mkdir -p "$T/data" "$T/config" "$T/state" "$T/runtime"; chmod 0700 "$T/runtime"
+env -u WAYLAND_DISPLAY -u DISPLAY XDG_DATA_HOME="$T/data" XDG_CONFIG_HOME="$T/config" XDG_STATE_HOME="$T/state" \
+  XDG_RUNTIME_DIR="$T/runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$T/no-session-bus" \
+  cargo test --workspace --exclude ia-desktop --exclude ia-service --no-default-features --features "$FEATS"
+scripts/xvfb-test.sh          # the #[ignore]d X11 suites against a harness-owned Xvfb (:99 by default)
+```
+
+`scripts/xvfb-test.sh` starts `Xvfb :<n> -screen 0 3840x1080x24 -nolisten tcp -noreset`. It unsets
+`WAYLAND_DISPLAY`, points `DISPLAY` and a temporary XDG root at its own server, gives no session bus, and stops the
+server on exit. Each X11 test calls `ia_platform::linux::testguard::x11_test_display()` first. That call refuses
+unless the display is the harness's Xvfb: never the session's display, never `:0`, which WSLg uses for the real
+desktop.
+
+**Release build (glibc 2.35 floor, §7.9).** This needs Zig 0.15.2 unpacked under `~/.local/zig` and
+`cargo install cargo-zigbuild --locked` (0.24.0), both user-level:
+
+```sh
+LIBVPX_TARGET=ubuntu-22.04_x86_64 cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.35 \
+  -p ia-agent --no-default-features --features "$FEATS_RELEASE"
+node ../scripts/elf-check.mjs "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/IndiansAssist" --max-glibc 2.35 --max-size-mib 25
+```
+
+Measured on 2 Nov 2026:
+
+- the ELF needs only `libc.so.6`, `libm.so.6` and `ld-linux-x86-64.so.2`, and nothing above `GLIBC_2.35`;
+- it is 16.8 MiB stripped.
+
+A plain `cargo build --release` on this host links against glibc 2.43 and must not be served.
+
+**End to end.** `node apps/web/e2e/run-p3-linux.mjs` is the `e2e:p3:linux` harness. It runs Windows Playwright
+against the dev agent in WSL through `agent/scripts/e2e-agent.sh`:
+
+- the api listens on `0.0.0.0:4115` with `API_ORIGIN=http://<WSL gateway>:4115`, and the web app on `5285`;
+- every agent runs with `--no-self-delete`, under a temporary XDG root, with `WAYLAND_DISPLAY` unset.
+
+It covers three sessions:
+
+- **synthetic capture** (the §7.10 command);
+- **X11**: a harness-owned Xvfb with two RandR monitors, real MIT-SHM capture, and XTEST clicks read back with xdotool on that display;
+- **Wayland**: the no-screen state, with chat and files still working.
+
+### Not built on Linux
+
+- the `portal` Wayland capture (W77; `ashpd` is not added);
+- unattended mode, deb / rpm packaging, arm64 and elevation (W81, W82, 7.3d);
+- voice;
+- the Keep (D5) control in the panel. `selfdel::plan(.., kept = true)` and its applier exist, but no UI sets Keep, as on Windows.
+
+On Linux the self-delete has been exercised only on files in a temporary directory, never on the built binary.
 
 ## Phase D: the installed service
 

@@ -1,0 +1,11 @@
+[package]
+name = "ia-frame"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The pure frame code every capturer shares (Phase E contract §7.2): BGRA->I420 conversion, the I420 ladder downscale and the recorder canvas / letterbox math. Moved out of ia-capture-win, which re-exports it; no platform calls."
+
+[dependencies]
+ia-platform.workspace = true

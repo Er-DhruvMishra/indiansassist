@@ -75,7 +75,8 @@ fn is_uuid(s: &str) -> bool {
 
 const TIERS: &[&str] = &["p1_browser", "p2_extension", "p3_portable", "p4_installed"];
 const TYPES: &[&str] = &["one_time", "timed", "enrollment"];
-const REGIONS: &[&str] = &["in-mum", "eu-fra", "us-east"];
+/// The regions a token, a desk code filename and a sidecar may name (`REGIONS`, A §1).
+pub const REGIONS: &[&str] = &["in-mum", "eu-fra", "us-east"];
 const FIELDS: &[&str] = &[
     "by", "exp", "iat", "nonce", "org", "reg", "tid", "tier", "typ", "v",
 ];

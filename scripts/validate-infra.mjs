@@ -104,7 +104,7 @@ export function validateInfra(root = ROOT) {
     for (const k of ['ORG_SECRETS_KEY', 'ORG_SECRETS_KEYS_PREVIOUS', 'ORG_SECRETS_FP_KEY', 'AI_LOCAL_API_KEY', 'AI_ANTHROPIC_API_KEY']) {
       if (env.get(k)) problems.push(`${k} must be empty in the example (no default secrets)`);
     }
-    for (const k of ['EGRESS_ALLOW_HTTP', 'EGRESS_ALLOW_LOOPBACK']) {
+    for (const k of ['EGRESS_ALLOW_HTTP', 'EGRESS_ALLOW_LOOPBACK', 'SSO_DEV_DNS_SERVERS']) {
       if (env.get(k)) problems.push(`${k} must not be set in the production example (tests and local fakes only)`);
     }
     for (const k of ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET']) {

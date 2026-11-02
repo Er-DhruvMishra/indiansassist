@@ -248,6 +248,31 @@ pub struct Receipt {
     pub sas_by_gen: Vec<(u16, String)>,
 }
 
+/// Phase E rule 7.3c: every agent window, consent window and prompt ignores all pointer and key
+/// input for this long after it is mapped, longer than the injection path's latency, so an
+/// injected click racing a window that just appeared under the point cannot operate it.
+pub const POST_MAP_INPUT_DELAY: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// The 750 ms post-map input gate (rule 7.3c). Pure: the caller passes the clock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MapGate {
+    mapped_at: Option<std::time::Instant>,
+}
+
+impl MapGate {
+    /// A surface (window, panel, prompt card) was mapped or appeared at `now`.
+    pub fn mapped(&mut self, now: std::time::Instant) {
+        self.mapped_at = Some(now);
+    }
+
+    /// Whether input is accepted at `now`: only once [`POST_MAP_INPUT_DELAY`] has passed since
+    /// the last mapping (and before any mapping, nothing is gated).
+    pub fn accepts_input(&self, now: std::time::Instant) -> bool {
+        self.mapped_at
+            .is_none_or(|t| now.saturating_duration_since(t) >= POST_MAP_INPUT_DELAY)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +414,21 @@ mod tests {
             over_agent_window: false,
             physical_confirmed: false,
         }));
+    }
+
+    #[test]
+    fn the_post_map_gate_holds_input_for_750_ms() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut g = MapGate::default();
+        assert!(g.accepts_input(t0), "nothing mapped yet");
+        g.mapped(t0);
+        assert!(!g.accepts_input(t0));
+        assert!(!g.accepts_input(t0 + Duration::from_millis(749)));
+        assert!(g.accepts_input(t0 + Duration::from_millis(750)));
+        // A new prompt re-arms the gate.
+        g.mapped(t0 + Duration::from_millis(900));
+        assert!(!g.accepts_input(t0 + Duration::from_millis(1200)));
+        assert!(g.accepts_input(t0 + Duration::from_millis(1650)));
     }
 }

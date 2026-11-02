@@ -22,9 +22,9 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 
 use crate::capture::SyntheticCapturer;
 use crate::vp8::{EncodedPacket, Vp8Encoder};
-use ia_capture_win::scale::{is_packed_at, scale_i420};
 use ia_core::abr::{can_share_encoder, encode_params, recorder_params, EncodeParams, Rung};
 use ia_core::types::{CapturePath, QualityPreset};
+use ia_frame::scale::{is_packed_at, scale_i420};
 use ia_platform::traits::{Capturer, Frame};
 
 /// Bytes / frames the send path measures for `agent.stats` (contract §4.4: measured, never
@@ -157,12 +157,15 @@ impl VideoCtl {
     }
 }
 
-/// The frame source: synthetic (e2e / loopback), or DXGI Desktop Duplication with the
-/// per-monitor GDI fallback (§4.1).
+/// The frame source: synthetic (e2e / loopback), DXGI Desktop Duplication with the per-monitor
+/// GDI fallback (§4.1), or on Linux the X11 capturer (Phase E §7.2: MIT-SHM with a `GetImage`
+/// fallback).
 pub enum CaptureSource {
     Synthetic(SyntheticCapturer),
     #[cfg(all(windows, feature = "winapi"))]
     Dxgi(Box<ia_capture_win::dxgi::DxgiCapturer>),
+    #[cfg(all(target_os = "linux", feature = "x11"))]
+    X11(Box<ia_capture_x11::X11Capturer>),
 }
 
 impl CaptureSource {
@@ -170,6 +173,15 @@ impl CaptureSource {
         #[cfg(all(windows, feature = "winapi"))]
         if !synthetic {
             return CaptureSource::Dxgi(Box::new(ia_capture_win::dxgi::DxgiCapturer::new()));
+        }
+        #[cfg(all(target_os = "linux", feature = "x11"))]
+        if !synthetic {
+            if let Some(crate::desk::ScreenMode::X11 { display }) = crate::desk::current() {
+                match ia_capture_x11::X11Capturer::open(&display) {
+                    Ok(c) => return CaptureSource::X11(Box::new(c)),
+                    Err(e) => tracing::warn!("X11 capture could not start: {e}"),
+                }
+            }
         }
         let _ = synthetic;
         CaptureSource::Synthetic(SyntheticCapturer::single(w, h))
@@ -180,15 +192,29 @@ impl CaptureSource {
             CaptureSource::Synthetic(c) => c.next_frame(id),
             #[cfg(all(windows, feature = "winapi"))]
             CaptureSource::Dxgi(c) => c.next_frame(id),
+            #[cfg(all(target_os = "linux", feature = "x11"))]
+            CaptureSource::X11(c) => c.next_frame(id),
         }
     }
 
     /// `agent.stats.capturePath` (the synthetic source reports `gdi`, as before).
     pub fn path(&self, id: u32) -> CapturePath {
+        let _ = id;
         match self {
             CaptureSource::Synthetic(_) => CapturePath::Gdi,
             #[cfg(all(windows, feature = "winapi"))]
             CaptureSource::Dxgi(c) => c.path(id),
+            #[cfg(all(target_os = "linux", feature = "x11"))]
+            CaptureSource::X11(c) => c.path(id),
+        }
+    }
+
+    /// Phase E §16.2: the X11 connection was lost (`ctl.event capture { cause: 'x11_lost' }`).
+    pub fn lost(&self) -> bool {
+        match self {
+            #[cfg(all(target_os = "linux", feature = "x11"))]
+            CaptureSource::X11(c) => c.lost(),
+            _ => false,
         }
     }
 }
@@ -372,7 +398,13 @@ pub async fn run_pump(
         let assist_kf_req = ctl.force_keyframe.load(Ordering::Relaxed);
         let (frame_ok, a_out, r_out, cap_path) = heavy(|| {
             let frame = source.next_frame(spec.monitor_id);
-            let cap_path = source.path(spec.monitor_id);
+            // A lost X connection is published as path `none` (the serve loop reports
+            // `ctl.event capture { cause: 'x11_lost' }`).
+            let cap_path = if source.lost() {
+                CapturePath::None
+            } else {
+                source.path(spec.monitor_id)
+            };
             let Some(frame) = frame else {
                 return (false, None, None, cap_path);
             };

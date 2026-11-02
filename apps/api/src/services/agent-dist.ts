@@ -3,7 +3,8 @@
  * and the files it names, read at boot and on SIGHUP. A node without the directory serves `builds: []` and answers
  * `503 download_unavailable` on prepare. Outside production a placeholder file (`AGENT_DEV_STUB`, created on demand)
  * stands in for every Windows build so the join page and `smoke:p3` work on a dev machine; it is never signed and
- * never served in production.
+ * never served in production. A Linux build (Phase E section 7.6) is the raw ELF; its archive body (the second gzip
+ * member of `services/linux-archive.ts`) is compressed here, once per load, and cached on the served build.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -16,8 +17,10 @@ import {
   type AgentPlatform,
 } from '@indiansassist/shared';
 import type { Config } from '../config.js';
+import { linuxArchiveBody, type LinuxArchiveBody } from './linux-archive.js';
 
-export type ServedBuild = AgentBuild & { path: string; file: string };
+/** `archive` is set for a Linux build only: the cached compressed ELF body of its per-download `.tar.gz`. */
+export type ServedBuild = AgentBuild & { path: string; file: string; archive?: LinuxArchiveBody };
 
 const DEV_STUB_TEXT =
   'IndiansAssist development placeholder. This is NOT the support client: no agent build is installed on this server ' +
@@ -50,7 +53,10 @@ export class AgentDist {
           if (dirname(path) !== resolve(distDir) || !existsSync(path)) continue;
           const { file: _f, ...build } = b;
           void _f;
-          out.push({ ...build, size: statSync(path).size, path, file });
+          if (build.platform === 'linux') {
+            const elf = readFileSync(path);
+            out.push({ ...build, size: elf.length, path, file, archive: linuxArchiveBody(elf) });
+          } else out.push({ ...build, size: statSync(path).size, path, file });
         }
         this.builds = out;
         return;
@@ -87,7 +93,7 @@ export class AgentDist {
 
   /** The wire manifest (`GET /download/manifest`). */
   manifest(): { v: 1; builds: AgentBuild[] } {
-    return { v: 1, builds: this.builds.map(({ path: _p, file: _f, ...b }) => (void _p, void _f, b)) };
+    return { v: 1, builds: this.builds.map(({ path: _p, file: _f, archive: _a, ...b }) => (void _p, void _f, void _a, b)) };
   }
 
   find(platform: AgentPlatform, arch: AgentArch): ServedBuild | null {

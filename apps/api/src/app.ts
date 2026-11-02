@@ -120,7 +120,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
     keys: await loadKeySet(config.tokenSigningKey, config.tokenSigningKeysPrevious),
     metrics: opts.metrics ?? createMetrics(),
     presignKey,
-    authProvider: buildAuthProvider(config.authProvider, db),
+    authProvider: buildAuthProvider(db),
     log: app.log,
     timing: { ...DEFAULT_TIMING, ...opts.timing },
     version: packageVersion(),

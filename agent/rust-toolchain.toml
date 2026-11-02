@@ -1,7 +1,9 @@
-# Phase C contract §11.3. The build machine now has Visual Studio 2022 Build Tools
-# (MSVC 14.44 + Windows SDK), so the workspace builds on the msvc host like the CI
-# release targets. The pure-Rust default features of the library crates still compile
-# on stable-x86_64-pc-windows-gnu (`cargo +stable-x86_64-pc-windows-gnu test -p ia-core`).
+# Phase C contract §11.3, Phase E §7.1. `stable` rather than a host-qualified channel: rustup
+# refuses a host triple in the channel name on Linux, and each build host uses its own rustup
+# default triple (x86_64-pc-windows-msvc on the Windows build machine, x86_64-unknown-linux-gnu in
+# WSL). The MSRV stays enforced by `workspace.package.rust-version = "1.99"`. The pure-Rust default
+# features of the library crates still compile on stable-x86_64-pc-windows-gnu
+# (`cargo +stable-x86_64-pc-windows-gnu test -p ia-core`).
 [toolchain]
-channel = "stable-x86_64-pc-windows-msvc"
+channel = "stable"
 components = ["rustfmt", "clippy"]

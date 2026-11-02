@@ -69,6 +69,13 @@ const apiEnv: Record<string, string> = p4
       STORAGE_FS_DIR: `${dataDir}/storage`,
       RATE_LIMIT_DISABLED: '1',
       LOG_LEVEL: 'warn',
+      // The Phase E specs' local fakes (phase-e-contracts sections 2.2, 5.2a, 10): loopback HTTP egress for the
+      // ticketing receiver and the IdPs, the fake DNS server for the domain TXT proof, the fake local model. All three
+      // are refused by config.ts with NODE_ENV=production; the runner's environment still wins.
+      EGRESS_ALLOW_HTTP: process.env.EGRESS_ALLOW_HTTP || '1',
+      EGRESS_ALLOW_LOOPBACK: process.env.EGRESS_ALLOW_LOOPBACK || '1',
+      SSO_DEV_DNS_SERVERS: process.env.SSO_DEV_DNS_SERVERS || `127.0.0.1:${process.env.SMOKE_SSO_DNS_PORT || '5391'}`,
+      AI_LOCAL_ENDPOINTS: process.env.AI_LOCAL_ENDPOINTS || `in-mum=http://127.0.0.1:${process.env.E2E_AI_MODEL_PORT || '4194'}`,
     };
 Object.assign(apiEnv, originEnv);
 const resetCmd = p4
@@ -79,7 +86,9 @@ const resetCmd = p4
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: p4 ? /package4\.spec\.ts$/ : p3 ? /package3\.spec\.ts$/ : /package[12]\.spec\.ts$/,
+  // The default suite also holds the Phase E specs (`enterprise-{sso,tickets,ai,residency}.spec.ts`, phase-e-contracts
+  // section 11), so `pnpm e2e:e` and `playwright test enterprise-<stream>` find them.
+  testMatch: p4 ? /package4\.spec\.ts$/ : p3 ? /package3\.spec\.ts$/ : /(package[12]|enterprise-[a-z]+)\.spec\.ts$/,
   outputDir: './e2e/artifacts/test-results',
   fullyParallel: false,
   workers: 1,

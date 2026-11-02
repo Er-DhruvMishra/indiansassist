@@ -1,0 +1,28 @@
+{
+  "description": "Phase E section 4.5 webhook signature vectors: key = the 32 bytes of base64url-decoding secret; message = utf8(ts + \".\") followed by rawBody (utf8). Computed with node:crypto createHmac.",
+  "vectors": [
+    {
+      "name": "current secret",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "ts": 1793613600,
+      "rawBody": "{\"event\":\"ticket.push\",\"externalId\":null,\"mode\":\"create\",\"orgId\":\"00000000-0000-4000-8000-000000000001\",\"pushId\":\"00000000-0000-4000-8000-000000000002\",\"sentAt\":\"2026-11-02T10:00:00.000Z\",\"ticket\":{\"body\":\"Printer fixed\",\"title\":\"Remote support session 2026-11-02 — Asha R\"},\"v\":1}",
+      "signature": "v1=5556ec2213bf539593ecb10d15e0efdf7b7270392e25db22abab7a52b022a681"
+    },
+    {
+      "name": "previous secret",
+      "secret": "__79_Pv6-fj39vX08_Lx8O_u7ezr6uno5-bl5OPi4eA",
+      "ts": 1793613600,
+      "rawBody": "{\"event\":\"ticket.push\",\"externalId\":null,\"mode\":\"create\",\"orgId\":\"00000000-0000-4000-8000-000000000001\",\"pushId\":\"00000000-0000-4000-8000-000000000002\",\"sentAt\":\"2026-11-02T10:00:00.000Z\",\"ticket\":{\"body\":\"Printer fixed\",\"title\":\"Remote support session 2026-11-02 — Asha R\"},\"v\":1}",
+      "signature": "v1=abd82f0f0c2cd1e033aa1be87c5edadf84d621f88912c062f79867640bb37f7b"
+    },
+    {
+      "name": "empty body",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "ts": 1793613600,
+      "rawBody": "",
+      "signature": "v1=a20031defb95c917338153a669e759904be45be02da1d1123d1bef2370b31a6c"
+    }
+  ],
+  "rotationHeader": "v1=5556ec2213bf539593ecb10d15e0efdf7b7270392e25db22abab7a52b022a681, v1=abd82f0f0c2cd1e033aa1be87c5edadf84d621f88912c062f79867640bb37f7b",
+  "notTheStringKey": "v1=f52e5bbf0be357ad74475e73de755b85ae660a6920ca482445a16f193e5851d8"
+}

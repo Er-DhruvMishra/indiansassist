@@ -135,6 +135,7 @@ export function hasFeature(s: Pick<AgentSnapshot, 'capabilities'>, f: AgentCapab
 export function controlBlocker(s: AgentSnapshot): string | null {
   const tier = s.created?.tier ?? 'p3_portable';
   if (s.sec.state !== 'established') return 'Securing the connection';
+  if (s.capabilities && !hasFeature(s, 'input')) return 'This Desk cannot take remote control';
   if (!levelAllows(tier, s.consent.level, 'control')) return 'The user allows viewing only';
   if (!sasOk(s)) return 'Confirm the security code first';
   return null;

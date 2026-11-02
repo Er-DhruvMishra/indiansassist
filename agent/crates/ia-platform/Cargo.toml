@@ -5,13 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Platform traits (Capturer, InputSink, ClipboardBridge, Elevation, SelfDelete, ProtocolHandler, KnownFolders, and the Phase D ServiceHost, DesktopBridge, Waker, Amt, SecretInjector) and the sys_lib late-binding loader, with Windows impls behind the `winapi` feature (contract C 11.1, 14; D 11.1)."
+description = "Platform traits (Capturer, InputSink, ClipboardBridge, Elevation, SelfDelete, ProtocolHandler, KnownFolders, and the Phase D ServiceHost, DesktopBridge, Waker, Amt, SecretInjector) and the sys_lib late-binding loader, with Windows impls behind the `winapi` feature and the Linux ones (Phase E §7.7) behind `linux-os` (contract C 11.1, 14; D 11.1)."
 
 [features]
 # Default build is pure-Rust and compiles on x86_64-pc-windows-gnu with no C toolchain.
 default = []
 # CI (msvc) enables `winapi` to compile the Win32 syscall layer via the `windows` crate.
 winapi = ["dep:windows", "dep:libloading"]
+# Phase E §7.7: the Linux impls that need libc (SO_PEERCRED, getuid, the abstract socket).
+# Compiles to nothing off Linux, so the Windows `--all-features` gates pass.
+linux-os = ["dep:libc"]
 
 [dependencies]
 ia-core.workspace = true
@@ -19,6 +22,9 @@ regex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, optional = true, features = [

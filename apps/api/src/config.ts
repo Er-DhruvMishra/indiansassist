@@ -142,6 +142,8 @@ const envSchema = z.object({
   EGRESS_METADATA_ADDRESSES: str(''),
   EGRESS_ALLOW_HTTP: bool(false),
   EGRESS_ALLOW_LOOPBACK: bool(false),
+  /** Development only: `host:port` list of DNS servers for the SSO domain TXT proof (a local fake). Phase E §10. */
+  SSO_DEV_DNS_SERVERS: str(''),
   AI_LOCAL_ENDPOINTS: str(''),
   AI_LOCAL_MODEL: str('local'),
   AI_LOCAL_API_KEY: str(''),
@@ -239,6 +241,11 @@ export type EgressConfig = {
   privateAllow: EgressAllowEntry[];
   /** Extra metadata addresses refused always (beyond the built-in list of section 2.2 G2). */
   metadataAddresses: string[];
+  /**
+   * `SSO_DEV_DNS_SERVERS`: DNS servers (`host:port`) the SSO domain TXT proof uses instead of the system resolver,
+   * so a local fake can publish a record. Empty in production (a boot problem otherwise) and without loopback egress.
+   */
+  devDnsServers?: string[];
 };
 
 export type AiConfig = {
@@ -423,6 +430,15 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
   // Phase E section 2.2 G1/G2: the loosening switches never combine with production.
   if (production && e.EGRESS_ALLOW_HTTP) problems.push('EGRESS_ALLOW_HTTP must not be set with NODE_ENV=production');
   if (production && e.EGRESS_ALLOW_LOOPBACK) problems.push('EGRESS_ALLOW_LOOPBACK must not be set with NODE_ENV=production');
+  // A fake DNS server would let anyone "prove" any domain, so this seam never exists in production.
+  const devDnsServers = e.SSO_DEV_DNS_SERVERS.split(',').map((s) => s.trim()).filter(Boolean);
+  if (devDnsServers.length > 0) {
+    if (production) problems.push('SSO_DEV_DNS_SERVERS must not be set with NODE_ENV=production');
+    if (!e.EGRESS_ALLOW_LOOPBACK) problems.push('SSO_DEV_DNS_SERVERS needs EGRESS_ALLOW_LOOPBACK=1 (it exists only for local fakes)');
+    for (const s of devDnsServers) {
+      if (!/^[A-Za-z0-9.-]+:\d{1,5}$|^\[[0-9A-Fa-f:]+\]:\d{1,5}$/.test(s)) problems.push(`SSO_DEV_DNS_SERVERS entry "${s}" must be host:port`);
+    }
+  }
   let egressAllow: EgressAllowEntry[] = [];
   try {
     egressAllow = parseEgressAllow(e.EGRESS_PRIVATE_ALLOW);
@@ -535,6 +551,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
       allowLoopback: e.EGRESS_ALLOW_LOOPBACK,
       privateAllow: egressAllow,
       metadataAddresses: splitUrlList(e.EGRESS_METADATA_ADDRESSES),
+      devDnsServers: production ? [] : devDnsServers,
     },
     ai: {
       local: {

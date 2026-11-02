@@ -1,10 +1,12 @@
 /**
  * Join page helpers for a `p3_portable` token (docs/specs/phase-c-contracts.md sections 2.5 L3, 2.6, 2.7): platform
  * detection from low-entropy signals only (no high-entropy UA hints), the deep link, the 1500 ms "did the app open"
- * guard, the `ia.agent.seen` flag set only by `/join?kept=1`, and the programmatic `<a download>` click.
+ * guard, the `ia.agent.seen` flag set only by `/join?kept=1`, and the programmatic `<a download>` click. Phase E
+ * section 7.6 adds Linux: its detection and the shell line that extracts and starts the per-download archive.
  */
+import { AGENT_LINUX_FILENAME_RE } from '@indiansassist/shared';
 
-export type DeskPlatform = 'windows' | 'android' | 'ios';
+export type DeskPlatform = 'windows' | 'android' | 'ios' | 'linux';
 
 export const AGENT_SEEN_KEY = 'ia.agent.seen';
 export const DEEP_LINK_WAIT_MS = 1500;
@@ -14,7 +16,20 @@ type NavLike = { userAgent: string; userAgentData?: { platform?: string } };
 export function detectPlatform(nav: NavLike): DeskPlatform {
   if (nav.userAgentData?.platform === 'Android' || /Android/.test(nav.userAgent)) return 'android';
   if (/iPhone|iPad|iPod/.test(nav.userAgent)) return 'ios';
+  // Phase E section 7.6: Linux (every Android UA also says Linux, so Android is ruled out first).
+  if (nav.userAgentData?.platform === 'Linux' || (/Linux/.test(nav.userAgent) && !/Android/.test(nav.userAgent))) return 'linux';
   return 'windows';
+}
+
+/**
+ * Phase E section 7.6: `cd ~/Downloads && tar -xzf <archive> && ./<inner>` for a served Linux archive name, or null
+ * when the name is not the `IndiansAssist-<region>-<dddd>-<dddd>-<dddd>.tar.gz` grammar (nothing else reaches a shell
+ * line the user is asked to paste).
+ */
+export function linuxRunCommand(archiveName: string): string | null {
+  const inner = archiveName.endsWith('.tar.gz') ? archiveName.slice(0, -'.tar.gz'.length) : '';
+  if (!AGENT_LINUX_FILENAME_RE.test(inner)) return null;
+  return `cd ~/Downloads && tar -xzf ${archiveName} && ./${inner}`;
 }
 
 /** `indiansassist://join?t=<compact>` or `?c=<12 digits>` (section 2.5 L2). */

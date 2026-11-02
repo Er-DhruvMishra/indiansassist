@@ -1,4 +1,5 @@
-//! Voice (contract §6.3), compiled under `media`: the default capture / render endpoints via
+//! Voice (contract §6.3), compiled under the `voice` feature (Phase E §7.2 split it out of
+//! `media`; `novoice.rs` stands in without it): the default capture / render endpoints via
 //! `cpal` (WASAPI), Opus 48 kHz through `audiopus`, one audio `TrackLocalStaticSample` (payload
 //! type 111, `opus/48000/2`) added to the Assist PC at start and to the recorder PC (§9 R5).
 //!

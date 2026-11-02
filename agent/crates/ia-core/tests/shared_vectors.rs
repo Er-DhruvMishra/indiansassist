@@ -468,6 +468,32 @@ fn wire_names_equal_the_shared_names() {
 }
 
 #[test]
+fn linux_file_names_agree_with_shared() {
+    // Phase E §7.6: the inner binary name of the Linux archive, mirrored from the shared TS.
+    use ia_core::download::{agent_linux_file_name, parse_linux_filename};
+    let v = fixture("agent-names.json");
+    let cases = v["linuxFileNames"].as_array().expect("linuxFileNames");
+    assert!(cases.len() >= 5);
+    let regions = ["in-mum", "eu-fra", "us-east"];
+    for c in cases {
+        let name = s(c, "name");
+        let got = parse_linux_filename(name, &regions);
+        match c["parsed"].as_object() {
+            Some(p) => {
+                let got = got.unwrap_or_else(|| panic!("{name} must parse"));
+                assert_eq!(got.region, p["region"].as_str().unwrap(), "{name}");
+                assert_eq!(got.code, p["deskCode"].as_str().unwrap(), "{name}");
+                assert_eq!(
+                    agent_linux_file_name(&got.region, &got.code).as_deref(),
+                    Some(name)
+                );
+            }
+            None => assert!(got.is_none(), "{name} must not parse"),
+        }
+    }
+}
+
+#[test]
 fn modifiers_are_strict_like_the_shared_schema() {
     use ia_core::types::Modifiers;
     let all = r#"{"ctrl":false,"shift":true,"alt":false,"meta":false}"#;

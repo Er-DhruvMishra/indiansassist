@@ -134,8 +134,41 @@ impl ControlServer {
                 }
             }
         }
+        // Phase E rule 7.3c: a sink that guards before injecting (X11) refuses an event aimed at
+        // an agent window; it is answered `not_allowed` and counted as refused, as C §3.5 does.
+        if self.sink_refuses(&d.action, input_sink) {
+            if let Some(kind) = input_kind_of(&req.op) {
+                self.input.record(kind, None, 0, true);
+            }
+            let response = ia_core::ctl::error_response(&req.id, "not_allowed", None);
+            return Some((response, SessionEffect::None));
+        }
         let effect = self.apply(&d.action, &req, input_sink, clipboard);
         Some((response, effect))
+    }
+
+    /// Whether the sink's pre-injection guard (rule 7.3c) refuses this input action.
+    fn sink_refuses(&self, action: &Action, input_sink: &mut dyn InputSink) -> bool {
+        match action {
+            // A pointer release is let through: X delivers it to the window that took the
+            // press (the implicit grab), never newly to an agent window, and refusing it would
+            // leave a button held down on the Desk.
+            Action::Pointer {
+                kind: PointerKind::Up,
+                ..
+            } => false,
+            Action::Pointer {
+                monitor_id, nx, ny, ..
+            }
+            | Action::Scroll {
+                monitor_id, nx, ny, ..
+            } => match self.monitor(*monitor_id) {
+                Some(m) => input_sink.refuses_pointer(m, *nx, *ny),
+                None => false,
+            },
+            Action::Key { .. } | Action::Text { .. } => input_sink.refuses_keyboard(),
+            _ => false,
+        }
     }
 
     fn apply(
@@ -292,6 +325,9 @@ mod tests {
     struct MockSink {
         pointers: Vec<(u32, PointerAction)>,
         texts: Vec<String>,
+        /// Rule 7.3c: refuse a pointer whose `nx` is past this (an "agent window" on the right).
+        refuse_right_of: Option<f32>,
+        focus_on_agent_window: bool,
     }
     impl InputSink for MockSink {
         fn pointer(&mut self, monitor: &MonitorInfo, _nx: f32, _ny: f32, action: PointerAction) {
@@ -301,6 +337,12 @@ mod tests {
         fn key(&mut self, _code: &str, _a: KeyAction, _m: ia_core::types::Modifiers) {}
         fn text(&mut self, text: &str) {
             self.texts.push(text.to_string());
+        }
+        fn refuses_pointer(&mut self, _m: &MonitorInfo, nx: f32, _ny: f32) -> bool {
+            self.refuse_right_of.is_some_and(|edge| nx > edge)
+        }
+        fn refuses_keyboard(&mut self) -> bool {
+            self.focus_on_agent_window
         }
     }
 
@@ -351,6 +393,47 @@ mod tests {
         assert_eq!(res["ok"], serde_json::json!(true));
         assert_eq!(effect, SessionEffect::None);
         assert_eq!(sink.pointers, vec![(2, PointerAction::Click(0))]);
+    }
+
+    #[test]
+    fn a_sink_guard_refusal_is_answered_not_allowed_and_counted() {
+        // Phase E rule 7.3c: the X11 sink refuses before injecting; the answer is C §3.5's.
+        let mut s = server(AgentConsentLevel::Control);
+        let mut sink = MockSink {
+            refuse_right_of: Some(0.8),
+            ..Default::default()
+        };
+        let mut clip = MockClip::default();
+        let req = |nx: f32| {
+            format!(
+                r#"{{"t":"ctl.req","id":"7","op":"os.pointer","args":{{"monitorId":1,"kind":"click","nx":{nx},"ny":0.5,"button":0}}}}"#
+            )
+        };
+        let (res, effect) = s.handle_text(&req(0.9), &mut sink, &mut clip).unwrap();
+        assert_eq!(res["ok"], serde_json::json!(false));
+        assert_eq!(res["id"], serde_json::json!("7"));
+        assert_eq!(res["error"]["code"], serde_json::json!("not_allowed"));
+        assert_eq!(effect, SessionEffect::None);
+        assert!(
+            sink.pointers.is_empty(),
+            "a refused event is never injected"
+        );
+        assert_eq!(s.input.to_chain()["refused"], serde_json::json!(1));
+        // Outside the agent window the same click is injected.
+        let (res, _) = s.handle_text(&req(0.2), &mut sink, &mut clip).unwrap();
+        assert_eq!(res["ok"], serde_json::json!(true));
+        assert_eq!(sink.pointers.len(), 1);
+        // Text while an agent window holds focus is refused too.
+        sink.focus_on_agent_window = true;
+        let (res, _) = s
+            .handle_text(
+                r#"{"t":"ctl.req","id":"8","op":"os.text","args":{"text":"hi"}}"#,
+                &mut sink,
+                &mut clip,
+            )
+            .unwrap();
+        assert_eq!(res["error"]["code"], serde_json::json!("not_allowed"));
+        assert!(sink.texts.is_empty());
     }
 
     #[test]

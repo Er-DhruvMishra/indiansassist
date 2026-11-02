@@ -401,7 +401,9 @@ mod tests {
             "requiresElevation": false,
             "bodyHash": hash,
             "body": body,
-            "interpreter": "powershell",
+            // The installed service is Windows-only (D §11.1); the pin check is the same on
+            // every host, so the test uses the interpreter the agent on this host runs.
+            "interpreter": if cfg!(target_os = "linux") { "sh" } else { "powershell" },
             "timeoutSec": 60,
         });
         let a = playbook_action(&payload).expect("a dispatched payload");

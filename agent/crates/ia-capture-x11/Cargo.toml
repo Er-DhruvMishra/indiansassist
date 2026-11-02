@@ -1,0 +1,26 @@
+[package]
+name = "ia-capture-x11"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Linux X11 screen capture (Phase E contract §7.2): RandR monitor geometry -> MonitorInfo and tile-hash change detection (pure, tested on every host), and the x11rb capturer (RandR 1.5 GetMonitors, MIT-SHM ShmGetImage into a memfd segment with a GetImage fallback, XFixes cursor compositing) behind the `x11` feature on Linux."
+
+[features]
+default = []
+# The X11 capturer. Compiles to nothing off Linux, so the Windows `--all-features` gates pass.
+x11 = ["dep:x11rb", "dep:libc"]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-frame.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { workspace = true, optional = true, features = ["randr", "shm", "xfixes"] }
+libc = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = { workspace = true, features = ["randr", "shm", "xfixes"] }

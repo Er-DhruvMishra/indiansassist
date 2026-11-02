@@ -108,7 +108,13 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
                         use winit::platform::windows::EventLoopBuilderExtWindows;
                         b.with_any_thread(true);
                     }
-                    #[cfg(not(windows))]
+                    // Phase E §7.2: the X11 backend, on this dedicated thread too.
+                    #[cfg(target_os = "linux")]
+                    {
+                        use winit::platform::x11::EventLoopBuilderExtX11;
+                        b.with_any_thread(true);
+                    }
+                    #[cfg(not(any(windows, target_os = "linux")))]
                     let _ = b;
                 })),
                 ..Default::default()
@@ -236,10 +242,23 @@ struct IaApp {
     panel_was_focused: bool,
     guard: Option<Guard>,
     tray: Option<Tray>,
+    /// Whether a tray icon was already tried this session. Linux tries once (§7.3b: no
+    /// StatusNotifierWatcher means no tray, and asking the bus every frame would be waste);
+    /// Windows keeps retrying until the shell's notification area is up.
+    tray_attempted: bool,
     pill_hwnd: Option<isize>,
     panel_hwnd: Option<isize>,
     morph_at: Option<Instant>,
     last_housekeeping: Instant,
+    /// Phase E rule 7.3c: the 750 ms post-map input gate (applied on Linux).
+    map_gate: crate::model::MapGate,
+    /// Whether the panel was open last frame (its opening re-arms the gate).
+    panel_was_open: bool,
+    /// Linux: the X11 window treatment of the pill (EWMH) and the pill's window id.
+    #[cfg(target_os = "linux")]
+    x11: Option<crate::x11help::X11Help>,
+    #[cfg(target_os = "linux")]
+    pill_x11: Option<u32>,
     ended_at: Option<Instant>,
     ended_lines: Vec<String>,
     beeped: bool,
@@ -265,6 +284,18 @@ impl IaApp {
             panel_was_focused: false,
             guard: None,
             tray: None,
+            tray_attempted: false,
+            map_gate: {
+                // The consent window is mapped now.
+                let mut g = crate::model::MapGate::default();
+                g.mapped(Instant::now());
+                g
+            },
+            panel_was_open: false,
+            #[cfg(target_os = "linux")]
+            x11: None,
+            #[cfg(target_os = "linux")]
+            pill_x11: None,
             pill_hwnd: None,
             panel_hwnd: None,
             morph_at: None,
@@ -279,6 +310,23 @@ impl IaApp {
 
     fn emit(&self, e: UiEvent) {
         (self.emit)(e);
+    }
+
+    /// Rule 7.3c (Linux): whether input is ignored right now because an agent surface was mapped
+    /// less than 750 ms ago. Windows relies on its hooks and the physical-press gate instead.
+    fn input_gated(&self) -> bool {
+        cfg!(target_os = "linux") && !self.map_gate.accepts_input(Instant::now())
+    }
+
+    /// Linux: record a pointer press that reached this viewport as physical (rule 7.3c: the
+    /// X11 sink never injects onto an agent window), unless the post-map gate is closed.
+    fn note_presses(&self, ctx: &egui::Context) {
+        #[cfg(target_os = "linux")]
+        if !self.input_gated() && ctx.input(|i| i.pointer.any_pressed()) {
+            crate::guard::note_physical_press();
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = ctx;
     }
 
     fn physical_ok(&self) -> bool {
@@ -347,6 +395,8 @@ impl IaApp {
                     self.live.file_prompt = Some((p, Instant::now()));
                     self.live.file_confirm_armed = false;
                     self.panel_open = true;
+                    // Rule 7.3c: a new prompt card ignores input for 750 ms.
+                    self.map_gate.mapped(Instant::now());
                 }
                 UiCommand::FileClosed { file_id, outcome } => {
                     if self
@@ -365,6 +415,7 @@ impl IaApp {
                 } => {
                     self.live.level_prompt = Some((reason, Instant::now(), timeout_secs));
                     self.panel_open = true;
+                    self.map_gate.mapped(Instant::now());
                 }
                 UiCommand::LevelPromptClosed => self.live.level_prompt = None,
                 UiCommand::Chat {
@@ -421,6 +472,7 @@ impl IaApp {
         let protect = true;
         ctx.send_viewport_cmd(ViewportCommand::ContentProtected(protect));
         self.morph_at = Some(Instant::now());
+        self.map_gate.mapped(Instant::now());
         self.pill_hwnd = None;
     }
 
@@ -463,7 +515,11 @@ impl IaApp {
         }
         let mut share = false;
         let mut decline = false;
+        let gated = self.input_gated();
         egui::CentralPanel::default().show(ctx, |ui| {
+            if gated {
+                ui.disable();
+            }
             ui.add_space(6.0);
             ui.heading("Share your screen?");
             ui.add_space(8.0);
@@ -604,7 +660,11 @@ impl IaApp {
         let mut stop = false;
         let mut mic_clicked = false;
         let mic = mic_label(self.live.voice_available, self.live.mic_muted);
+        let gated = self.input_gated();
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+            if gated {
+                ui.disable();
+            }
             let full = ui.max_rect();
             let stop_rect =
                 Rect::from_min_size(pos2(full.right() - 64.0, full.top()), vec2(64.0, PILL_H));
@@ -755,7 +815,12 @@ impl IaApp {
         if !self.panel_open {
             self.panel_hwnd = None;
             self.panel_was_focused = false;
+            self.panel_was_open = false;
             return;
+        }
+        if !self.panel_was_open {
+            self.panel_was_open = true;
+            self.map_gate.mapped(Instant::now());
         }
         let anchor = ctx
             .input(|i| i.viewport().outer_rect)
@@ -773,6 +838,7 @@ impl IaApp {
             ViewportId::from_hash_of("ia-panel"),
             builder,
             |pctx, _class| {
+                self.note_presses(pctx);
                 self.panel_body(pctx);
                 let (esc, close, focused) = pctx.input(|i| {
                     (
@@ -802,7 +868,11 @@ impl IaApp {
             .fill(Color32::from_rgb(32, 36, 44))
             .inner_margin(10.0)
             .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(70, 80, 95)));
+        let gated = self.input_gated();
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+            if gated {
+                ui.disable();
+            }
             ui.horizontal(|ui| {
                 ui.label(RichText::new("IndiansAssist").strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -990,7 +1060,8 @@ impl IaApp {
             recording: self.live.recording,
             elevated: self.live.integrity == ElevationLevel::Admin,
         };
-        if self.tray.is_none() {
+        if self.tray.is_none() && (cfg!(windows) || !self.tray_attempted) {
+            self.tray_attempted = true;
             self.tray = Tray::new(state.clone());
         }
         let actions = match self.tray.as_mut() {
@@ -1021,7 +1092,7 @@ impl IaApp {
     }
 
     #[cfg(windows)]
-    fn housekeeping(&mut self) {
+    fn housekeeping(&mut self, _ctx: &egui::Context) {
         use crate::winhelp;
         if self.phase != Phase::Live {
             return;
@@ -1067,8 +1138,47 @@ impl IaApp {
         }
     }
 
-    #[cfg(not(windows))]
-    fn housekeeping(&mut self) {}
+    /// Phase E §7.2 / §7.3b: the pill on X11. Once the morph has been applied it is marked a
+    /// utility window and the window manager is asked for above / skip-taskbar / skip-pager;
+    /// every 2 s that is re-asserted with `AlwaysOnTop`, and the pill is re-shown if something
+    /// unmapped it (the pill stays mandatory).
+    #[cfg(target_os = "linux")]
+    fn housekeeping(&mut self, ctx: &egui::Context) {
+        if self.phase != Phase::Live {
+            return;
+        }
+        if self.x11.is_none()
+            && self
+                .morph_at
+                .is_some_and(|t| t.elapsed() > Duration::from_millis(250))
+        {
+            self.x11 = crate::x11help::X11Help::connect();
+        }
+        if let (None, Some(x)) = (self.pill_x11, self.x11.as_ref()) {
+            if let Some(w) = x.find_own_window(PILL_TITLE) {
+                x.style_pill(w);
+                tracing::info!(window = w, "pill styled (utility, above, skip-taskbar)");
+                self.pill_x11 = Some(w);
+                self.last_housekeeping = Instant::now();
+            }
+        }
+        if self.last_housekeeping.elapsed() >= Duration::from_secs(2) {
+            self.last_housekeeping = Instant::now();
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+            if let (Some(w), Some(x)) = (self.pill_x11, self.x11.as_ref()) {
+                x.reassert(w);
+                if !x.is_viewable(w) {
+                    tracing::warn!("the pill was unmapped; showing it again");
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                    self.map_gate.mapped(Instant::now());
+                }
+            }
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    fn housekeeping(&mut self, _ctx: &egui::Context) {}
 }
 
 impl eframe::App for IaApp {
@@ -1081,6 +1191,7 @@ impl eframe::App for IaApp {
             self.enter_live(ctx);
         }
         self.drain(ctx);
+        self.note_presses(ctx);
         #[cfg(feature = "dev")]
         self.autopilot_tick(ctx);
         match self.phase {
@@ -1096,7 +1207,7 @@ impl eframe::App for IaApp {
                 self.pill_ui(ctx);
                 self.panel(ctx);
                 self.tray_tick(ctx);
-                self.housekeeping();
+                self.housekeeping(ctx);
             }
             Phase::Ended => self.ended_ui(ctx),
         }

@@ -8,10 +8,7 @@ import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import type { SessionDetail, UserRole } from '@indiansassist/shared';
 import { NoScreenSlot, SummaryPanelSlot, TicketPushSlot, useEnterpriseLiveHooks } from '../src/assist/console/EnterpriseSlots';
-import { IntegrationsPage } from '../src/assist/integrations/IntegrationsPage';
 import { SsoContinuePage } from '../src/assist/sso/SsoContinuePage';
-import { SsoSettingsPage } from '../src/assist/sso/SsoSettingsPage';
-import { AiPolicyPage } from '../src/assist/summary/AiPolicyPage';
 import { can, type Capability } from '../src/auth/permissions';
 
 const ROLES: UserRole[] = ['technician', 'senior_technician', 'org_admin', 'auditor', 'observer'];
@@ -57,19 +54,6 @@ describe('console slots', () => {
 });
 
 describe('placeholder pages', () => {
-  it.each([
-    ['Single sign-on', SsoSettingsPage],
-    ['Integrations', IntegrationsPage],
-    ['AI summaries', AiPolicyPage],
-  ] as const)('%s says it is not available yet', (title, Page) => {
-    render(
-      <MemoryRouter>
-        <Page />
-      </MemoryRouter>,
-    );
-    expect(screen.getByRole('heading', { name: title })).toBeTruthy();
-    expect(screen.getByText(/not available on this server yet/)).toBeTruthy();
-  });
   it('/sso/continue links back to sign-in', () => {
     render(
       <MemoryRouter>

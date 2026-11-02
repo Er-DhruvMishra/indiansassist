@@ -74,7 +74,33 @@ pub(super) fn perform_self_delete() {
     }
 }
 
-#[cfg(not(windows))]
+/// Phase E §7.7 self-delete on Linux: remove the working dirs, the sidecar and the deep-link
+/// handler files (restoring the previous scheme default), the extracted archive beside the binary
+/// when it is the user's own regular file of at most 64 MiB, and finally `unlink` the running
+/// binary (Linux allows it; no helper stub). Received files are kept. Never run by an automated
+/// test with the built binary (the e2e passes `--no-self-delete`); the plan and its application
+/// are tested against a temporary XDG root in `ia_platform::linux`.
+#[cfg(all(target_os = "linux", feature = "linux-os"))]
+pub(super) fn perform_self_delete() {
+    use ia_platform::linux::{os, selfdel, XdgEnv};
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let env = XdgEnv::from_process();
+    let plan = selfdel::plan(&env, &exe, false);
+    match os::apply_self_delete(&plan, &env, &exe) {
+        Ok(r) if r.failures.is_empty() => {
+            tracing::info!(removed = r.removed.len(), "self-delete: done")
+        }
+        Ok(r) => tracing::warn!(failures = ?r.failures, "self-delete: partly done"),
+        Err(e) => tracing::warn!(
+            "self-delete: not run ({e}); delete {} by hand",
+            exe.display()
+        ),
+    }
+}
+
+#[cfg(not(any(windows, all(target_os = "linux", feature = "linux-os"))))]
 pub(super) fn perform_self_delete() {}
 
 /// Delete the working directory (`%LOCALAPPDATA%\IndiansAssist\`), the `.iaconfig` sidecar next

@@ -8,6 +8,7 @@ import {
   isRegionServed,
   sha256Hex,
   SESSION_COOKIE_NAME,
+  type LoginMethod,
   type UserRole,
 } from '@indiansassist/shared';
 import {
@@ -109,13 +110,15 @@ export async function authenticate(
 
 /**
  * Mints a new auth_session and cookie (session fixation rule: always a new row and value). Runs inside the
- * caller's transaction; the cookie is set by `setSessionCookie` after commit.
+ * caller's transaction; the cookie is set by `setSessionCookie` after commit. Phase E section 3.8: `loginMethod` is
+ * written on every mint, and `expiresAt` shortens the 7-day default (SSO `sessionMaxAgeHours`, break-glass 1 h).
  */
 export async function mintSession(
   exec: Executor,
   req: FastifyRequest,
   user: UserRow,
   org: OrgRow,
+  opts: { loginMethod?: LoginMethod; expiresAt?: Date } = {},
 ): Promise<{ raw: string; row: AuthSessionRow }> {
   const raw = randomSecret(32);
   const row = await createAuthSession(exec, {
@@ -124,17 +127,20 @@ export async function mintSession(
     region: org.dataRegion,
     userAgent: (req.headers['user-agent'] ?? '').slice(0, 512) || null,
     ip: req.ip ?? null,
+    ...(opts.loginMethod ? { loginMethod: opts.loginMethod } : {}),
+    ...(opts.expiresAt ? { expiresAt: opts.expiresAt } : {}),
   });
   return { raw, row };
 }
 
-export function setSessionCookie(ctx: AppContext, reply: FastifyReply, raw: string): void {
+/** Sets `ia_session`; `maxAgeSec` (Phase E section 3.8) matches a shortened session, default 7 days. */
+export function setSessionCookie(ctx: AppContext, reply: FastifyReply, raw: string, maxAgeSec: number = COOKIE_MAX_AGE_SEC): void {
   void reply.setCookie(SESSION_COOKIE_NAME, raw, {
     signed: true,
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
-    maxAge: COOKIE_MAX_AGE_SEC,
+    maxAge: maxAgeSec,
     secure: ctx.config.production,
   });
 }

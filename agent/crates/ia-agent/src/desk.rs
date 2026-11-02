@@ -1,0 +1,238 @@
+//! What kind of Desk this process is serving (Phase E §7.3a, §7.4, §7.5): the screen mode, the
+//! `desk.hello` operating-system identity and the capabilities that follow from them. The
+//! decisions are pure and tested on every host; [`detect`] reads the process once.
+//!
+//! | Mode | Capture | Input | Capabilities |
+//! |---|---|---|---|
+//! | `Synthetic` | generated frames | none | the platform's full set (e2e, loopback) |
+//! | `Windows` | DXGI / GDI | `SendInput` | C §3.1 |
+//! | `X11` | `ia-capture-x11` | `ia-input-x11` | §7.5 X11 row, RandR monitor count |
+//! | `Wayland` | none, no video track | none | §7.5 Wayland row |
+
+use std::sync::OnceLock;
+
+use ia_core::types::{linux_capabilities, AgentCapabilities, MonitorInfo};
+use ia_platform::linux::{display_server, DisplayEnv, DisplayServer};
+
+/// The screen source of this Desk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScreenMode {
+    /// `--synthetic-capture` (dev builds): generated frames and no-op input, on any OS.
+    Synthetic,
+    /// The Windows capture and input stack.
+    Windows,
+    /// A Linux X11 session on `display`.
+    X11 { display: String },
+    /// A Linux Wayland session: the agent connects and shares nothing on screen (§7.4).
+    Wayland,
+    /// Linux with no graphical session: "No graphical session found" (§7.4).
+    NoSession,
+}
+
+impl ScreenMode {
+    /// Whether this Desk offers a screen (a video track and the screen features).
+    pub fn shares_screen(&self) -> bool {
+        !matches!(self, ScreenMode::Wayland | ScreenMode::NoSession)
+    }
+}
+
+/// The decision, pure: `synthetic` wins (a headless dev run), then the OS, then on Linux the
+/// §7.4 display-server table.
+pub fn decide(synthetic: bool, linux: bool, display: &DisplayServer) -> ScreenMode {
+    if synthetic {
+        return ScreenMode::Synthetic;
+    }
+    if !linux {
+        return ScreenMode::Windows;
+    }
+    match display {
+        DisplayServer::X11 { display } => ScreenMode::X11 {
+            display: display.clone(),
+        },
+        DisplayServer::Wayland => ScreenMode::Wayland,
+        DisplayServer::None => ScreenMode::NoSession,
+    }
+}
+
+static MODE: OnceLock<ScreenMode> = OnceLock::new();
+
+/// The process's screen mode, decided once from the command line and the environment.
+pub fn detect(synthetic: bool) -> ScreenMode {
+    MODE.get_or_init(|| {
+        decide(
+            synthetic,
+            cfg!(target_os = "linux"),
+            &display_server(&DisplayEnv::from_process()),
+        )
+    })
+    .clone()
+}
+
+/// The mode once [`detect`] has run (tests and early paths default to synthetic-free Windows /
+/// Linux detection).
+pub fn current() -> Option<ScreenMode> {
+    MODE.get().cloned()
+}
+
+/// The monitor ids that get a video track: none on Wayland ("no video track is offered", §7.4).
+pub fn video_ids(ids: &[u32]) -> Vec<u32> {
+    match current() {
+        Some(m) if !m.shares_screen() => Vec::new(),
+        _ => ids.to_vec(),
+    }
+}
+
+/// `desk.hello.client.os` for a native Desk on this target (§7.3a).
+pub fn native_os() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "windows"
+    }
+}
+
+/// The `PRETTY_NAME` of an `/etc/os-release` text, unquoted, cut to 32 characters (§7.3a).
+pub fn pretty_name(os_release: &str) -> Option<String> {
+    let line = os_release
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("PRETTY_NAME="))?;
+    let v = line.trim().trim_matches('"').trim_matches('\'').trim();
+    if v.is_empty() {
+        return None;
+    }
+    Some(v.chars().filter(|c| !c.is_control()).take(32).collect())
+}
+
+/// `desk.hello.client.platform.osVersion`: `10.0` on Windows (as before), the os-release
+/// `PRETTY_NAME` on Linux (fallback `Linux`).
+pub fn os_version() -> String {
+    if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/etc/os-release")
+            .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+            .ok()
+            .and_then(|t| pretty_name(&t))
+            .unwrap_or_else(|| "Linux".to_string())
+    } else {
+        "10.0".to_string()
+    }
+}
+
+/// The capabilities of a Linux Desk in `mode` with `monitors` shared monitors (§7.5).
+pub fn linux_caps(mode: &ScreenMode, monitors: usize) -> AgentCapabilities {
+    let wayland = !mode.shares_screen();
+    linux_capabilities(monitors.clamp(1, 16) as u8, wayland)
+}
+
+/// The X11 monitors of `display` (RandR 1.5, root fallback), or an empty list when the X server
+/// cannot be reached.
+#[cfg(all(target_os = "linux", feature = "x11"))]
+pub fn x11_monitors(display_name: &str) -> Vec<MonitorInfo> {
+    use ia_platform::traits::Capturer;
+    match ia_capture_x11::X11Capturer::open(display_name) {
+        Ok(c) => c.enumerate(),
+        Err(e) => {
+            tracing::warn!("X11 display {display_name} could not be opened: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Without the X11 layer there are no X11 monitors.
+#[cfg(not(all(target_os = "linux", feature = "x11")))]
+pub fn x11_monitors(_display: &str) -> Vec<MonitorInfo> {
+    Vec::new()
+}
+
+/// The single monitor a Wayland Desk advertises (`monitors: 1`, the schema minimum; §7.4
+/// sends `capture { monitorId: 1, path: 'none' }`). It is never captured.
+pub fn wayland_placeholder_monitor() -> MonitorInfo {
+    MonitorInfo {
+        id: 1,
+        name: "Wayland session (not shared)".into(),
+        primary: true,
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 2,
+        scale: 1.0,
+        mid: None,
+    }
+}
+
+/// The `ctl.event capture` a Wayland Desk sends once the control channel opens (§7.4).
+pub fn wayland_capture_event(ts: i64) -> serde_json::Value {
+    serde_json::json!({
+        "t": "ctl.event", "kind": "capture",
+        "monitorId": 1, "path": "none", "cause": "wayland_unsupported", "ts": ts,
+    })
+}
+
+/// The `ctl.event capture` for a capture path that started or was lost (§7.2, §16.2 C §5.1).
+pub fn capture_event(monitor_id: u32, path: &str, cause: &str, ts: i64) -> serde_json::Value {
+    serde_json::json!({
+        "t": "ctl.event", "kind": "capture",
+        "monitorId": monitor_id, "path": path, "cause": cause, "ts": ts,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mode_decision() {
+        let x11 = DisplayServer::X11 {
+            display: ":1".into(),
+        };
+        assert_eq!(
+            decide(true, true, &DisplayServer::Wayland),
+            ScreenMode::Synthetic
+        );
+        assert_eq!(decide(false, false, &x11), ScreenMode::Windows);
+        assert_eq!(
+            decide(false, true, &x11),
+            ScreenMode::X11 {
+                display: ":1".into()
+            }
+        );
+        assert_eq!(
+            decide(false, true, &DisplayServer::Wayland),
+            ScreenMode::Wayland
+        );
+        assert_eq!(
+            decide(false, true, &DisplayServer::None),
+            ScreenMode::NoSession
+        );
+        assert!(!ScreenMode::Wayland.shares_screen());
+        assert!(ScreenMode::Synthetic.shares_screen());
+    }
+
+    #[test]
+    fn pretty_names_are_unquoted_and_capped() {
+        let t = "NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nID=ubuntu\n";
+        assert_eq!(pretty_name(t).as_deref(), Some("Ubuntu 26.04.1 LTS"));
+        let long = format!("PRETTY_NAME='{}'", "x".repeat(50));
+        assert_eq!(pretty_name(&long).unwrap().chars().count(), 32);
+        assert_eq!(pretty_name("ID=arch\n"), None);
+        assert_eq!(pretty_name("PRETTY_NAME=\"\"\n"), None);
+    }
+
+    #[test]
+    fn wayland_caps_and_the_capture_event() {
+        let caps = linux_caps(&ScreenMode::Wayland, 3);
+        assert_eq!(caps.monitors, 1);
+        assert!(!caps.features.contains(&"screen".to_string()));
+        let caps = linux_caps(
+            &ScreenMode::X11 {
+                display: ":0".into(),
+            },
+            2,
+        );
+        assert!(caps.features.contains(&"multi_monitor".to_string()));
+        let ev = wayland_capture_event(5);
+        assert_eq!(ev["kind"], "capture");
+        assert_eq!(ev["monitorId"], 1);
+        assert_eq!(ev["path"], "none");
+        assert_eq!(ev["cause"], "wayland_unsupported");
+    }
+}

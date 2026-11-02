@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod codecs;
+pub mod desk;
 pub mod elevate;
 pub mod filerecv;
 pub mod hochild;
@@ -33,7 +34,12 @@ pub mod serve;
 pub mod session;
 #[cfg(feature = "media")]
 pub mod signal;
-#[cfg(feature = "media")]
+// Phase E §7.2: voice (cpal + Opus) is its own feature; without it the same surface reports no
+// device, so the Linux build needs no ALSA and advertises no `voice`.
+#[cfg(feature = "voice")]
+pub mod voice;
+#[cfg(all(feature = "media", not(feature = "voice")))]
+#[path = "novoice.rs"]
 pub mod voice;
 #[cfg(feature = "media")]
 pub mod vp8;

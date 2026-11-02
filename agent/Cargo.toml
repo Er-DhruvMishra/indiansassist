@@ -11,11 +11,16 @@ members = [
     "crates/ia-desktop",
     "crates/ia-input-win",
     "crates/ia-capture-win",
+    "crates/ia-frame",
+    "crates/ia-capture-x11",
+    "crates/ia-input-x11",
     "crates/ia-ui",
     "crates/ia-agent",
 ]
 
-# Phase C contract §11.3: MSRV Rust 1.99; build host x86_64-pc-windows-msvc.
+# Phase C contract §11.3: MSRV Rust 1.99; build host x86_64-pc-windows-msvc. Phase E §7.1 adds
+# the Linux build (x86_64-unknown-linux-gnu, in WSL; `scripts/linux-env.sh`), so the toolchain file
+# names `stable` and each host uses its own rustup default triple.
 # The full `ia-agent` binary (features `media` + `winapi` + `gui`, default on this
 # MSVC host) links webrtc-rs, a prebuilt libvpx, libopus, rustls, cpal and egui.
 # The library crates still compile pure-Rust with no features on the gnu toolchain
@@ -88,6 +93,13 @@ shiguredo_libvpx = "=2026.2.0-canary.3"
 audiopus = "0.2.0"
 cpal = "0.15.3"
 
+# Phase E §7.2 (Linux): the X11 protocol client (pure Rust, no libX11 link; already locked as
+# 0.13.2 through arboard), the Linux clipboard, and libc for SO_PEERCRED / memfd / setsid /
+# killpg. Each crate declares them under `[target.'cfg(target_os = "linux")'.dependencies]`.
+x11rb = { version = "0.13.2", default-features = false }
+arboard = { version = "3.7.0", default-features = false }
+libc = "0.2.191"
+
 # Internal crates
 ia-core = { path = "crates/ia-core" }
 ia-platform = { path = "crates/ia-platform" }
@@ -99,11 +111,21 @@ ia-watchdog = { path = "crates/ia-watchdog" }
 ia-agent = { path = "crates/ia-agent", default-features = false }
 ia-input-win = { path = "crates/ia-input-win" }
 ia-capture-win = { path = "crates/ia-capture-win" }
+ia-frame = { path = "crates/ia-frame" }
+ia-capture-x11 = { path = "crates/ia-capture-x11" }
+ia-input-x11 = { path = "crates/ia-input-x11" }
 ia-ui = { path = "crates/ia-ui" }
 
 # The ladder downscale and the BGRA->I420 converter are per-pixel loops: optimise them in dev /
 # test builds too, so the pump (and its loopback tests) run near real time without `--release`.
 [profile.dev.package.ia-capture-win]
+opt-level = 3
+
+# The same loops, moved to `ia-frame` (Phase E §7.2), and the X11 capturer's tile hash.
+[profile.dev.package.ia-frame]
+opt-level = 3
+
+[profile.dev.package.ia-capture-x11]
 opt-level = 3
 
 [profile.release]

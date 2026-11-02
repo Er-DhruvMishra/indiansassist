@@ -155,7 +155,38 @@ fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>
     )
 }
 
-#[cfg(not(all(windows, feature = "winapi")))]
+/// Phase E §7.2: XTEST input (with the rule 7.3c pre-injection guard) and the X11 clipboard in
+/// an X11 session; nothing on Wayland (input and clipboard are not advertised there) or when
+/// capture is synthetic.
+#[cfg(all(target_os = "linux", feature = "x11"))]
+fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
+    if synthetic {
+        return (Box::new(NoopInput), Box::new(NoopClip));
+    }
+    let Some(crate::desk::ScreenMode::X11 { display }) = crate::desk::current() else {
+        return (Box::new(NoopInput), Box::new(NoopClip));
+    };
+    let input: Box<dyn InputSink> = match ia_input_x11::X11Input::open(&display) {
+        Ok(i) => Box::new(i),
+        Err(e) => {
+            tracing::warn!("X11 input could not start: {e}");
+            Box::new(NoopInput)
+        }
+    };
+    let clip: Box<dyn ClipboardBridge> = match ia_input_x11::X11Clipboard::new() {
+        Some(c) => Box::new(c),
+        None => {
+            tracing::warn!("X11 clipboard could not start");
+            Box::new(NoopClip)
+        }
+    };
+    (input, clip)
+}
+
+#[cfg(not(any(
+    all(windows, feature = "winapi"),
+    all(target_os = "linux", feature = "x11")
+)))]
 fn platform_io(_synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
     (Box::new(NoopInput), Box::new(NoopClip))
 }
@@ -195,6 +226,20 @@ fn capture_monitors(cli: &Cli) -> Vec<MonitorInfo> {
         if !m.is_empty() {
             return m;
         }
+    }
+    // Phase E §7.4 / §7.5: the RandR monitors of an X11 session; the one placeholder a Wayland
+    // session advertises (never captured, no video track).
+    match crate::desk::detect(cli.synthetic_capture) {
+        crate::desk::ScreenMode::X11 { display } => {
+            let m = crate::desk::x11_monitors(&display);
+            if !m.is_empty() {
+                return m;
+            }
+        }
+        crate::desk::ScreenMode::Wayland | crate::desk::ScreenMode::NoSession => {
+            return vec![crate::desk::wayland_placeholder_monitor()];
+        }
+        _ => {}
     }
     SyntheticCapturer::single(1280, 720).enumerate()
 }
@@ -627,6 +672,11 @@ pub async fn run_live_session(
         if cfg!(feature = "dev") {
             warnings.push("Development build: local testing switches are enabled.".into());
         }
+        // Phase E §7.4: a Wayland session is told, in the consent window, that its screen
+        // cannot be shared and what still works.
+        if crate::desk::current().is_some_and(|m| !m.shares_screen()) {
+            warnings.push(ia_platform::linux::display::WAYLAND_NOTICE.into());
+        }
         let req = ConsentRequest {
             technician: info.technician.clone(),
             org: info.org.clone(),
@@ -793,7 +843,7 @@ async fn connect_and_serve(
     // BEFORE the handshake (F7), then offer.
     let peer = AgentPeer::new(
         PeerRole::Desk,
-        &monitor_ids,
+        &crate::desk::video_ids(&monitor_ids),
         false,
         crate::peer::configuration(ice_servers.clone()),
     )
@@ -1003,6 +1053,8 @@ struct PendingElevation {
 /// How the blocking half of §7.3 step 3 ended (the image hold, the pipe, the UAC prompt and
 /// the blob write all block, so they run on a blocking task).
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Only the Windows hand-over constructs the first two (Linux has no elevation, Phase E 7.3d).
+#[cfg_attr(not(all(windows, feature = "winapi")), allow(dead_code))]
 enum HandoverLaunch {
     /// The child was launched and the blob was written to it.
     Delivered { pid: u32 },
@@ -2587,6 +2639,16 @@ async fn serve(
         remote_audio_tx,
         mut remote_audio_rx,
     } = io;
+    // §3.6 M3: each monitor carries the SDP mid of its track, so the console binds the right
+    // stream when more than one monitor is shared (Phase E §7.5: an X11 Desk with two RandR
+    // monitors offers two tracks; with one track the console falls back to the only stream).
+    let mut monitors = monitors;
+    let mids = peer.monitor_mids().await;
+    for m in &mut monitors {
+        if let Some(mid) = mids.get(&m.id) {
+            m.mid = Some(mid.clone());
+        }
+    }
     let viewed = monitors
         .iter()
         .find(|m| m.primary)
@@ -2652,6 +2714,15 @@ async fn serve(
     });
     live.seal("ia.control", &monitors_event.to_string()).await;
     live.send_level_event().await;
+    // Phase E §7.4: a Wayland Desk says once, as the control channel opens, that it shares no
+    // screen (no video track was offered).
+    if crate::desk::current().is_some_and(|m| !m.shares_screen()) {
+        live.seal(
+            "ia.control",
+            &crate::desk::wayland_capture_event(now_ms()).to_string(),
+        )
+        .await;
+    }
     // Rule 3.5b: when nobody answered the consent, nobody can read the security code out
     // either, so the device attests it with its identity key. The worker holds no key — it
     // asks the service over the §4.2 pipe and forwards the signature.
@@ -2710,6 +2781,8 @@ async fn serve(
     let mut last_meter = MeterSnapshot::take(&ctl.meter);
     let mut last_rung = abr.rung();
     let mut last_target = ctl.target_kbps();
+    // Phase E §7.2 / §16.2: the X11 capture path last reported in a `ctl.event capture`.
+    let mut reported_path: Option<CapturePath> = None;
 
     // The server-recorder leg (contract §9 R2): a second PC answering the recorder's offer.
     let mut rec = RecorderLegs::new(
@@ -2820,7 +2893,12 @@ async fn serve(
                     tracing::info!(from = last_rung.as_str(), to = decision.rung.as_str(), remb_kbps = remb, loss_permille = loss, target_kbps = decision.target_kbps, sent_kbps = interval.sent_kbps, "abr rung change");
                     last_rung = decision.rung;
                 }
-                let s = build_stats(&monitors, viewed, path_from_u8(capture_path.load(Ordering::Relaxed)), &interval, &decision, ctl.has_recorder());
+                let path_now = path_from_u8(capture_path.load(Ordering::Relaxed));
+                if let Some(ev) = x11_capture_change(reported_path, path_now, viewed, now_ms()) {
+                    reported_path = Some(path_now);
+                    live.seal("ia.control", &ev.to_string()).await;
+                }
+                let s = build_stats(&monitors, viewed, path_now, &interval, &decision, ctl.has_recorder());
                 live.seal("ia.ctrl", &s.to_wire().to_string()).await;
             }
             _ = prompt_iv.tick() => {
@@ -3348,7 +3426,38 @@ fn path_from_u8(v: u8) -> CapturePath {
     match v {
         x if x == CapturePath::Dda as u8 => CapturePath::Dda,
         x if x == CapturePath::Projection as u8 => CapturePath::Projection,
+        x if x == CapturePath::Xshm as u8 => CapturePath::Xshm,
+        x if x == CapturePath::Xgetimage as u8 => CapturePath::Xgetimage,
+        x if x == CapturePath::None as u8 => CapturePath::None,
         _ => CapturePath::Gdi,
+    }
+}
+
+/// Phase E §7.2 / §16.2 (C §5.1 `capture`): the event for an X11 capture path change, if any.
+/// The first X11 path seen and every later switch (MIT-SHM to `GetImage`) are `start`; the pump
+/// publishing `none` (the X connection was lost) is `x11_lost`, reported once. Windows paths are
+/// never reported here (unchanged Windows behaviour).
+fn x11_capture_change(
+    reported: Option<CapturePath>,
+    now: CapturePath,
+    monitor_id: u32,
+    ts: i64,
+) -> Option<Value> {
+    if reported == Some(now) {
+        return None;
+    }
+    match now {
+        CapturePath::Xshm => Some(crate::desk::capture_event(monitor_id, "xshm", "start", ts)),
+        CapturePath::Xgetimage => Some(crate::desk::capture_event(
+            monitor_id,
+            "xgetimage",
+            "start",
+            ts,
+        )),
+        CapturePath::None if reported.is_some() => Some(crate::desk::capture_event(
+            monitor_id, "none", "x11_lost", ts,
+        )),
+        _ => None,
     }
 }
 
@@ -3567,5 +3676,27 @@ mod tests {
         assert_eq!(r["ok"], json!(false));
         assert_eq!(r["error"]["code"], json!("refused"));
         assert!(r["ts"].as_u64().is_some());
+    }
+
+    #[test]
+    fn x11_capture_paths_are_reported_once_and_a_lost_connection_is_x11_lost() {
+        let ev = x11_capture_change(None, CapturePath::Xshm, 1, 5).unwrap();
+        assert_eq!(ev["kind"], "capture");
+        assert_eq!(ev["path"], "xshm");
+        assert_eq!(ev["cause"], "start");
+        assert!(x11_capture_change(Some(CapturePath::Xshm), CapturePath::Xshm, 1, 6).is_none());
+        let ev = x11_capture_change(Some(CapturePath::Xshm), CapturePath::Xgetimage, 2, 7).unwrap();
+        assert_eq!(ev["path"], "xgetimage");
+        assert_eq!(ev["monitorId"], 2);
+        let ev = x11_capture_change(Some(CapturePath::Xgetimage), CapturePath::None, 2, 8).unwrap();
+        assert_eq!(ev["cause"], "x11_lost");
+        assert_eq!(ev["path"], "none");
+        // Windows paths and a `none` with nothing reported before say nothing.
+        assert!(x11_capture_change(None, CapturePath::Gdi, 1, 9).is_none());
+        assert!(x11_capture_change(None, CapturePath::Dda, 1, 9).is_none());
+        assert!(x11_capture_change(None, CapturePath::None, 1, 9).is_none());
+        for p in CapturePath::ALL {
+            assert_eq!(path_from_u8(p as u8), p);
+        }
     }
 }

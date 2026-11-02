@@ -24,7 +24,6 @@ import {
   INTEGRATION_TYPES,
   LIMITS,
   LOGIN_METHODS,
-  NotBuiltError,
   ORG_SECRET_PURPOSES,
   PUBLIC_EMAIL_DOMAINS,
   REDACTION_KINDS,
@@ -525,7 +524,8 @@ describe('enterprise/summary and rest-summary', () => {
     expect(ok(redactionCountsSchema, missing)).toBe(false);
   });
   it('stream-owned behaviour is a named stub until its stream fills it; luhnValid is the Phase A one', () => {
-    expect(() => redactText('a@b.co', newRedactionState())).toThrow(NotBuiltError);
+    // Filled by the ai stream (enterprise-redact.test.ts covers the rules).
+    expect(redactText('a@b.co', newRedactionState())).toBe('[email-1]');
     expect(luhnValid('4111111111111111')).toBe(true);
     expect(luhnValid('4111111111111112')).toBe(false);
   });

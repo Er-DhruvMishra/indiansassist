@@ -126,6 +126,22 @@ fn source_wire(src: TokenSource) -> &'static str {
     }
 }
 
+/// The `desk.hello` capabilities of this Desk: C §3.1 on Windows, Phase E §7.5 on Linux (the
+/// RandR monitor count in an X11 session, the no-screen set on Wayland).
+fn desk_capabilities(cli: &Cli, has_voice: bool) -> ia_core::types::AgentCapabilities {
+    if !cfg!(target_os = "linux") {
+        return windows_capabilities(1, false, has_voice);
+    }
+    let mode = crate::desk::detect(cli.synthetic_capture);
+    let monitors = match &mode {
+        crate::desk::ScreenMode::X11 { display } => crate::desk::x11_monitors(display).len(),
+        _ => 1,
+    };
+    let caps = crate::desk::linux_caps(&mode, monitors);
+    tracing::info!(?mode, monitors = caps.monitors, features = ?caps.features, "linux capabilities");
+    caps
+}
+
 /// Run the hello/knock/poll exchange, up to `budget`. Returns how it ended.
 pub async fn run_signaling(
     cli: &Cli,
@@ -161,7 +177,7 @@ pub async fn run_signaling(
     let signal_url = resolve_signal_url(cli);
     let id = AgentIdentity {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        os_version: "10.0".to_string(),
+        os_version: crate::desk::os_version(),
         arch: arch().to_string(),
     };
     tracing::info!(%signal_url, "connecting to signaling");
@@ -176,7 +192,7 @@ pub async fn run_signaling(
     // Voice is advertised only when a default capture and render device exist (§6.3).
     let has_voice = crate::voice::voice_available();
     tracing::info!(has_voice, "voice capability");
-    let caps = windows_capabilities(1, false, has_voice);
+    let caps = desk_capabilities(cli, has_voice);
     client
         .desk_hello(&token_string(token), None, &id, source_wire(source), &caps)
         .await?;

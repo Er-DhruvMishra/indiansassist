@@ -18,6 +18,14 @@
 //! * `timeoutSec` reached => the job is terminated, `exit: null, error: 'timeout'`;
 //!   [`RunHandle::cancel`] => `error: 'cancelled'`.
 //!
+//! **Linux (Phase E §7.8).** The `sh` runner runs `/bin/sh /dev/fd/3` with the verified body on
+//! **file descriptor 3** (a sealed `memfd`, never a file on disk) and **stdin from `/dev/null`**
+//! (a body on stdin could be consumed by any command in it that reads stdin, and a running script
+//! could read its own remaining text); the arguments are `IA_PARAM_*` environment variables only;
+//! the working directory is `$XDG_RUNTIME_DIR/indiansassist/run` (0700); `setsid()` makes the run
+//! its own process group, and a timeout or cancel kills the whole group (`killpg(SIGTERM)`, then
+//! `SIGKILL` after 2 s). The launch plan ([`sh_launch_plan`]) is pure and tested on every host.
+//!
 //! The agent never runs a playbook elevated by accident: [`never_elevated_gate`] refuses a
 //! non-elevation playbook when this process itself is elevated (the §8.4 limited-linked-token
 //! launch is not implemented, so the run is refused instead of running as administrator).
@@ -120,7 +128,14 @@ impl RunHandle {
 }
 
 /// `%LOCALAPPDATA%\IndiansAssist\run\` (the user instance's run dir, §8.4 / §11.5).
+///
+/// On Linux: `$XDG_RUNTIME_DIR/indiansassist/run` (Phase E §7.8).
 pub fn default_run_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(d) = ia_platform::linux::paths::run_dir(&ia_platform::linux::XdgEnv::from_process())
+    {
+        return d;
+    }
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
@@ -149,7 +164,12 @@ pub fn process_is_elevated() -> bool {
     {
         win::process_is_elevated()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         false
     }
@@ -207,6 +227,9 @@ struct Launched {
     child: Child,
     #[cfg(windows)]
     job: Option<win::Job>,
+    /// Linux: when the group was sent SIGTERM (SIGKILL follows after [`SH_TERM_GRACE`]).
+    #[cfg(target_os = "linux")]
+    term_sent: Option<Instant>,
     run_file: Option<PathBuf>,
     rx: mpsc::Receiver<ReaderMsg>,
 }
@@ -218,15 +241,40 @@ impl Launched {
             job.terminate();
             return;
         }
-        let _ = self.child.kill();
+        #[cfg(target_os = "linux")]
+        {
+            sh::killpg(self.child.id(), libc::SIGTERM);
+            self.term_sent = Some(Instant::now());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = self.child.kill();
+        }
+    }
+
+    /// Called on every loop turn: on Linux, a group that ignored SIGTERM gets SIGKILL after the
+    /// grace period (§7.8).
+    fn tick(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(at) = self.term_sent {
+            if at.elapsed() >= SH_TERM_GRACE {
+                sh::killpg(self.child.id(), libc::SIGKILL);
+                self.term_sent = None;
+            }
+        }
     }
 
     /// Close the job handle: `KILL_ON_JOB_CLOSE` takes any leftover grandchild with it, which
-    /// also closes the pipes they inherited so the readers reach EOF.
+    /// also closes the pipes they inherited so the readers reach EOF. On Linux the leader has
+    /// exited by now; whatever is left in its process group is killed for the same reason.
     fn release_tree(&mut self) {
         #[cfg(windows)]
         {
             self.job = None;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            sh::killpg(self.child.id(), libc::SIGKILL);
         }
     }
 }
@@ -270,6 +318,7 @@ fn run_inner<F: FnMut(RunEvent)>(spec: &RunSpec, cancel: &AtomicBool, sink: &mut
             Err(mpsc::RecvTimeoutError::Disconnected) => eofs = 2,
         }
         pump.tick(Instant::now(), sink);
+        proc.tick();
         if exited_at.is_none() && error.is_none() {
             if cancel.load(Ordering::SeqCst) {
                 error = Some(PlaybookError::Cancelled);
@@ -455,12 +504,210 @@ fn launch(spec: &RunSpec) -> std::io::Result<Launched> {
     })
 }
 
-#[cfg(not(windows))]
+/// Phase E §7.8: how long a `killpg(SIGTERM)` gets before `SIGKILL`.
+pub const SH_TERM_GRACE: Duration = Duration::from_secs(2);
+
+/// The `PATH` an `sh` playbook runs with (the inherited one is not trusted).
+pub const SH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// The pure launch plan of the Linux `sh` runner (Phase E §7.8), tested on every host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShPlan {
+    pub program: &'static str,
+    pub args: Vec<&'static str>,
+    /// The fd the body is placed on (a sealed memfd), never a file path.
+    pub body_fd: i32,
+    /// stdin is `/dev/null`.
+    pub stdin_null: bool,
+    /// Inherited variables to remove (every `IA_PARAM_*`).
+    pub env_remove: Vec<String>,
+    /// Variables to set, in order (`PATH`, then the canonical `IA_PARAM_<NAME>` values).
+    pub env_set: Vec<(String, String)>,
+    pub cwd: PathBuf,
+    /// The run is its own process group (`setsid`).
+    pub new_session: bool,
+    pub timeout: Duration,
+    pub term_grace: Duration,
+}
+
+/// Build the §7.8 plan from a spec and the inherited environment names. Secrets (D rule 9.8)
+/// are added by the launcher straight from `spec.secret_env` and never appear in the plan.
+pub fn sh_launch_plan(spec: &RunSpec, inherited: &[String]) -> ShPlan {
+    let mut env_set = vec![("PATH".to_string(), SH_PATH.to_string())];
+    env_set.extend(spec.env.iter().cloned());
+    ShPlan {
+        program: "/bin/sh",
+        args: vec!["/dev/fd/3"],
+        body_fd: 3,
+        stdin_null: true,
+        env_remove: inherited
+            .iter()
+            .filter(|k| k.to_ascii_uppercase().starts_with("IA_PARAM_"))
+            .cloned()
+            .collect(),
+        env_set,
+        cwd: spec.run_dir.clone(),
+        new_session: true,
+        timeout: spec.timeout,
+        term_grace: SH_TERM_GRACE,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn launch(spec: &RunSpec) -> std::io::Result<Launched> {
+    use std::os::unix::process::CommandExt;
+
+    if spec.interpreter != PlaybookInterpreter::Sh {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "only sh playbooks run on Linux",
+        ));
+    }
+    sh::ensure_private_dir(&spec.run_dir)?;
+    let inherited: Vec<String> = std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .collect();
+    let plan = sh_launch_plan(spec, &inherited);
+    let body = sh::sealed_memfd(spec.body.as_bytes())?;
+    let mut cmd = Command::new(plan.program);
+    cmd.args(&plan.args);
+    cmd.current_dir(&plan.cwd);
+    for k in &plan.env_remove {
+        cmd.env_remove(k);
+    }
+    for (k, v) in &plan.env_set {
+        cmd.env(k, v);
+    }
+    for (k, v) in &spec.secret_env {
+        cmd.env(k, v.expose());
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let body_fd = body.0;
+    let target_fd = plan.body_fd;
+    // SAFETY: the closure runs in the forked child before exec and calls only async-signal-safe
+    // functions (setsid, dup2, fcntl) on fds that are open in the child.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if body_fd == target_fd {
+                // dup2(3, 3) would keep FD_CLOEXEC: clear it so the body survives exec.
+                if libc::fcntl(target_fd, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(body_fd, target_fd) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn()?;
+    drop(body);
+    let (tx, rx) = mpsc::channel();
+    if let Some(out) = child.stdout.take() {
+        spawn_reader(0, out, tx.clone());
+    }
+    if let Some(err) = child.stderr.take() {
+        spawn_reader(1, err, tx.clone());
+    }
+    Ok(Launched {
+        child,
+        term_sent: None,
+        run_file: None,
+        rx,
+    })
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
 fn launch(_spec: &RunSpec) -> std::io::Result<Launched> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "playbooks run on Windows only",
+        "playbooks run on Windows and Linux only",
     ))
+}
+
+#[cfg(target_os = "linux")]
+mod sh {
+    //! The Linux runner's OS calls: the sealed memfd, the private run dir and the group kill.
+    use std::io;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::Path;
+
+    /// An owned fd, closed on drop.
+    pub struct Fd(pub i32);
+    impl Drop for Fd {
+        fn drop(&mut self) {
+            // SAFETY: we own this fd and close it once.
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+
+    /// A close-on-exec memfd holding `bytes`, sealed against any change, rewound to 0.
+    pub fn sealed_memfd(bytes: &[u8]) -> io::Result<Fd> {
+        // SAFETY: the name is a NUL-terminated literal; the flags are valid for memfd_create.
+        let fd = unsafe {
+            libc::memfd_create(
+                c"ia-playbook".as_ptr(),
+                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = Fd(fd);
+        let mut off = 0usize;
+        while off < bytes.len() {
+            // SAFETY: the pointer and length describe the live `bytes[off..]` slice.
+            let n = unsafe { libc::write(fd.0, bytes[off..].as_ptr().cast(), bytes.len() - off) };
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            off += n as usize;
+        }
+        let seals =
+            libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+        // SAFETY: plain fcntl / lseek on an fd we own.
+        unsafe {
+            if libc::fcntl(fd.0, libc::F_ADD_SEALS, seals) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::lseek(fd.0, 0, libc::SEEK_SET) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(fd)
+    }
+
+    /// Create the run dir (and parents) and make it 0700 and ours.
+    pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        let meta = std::fs::symlink_metadata(dir)?;
+        // SAFETY: getuid has no preconditions.
+        let me = unsafe { libc::getuid() };
+        if !meta.is_dir() || meta.uid() != me {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the run dir is not a directory owned by this user",
+            ));
+        }
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    }
+
+    /// Signal the whole process group led by `pid` (the run's `setsid`).
+    pub fn killpg(pid: u32, sig: i32) {
+        if pid == 0 || pid > i32::MAX as u32 {
+            return;
+        }
+        // SAFETY: killpg with a positive group id and a valid signal number.
+        unsafe {
+            libc::killpg(pid as i32, sig);
+        }
+    }
 }
 
 fn spawn_reader<R: Read + Send + 'static>(idx: usize, mut r: R, tx: mpsc::Sender<ReaderMsg>) {
@@ -1095,5 +1342,48 @@ mod tests {
         assert!(is_run_id(&"ab".repeat(16)));
         assert!(!is_run_id("..\\..\\x"));
         assert!(!is_run_id(&"g".repeat(32)));
+    }
+
+    #[test]
+    fn the_sh_launch_plan_is_the_section_7_8_one() {
+        let spec = RunSpec {
+            run_id: "ab".repeat(16),
+            interpreter: PlaybookInterpreter::Sh,
+            body: "echo hi".into(),
+            env: vec![("IA_PARAM_HOST".into(), "example.com".into())],
+            secret_env: vec![],
+            timeout: Duration::from_secs(30),
+            run_dir: PathBuf::from("/run/user/1000/indiansassist/run"),
+            limits: OutputLimits::default(),
+        };
+        let inherited = vec![
+            "HOME".to_string(),
+            "IA_PARAM_LEAK".to_string(),
+            "ia_param_lower".to_string(),
+            "PATH".to_string(),
+        ];
+        let plan = sh_launch_plan(&spec, &inherited);
+        assert_eq!(plan.program, "/bin/sh");
+        assert_eq!(
+            plan.args,
+            vec!["/dev/fd/3"],
+            "the body is on fd 3, never an argument"
+        );
+        assert_eq!(plan.body_fd, 3);
+        assert!(plan.stdin_null, "stdin is /dev/null, never the body");
+        assert!(plan.new_session, "setsid: the run is its own process group");
+        assert_eq!(plan.env_remove, vec!["IA_PARAM_LEAK", "ia_param_lower"]);
+        assert_eq!(plan.env_set[0], ("PATH".to_string(), SH_PATH.to_string()));
+        assert_eq!(
+            plan.env_set[1],
+            ("IA_PARAM_HOST".to_string(), "example.com".to_string())
+        );
+        assert!(
+            plan.env_set.iter().all(|(_, v)| !v.contains("echo hi")),
+            "the body is never in the environment"
+        );
+        assert_eq!(plan.cwd, PathBuf::from("/run/user/1000/indiansassist/run"));
+        assert_eq!(plan.timeout, Duration::from_secs(30));
+        assert_eq!(plan.term_grace, Duration::from_secs(2));
     }
 }

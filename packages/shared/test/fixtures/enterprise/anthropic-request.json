@@ -1,0 +1,42 @@
+{
+  "comment": "Phase E section 5.7 / 15.4: what buildAnthropicRequest(input, region, ackScope) must send. `expect` lists the exact top-level values; a null `betas` / `fallbacks` means the key is absent. `absent` keys must never appear, at any nesting level of the request.",
+  "input": {
+    "v": 1,
+    "promptVersion": "summary-prompt-v1",
+    "session": {
+      "tier": "p1_browser",
+      "startedAt": "2026-11-02T10:00:00.000Z",
+      "endedAt": "2026-11-02T10:12:00.000Z",
+      "durationMs": 720000,
+      "endReason": "assist_ended",
+      "path": "p2p",
+      "recorded": false,
+      "unattended": null
+    },
+    "events": [
+      { "t": "2026-11-02T10:00:05.000Z", "actor": "user", "text": "The user granted consent" },
+      { "t": "2026-11-02T10:05:00.000Z", "actor": "technician", "text": "Sent a .log file (2.1 MB)" }
+    ],
+    "transcript": null,
+    "truncated": false
+  },
+  "cases": [
+    {
+      "region": "us-east",
+      "ackScope": "in_geo",
+      "expect": { "model": "claude-opus-5-5", "max_tokens": 16000, "inference_geo": "us", "betas": null, "fallbacks": null }
+    },
+    {
+      "region": "in-mum",
+      "ackScope": "outside_region",
+      "expect": { "model": "claude-opus-5-5", "max_tokens": 16000, "inference_geo": "global", "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default" }
+    },
+    {
+      "region": "eu-fra",
+      "ackScope": "outside_region",
+      "expect": { "model": "claude-opus-5-5", "max_tokens": 16000, "inference_geo": "global", "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default" }
+    }
+  ],
+  "outputConfig": { "effort": "low", "formatType": "json_schema" },
+  "absent": ["temperature", "top_p", "top_k", "thinking", "output_format"]
+}

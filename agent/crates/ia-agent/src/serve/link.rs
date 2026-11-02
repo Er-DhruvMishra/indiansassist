@@ -175,7 +175,7 @@ pub(super) async fn rebuild_generation(
 ) -> Result<Generation, RebuildErr> {
     let peer = AgentPeer::new(
         PeerRole::Desk,
-        monitor_ids,
+        &crate::desk::video_ids(monitor_ids),
         false,
         crate::peer::configuration(ice_servers.to_vec()),
     )

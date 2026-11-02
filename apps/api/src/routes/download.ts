@@ -3,10 +3,12 @@
  * `GET /download?t=` is a two-step grant. `prepare` runs the token lookup (same failures and budgets as
  * `public-lookup`), mints a desk code for the filename (section 2.3) and a 120 s grant; `GET /download/:grant` streams
  * the build to the same IP at most 3 times (`HEAD` free), honours `Range`, refuses another region, and chains
- * `download.served` once per grant.
+ * `download.served` once per grant. Linux (Phase E section 7.6) serves the per-download `.tar.gz` of
+ * `services/linux-archive.ts`, whose bytes are a pure function of the grant, under the same rules.
  */
 import { createReadStream } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import {
   agentFileName,
   downloadPrepareSchema,
@@ -35,6 +37,8 @@ import { verifyTokenInput } from '../services/token-verify.js';
 import { requireFleetRole } from '../fleet/scope.js';
 import { authenticate } from '../plugins/auth.js';
 import { effectiveStatus } from '../lib/mappers.js';
+import type { ServedBuild } from '../services/agent-dist.js';
+import { LINUX_ARCHIVE_CONTENT_TYPE, linuxArchiveName, linuxArchiveParts, partsLength, sliceParts } from '../services/linux-archive.js';
 
 type Grant = {
   tokenId: string;
@@ -62,6 +66,19 @@ async function loadGrant(ctx: AppContext, raw: string): Promise<{ hash: string; 
     return null;
   }
 }
+
+/** The served name (C section 2.3; Phase E section 7.6): the APK's dist name, the per-download `.exe` or `.tar.gz`. */
+function servedFileName(build: ServedBuild, region: Region, deskCode: string): string {
+  if (build.platform === 'android') return build.file;
+  if (build.platform === 'linux') return linuxArchiveName(region, deskCode);
+  return agentFileName(region, deskCode);
+}
+
+const CONTENT_TYPES: Record<AgentPlatform, string> = {
+  windows: 'application/vnd.microsoft.portable-executable',
+  android: 'application/vnd.android.package-archive',
+  linux: LINUX_ARCHIVE_CONTENT_TYPE,
+};
 
 /** Parses a single `bytes=a-b` range; null = whole file, 'bad' = unsatisfiable. */
 export function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | 'bad' {
@@ -121,7 +138,7 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
       ip: req.ip,
     };
     await ctx.presence.setKey(grantKey(sha256Hex(grant)), JSON.stringify(g), LIMITS.downloadGrantTtlSec);
-    const filename = build.platform === 'android' ? build.file : agentFileName(tok.region, deskCode);
+    const filename = servedFileName(build, tok.region, deskCode);
     const out: DownloadPrepareReply = {
       url: `${ctx.config.apiOrigin}/api/v1/download/${grant}`,
       expiresAt: iso(new Date(Date.now() + LIMITS.downloadGrantTtlSec * 1000)),
@@ -148,14 +165,21 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
       uses = await ctx.presence.incr(`${grantKey(hash)}:uses`, LIMITS.downloadGrantTtlSec);
       if (uses > LIMITS.downloadGrantMaxUses) fail('link_expired', 'this download link was used up; start the download again');
     }
-    const range = parseRange(req.headers['range'], build.size);
+    // Linux: the archive of this grant (member 1 per request, member 2 cached at load); its length is the size served.
+    let parts: Buffer[] | null = null;
+    if (build.platform === 'linux') {
+      if (!build.archive) fail('link_expired', 'this build is no longer served');
+      parts = linuxArchiveParts(g.region, g.deskCode, build.archive);
+    }
+    const size = parts ? partsLength(parts) : build.size;
+    const range = parseRange(req.headers['range'], size);
     if (range === 'bad') {
-      reply.header('Content-Range', `bytes */${build.size}`);
+      reply.header('Content-Range', `bytes */${size}`);
       return reply.status(416).send();
     }
-    const filename = build.platform === 'android' ? build.file : agentFileName(g.region, g.deskCode);
+    const filename = servedFileName(build, g.region, g.deskCode);
     reply
-      .header('Content-Type', build.platform === 'android' ? 'application/vnd.android.package-archive' : 'application/vnd.microsoft.portable-executable')
+      .header('Content-Type', CONTENT_TYPES[build.platform])
       .header('Content-Disposition', `attachment; filename="${filename}"`)
       .header('X-Content-Type-Options', 'nosniff')
       .header('Cache-Control', 'private, no-store')
@@ -172,11 +196,12 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
         });
     }
     const start = range?.start ?? 0;
-    const end = range?.end ?? build.size - 1;
-    reply.header('Content-Length', String(build.size === 0 ? 0 : end - start + 1));
-    if (range) reply.header('Content-Range', `bytes ${start}-${end}/${build.size}`);
+    const end = range?.end ?? size - 1;
+    reply.header('Content-Length', String(size === 0 ? 0 : end - start + 1));
+    if (range) reply.header('Content-Range', `bytes ${start}-${end}/${size}`);
     reply.status(range ? 206 : 200);
-    if (head || build.size === 0) return reply.send();
+    if (head || size === 0) return reply.send();
+    if (parts) return reply.send(Readable.from(sliceParts(parts, start, end)));
     return reply.send(createReadStream(build.path, { start, end }));
   };
 

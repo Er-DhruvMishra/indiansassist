@@ -1,0 +1,64 @@
+{
+  "description": "Read-only sh fixture playbooks for tests/playbooks_sh.rs (Phase E section 7.8). None of them changes system state: they print, sleep, read their IA_PARAM_* environment and their stdin, or start a sleeping child that the process-group kill must take with it. They run in a temp run dir the test creates and write nothing outside it.",
+  "playbooks": [
+    {
+      "id": "00000000-0000-4000-8000-000000000101",
+      "name": "echo params",
+      "interpreter": "sh",
+      "timeoutSec": 60,
+      "parameters": [
+        { "name": "host", "label": "Host", "type": "string", "required": true, "pattern": "[A-Za-z0-9.-]{1,253}" },
+        { "name": "count", "label": "Count", "type": "int", "required": false, "min": 0, "max": 10, "default": 4 }
+      ],
+      "body": "echo \"host=$IA_PARAM_HOST count=$IA_PARAM_COUNT leak=[$IA_PARAM_LEAK]\"\necho 'to stderr' >&2\necho \"cwd=$(pwd)\"\nexit 3\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000102",
+      "name": "stdin is empty and the body is not readable",
+      "interpreter": "sh",
+      "timeoutSec": 60,
+      "parameters": [],
+      "body": "if read -r line; then echo \"stdin=[$line]\"; else echo 'stdin=eof'; fi\ncat >/dev/null\necho 'after cat'\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000103",
+      "name": "unicode",
+      "interpreter": "sh",
+      "timeoutSec": 60,
+      "parameters": [],
+      "body": "printf 'caf\\303\\251 \\340\\244\\250\\340\\244\\256\\340\\244\\270\\340\\245\\215\\340\\244\\244\\340\\245\\207 ok\\n'\nprintf 'bad \\377 byte\\n'\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000104",
+      "name": "sleep",
+      "interpreter": "sh",
+      "timeoutSec": 2,
+      "parameters": [],
+      "body": "echo started\nsleep 30\necho never\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000105",
+      "name": "grandchild",
+      "interpreter": "sh",
+      "timeoutSec": 60,
+      "parameters": [],
+      "body": "sleep 300 &\necho \"child=$!\"\nwait\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000106",
+      "name": "lots of output",
+      "interpreter": "sh",
+      "timeoutSec": 60,
+      "parameters": [],
+      "body": "i=0\nwhile [ $i -lt 4000 ]; do echo \"line $i of the output cap test\"; i=$((i+1)); done\n"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000107",
+      "name": "ignores SIGTERM",
+      "interpreter": "sh",
+      "timeoutSec": 1,
+      "parameters": [],
+      "body": "trap '' TERM\necho armed\nwhile :; do sleep 1; done\n"
+    }
+  ]
+}

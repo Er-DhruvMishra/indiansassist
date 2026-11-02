@@ -229,6 +229,50 @@ pub fn windows_features(has_voice: bool) -> Vec<String> {
         .collect()
 }
 
+/// Phase E §7.5: what a Linux agent advertises in an X11 session (`multi_monitor` only when
+/// more than one monitor is shared). No `voice` (not built on Linux), no `elevation` (7.3d).
+pub const LINUX_X11_FEATURES: &[&str] = &[
+    "screen",
+    "multi_monitor",
+    "input",
+    "input_text",
+    "clipboard",
+    "files",
+    "chat",
+    "playbooks",
+    "recorder",
+];
+
+/// Phase E §7.4 / §7.5: a Wayland session shares no screen, so it advertises only these.
+pub const LINUX_WAYLAND_FEATURES: &[&str] = &["files", "chat", "playbooks"];
+
+/// Phase E §7.5: the Linux `desk.hello.client.capabilities`. `monitors` is the RandR count
+/// (clamped 1..16) in an X11 session and 1 (the schema minimum) on Wayland; `elevation: 'user'`,
+/// VP8 / VP9, no hardware encoder, interpreter `sh`.
+pub fn linux_capabilities(monitors: u8, wayland: bool) -> AgentCapabilities {
+    let monitors = if wayland { 1 } else { monitors.clamp(1, 16) };
+    let features = if wayland {
+        LINUX_WAYLAND_FEATURES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        LINUX_X11_FEATURES
+            .iter()
+            .filter(|f| monitors > 1 || **f != "multi_monitor")
+            .map(|s| s.to_string())
+            .collect()
+    };
+    AgentCapabilities {
+        monitors,
+        elevation: ElevationLevel::User,
+        features,
+        encoders: vec![VideoEncoder::Vp8, VideoEncoder::Vp9],
+        hw_encoder: false,
+        interpreters: vec![PlaybookInterpreter::Sh],
+    }
+}
+
 /// `P3_DATA_CHANNEL_LABELS`, created by the Desk once per peer connection (contract §1.3).
 pub const P3_DATA_CHANNEL_LABELS: &[&str] = &[
     "ia.sec",
@@ -428,5 +472,30 @@ mod tests {
         assert!(json.contains("\"hwEncoder\":true"));
         let back: AgentCapabilities = serde_json::from_str(&json).unwrap();
         assert_eq!(caps, back);
+    }
+
+    #[test]
+    fn linux_capabilities_follow_section_7_5() {
+        let one = linux_capabilities(1, false);
+        assert_eq!(one.monitors, 1);
+        assert!(!one.features.contains(&"multi_monitor".to_string()));
+        assert!(one.features.contains(&"screen".to_string()));
+        assert!(one.features.contains(&"recorder".to_string()));
+        assert!(!one.features.contains(&"voice".to_string()));
+        assert!(!one.features.contains(&"elevation".to_string()));
+        assert_eq!(one.interpreters, vec![PlaybookInterpreter::Sh]);
+        assert_eq!(one.encoders, vec![VideoEncoder::Vp8, VideoEncoder::Vp9]);
+        assert!(!one.hw_encoder);
+        assert_eq!(one.elevation, ElevationLevel::User);
+        let two = linux_capabilities(2, false);
+        assert_eq!(two.monitors, 2);
+        assert!(two.features.contains(&"multi_monitor".to_string()));
+        assert_eq!(linux_capabilities(40, false).monitors, 16);
+        let w = linux_capabilities(3, true);
+        assert_eq!(w.monitors, 1);
+        assert_eq!(w.features, vec!["files", "chat", "playbooks"]);
+        for f in LINUX_X11_FEATURES.iter().chain(LINUX_WAYLAND_FEATURES) {
+            assert!(AGENT_FEATURES.contains(f), "{f} is a shared feature name");
+        }
     }
 }

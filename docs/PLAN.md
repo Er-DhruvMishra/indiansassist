@@ -176,3 +176,36 @@ keyboard-only accessibility spec (`e2e:p4`). The api table of section 15.3 has n
 - **Android emulator e2e: closed (1 Nov 2026, `6b9e946`).** `IA_EMULATOR=1 pnpm android:e2e` passes
   17/17 on Pixel 7 API 35, including "Stop ends the session as `desk_stopped`". The earlier failure
   was the harness, not the app: the logcat step encoding turned underscores into spaces.
+
+**Phase E (cross-platform and enterprise): built and verified (2 Nov 2026).** The contract is
+`docs/specs/phase-e-contracts.md` revision 4. A foundation stream (`db33004`) landed the shared
+names, schemas and empty hooks; five streams then built in parallel: **sso** (OIDC with PKCE, SAML
+2.0 SP, verified domains by DNS TXT, JIT provisioning, SSO required with break-glass),
+**tickets** (Jira, ServiceNow, Freshdesk, Zoho Desk and a signed webhook, with a retrying push
+lifecycle), **ai** (session summaries from a redacted transcript, an in-region `local` provider
+and an opt-in `anthropic` provider on `claude-opus-5-5`), **residency** (the signed data residency
+report, verifiable offline with `scripts/verify-residency.mjs`) and **linux** (the portable agent
+on X11: RandR multi-monitor MIT-SHM capture, XTEST input, `sh` playbooks, honest Wayland refusal,
+a glibc 2.35 release build). macOS and iOS are specified in section 8 and not built.
+
+- **Coordinator verification across all streams together.** `pnpm build typecheck lint`; tests
+  shared 554, db 81 (+3 skipped), api 566, web 381, extension 129 (**1,711**); `test:scripts` 48;
+  `license:check`; `agent:fixtures --check`; `fleet:fixtures --check`; `validate:infra`. Rust on
+  Windows: fmt and clippy clean, `cargo test --workspace --all-features` **616 passed, 0 failed,
+  2 ignored**. Against one throwaway api on 4125: `smoke:e` **47/47** (sso, tickets, ai,
+  residency), and on a fresh api `smoke` 26/26, `smoke:p2` 14/14, `smoke:p3` 12/12, `smoke:p4`
+  15/15. `pnpm e2e:e` passes all four keyboard-only enterprise specs; `pnpm e2e:p3` still passes
+  on Windows. The linux stream's WSL gates: 515 headless tests (16 X11 tests ignored there), 16/16
+  under a harness-owned Xvfb, the release ELF gate, and `pnpm e2e:p3:linux` 3/3 (synthetic, X11,
+  Wayland).
+- **Integration fixes by the coordinator.** `SSO_DEV_DNS_SERVERS` moved into config (refused in
+  production and without loopback egress); a null ticket `externalId` end to end; the default
+  Playwright suite's api now carries the Phase E local-fake seams, so `pnpm e2e:e` is one
+  command; the console greys Control for a Desk without `input` and explains a missing
+  `clipboard` feature; `e2e:p3:linux` added to `package.json` and refuses ports 4000, 4100, 4105.
+- **Still open.** The vendor request shapes for ServiceNow, Jira and Freshdesk and the Zoho
+  data-centre hosts need checking against vendor documentation (Zoho stays empty until then); the
+  residency print has about 7 px of headroom on one A4 page; compose never passes
+  `FLEET_DATA_KEY` to the api (a Phase D defect); on Linux the `portal` Wayland capture, a Keep
+  control, and a run against a real window manager and session bus are not done, and self-delete
+  of the built binary was never executed in automation (section 15.8).

@@ -22,6 +22,7 @@ import { TextBuffer, modifiersOf, norm, type KeyLike } from './agentInput';
 import { addRun, applyOpError, runErrorText } from './agentPlaybooks';
 import { controlBlocker, hasFeature, levelAllows, type ElevationUiState } from './agentState';
 import { SAS_GATE_INITIAL, checkSas, type SasCheck, type SasGateState } from './sasGate';
+import { registerLiveConsole } from '../../summary/liveConsoles';
 
 type Mods = { alt: boolean; ctrl: boolean; meta: boolean; shift: boolean };
 const NO_MODS: Mods = { alt: false, ctrl: false, meta: false, shift: false };
@@ -45,8 +46,17 @@ export class AgentConsoleController extends AgentControllerCore {
   private mic: MediaStream | null = null;
   private micPending = false;
 
+  /** Phase E 5.3: the transcript hook finds this console by session id (stream ai). */
+  private readonly unregisterLive: () => void;
+
   constructor(private readonly d: AgentConsoleDeps) {
     super(d);
+    this.unregisterLive = registerLiveConsole(d.sessionId, this);
+  }
+
+  override dispose(): void {
+    this.unregisterLive();
+    super.dispose();
   }
 
   // ---------- control events ----------

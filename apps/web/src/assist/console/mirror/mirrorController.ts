@@ -30,6 +30,7 @@ import type { ConsolePhase } from '../controller';
 import type { AnyReport } from './controlClient';
 import { MirrorPlane, EMPTY_PLANE, type PlaneSnap } from './mirrorPlane';
 import { MirrorRecording, type MirrorRecordingSnap } from './mirrorRecording';
+import { registerLiveConsole } from '../../summary/liveConsoles';
 import type { MirrorAckMsg } from './mirrorReceiver';
 import type { ReplayerBridge } from './replayerBridge';
 
@@ -106,8 +107,12 @@ export class MirrorConsoleController extends SessionControllerBase<MirrorSnapsho
   private statTick = 0;
   private lastTransportBytes: { at: number; bytes: number } | null = null;
 
+  /** Phase E 5.3: the transcript hook finds this console by session id (stream ai). */
+  private readonly unregisterLive: () => void;
+
   constructor(private readonly deps: MirrorControllerDeps) {
     super(INITIAL, 'assist', deps.getUserMedia);
+    this.unregisterLive = registerLiveConsole(deps.sessionId, this);
     this.rec = new MirrorRecording({
       sessionId: deps.sessionId,
       assist: () => deps.assist,
@@ -395,6 +400,7 @@ export class MirrorConsoleController extends SessionControllerBase<MirrorSnapsho
   }
 
   dispose(): void {
+    this.unregisterLive();
     this.teardown();
     this.plane.dispose();
     for (const off of this.offs) off();

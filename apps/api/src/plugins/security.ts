@@ -18,6 +18,19 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Routes on which a listed extension origin passes the CSRF origin rule (Phase B Y21); the header stays required. */
 export const EXTENSION_ORIGIN_ROUTES = new Set(['/api/v1/tokens/public-lookup']);
 
+/**
+ * Phase E section 3.5 S3: the SAML ACS is exempt from the CSRF rule. The IdP's browser POST carries no
+ * `X-Requested-With` and a foreign `Origin`; its authenticity is the signed assertion, the single-use flow record bound
+ * to the route's org and the per-flow binding cookie. This pattern is the only entry.
+ */
+export const CSRF_EXEMPT_ROUTES: readonly { method: string; path: RegExp }[] = [
+  { method: 'POST', path: /^\/api\/v1\/auth\/sso\/saml\/[0-9a-fA-F-]{36}\/acs$/ },
+];
+
+export function csrfExempt(method: string, path: string): boolean {
+  return CSRF_EXEMPT_ROUTES.some((r) => r.method === method.toUpperCase() && r.path.test(path));
+}
+
 export function csrfOk(
   method: string,
   headers: Record<string, string | string[] | undefined>,
@@ -43,6 +56,7 @@ export async function registerSecurity(app: FastifyInstance, ctx: AppContext): P
   app.addHook('onRequest', async (req) => {
     if (!req.url.startsWith('/api/v1/')) return;
     const path = req.url.split('?')[0] ?? '';
+    if (csrfExempt(req.method, path)) return;
     const extOk = EXTENSION_ORIGIN_ROUTES.has(path) ? (o: string) => isExtensionOrigin(ctx.config, o) : undefined;
     if (!csrfOk(req.method, req.headers, ctx.config.webOrigin, extOk))
       throw new HttpError('csrf_failed', 'missing or invalid CSRF header or origin');
@@ -66,4 +80,8 @@ export async function registerSecurity(app: FastifyInstance, ctx: AppContext): P
 export const limits = {
   auth: { rateLimit: { max: 10, timeWindow: 60_000 } },
   publicLookup: { rateLimit: { max: 30, timeWindow: 60_000 } },
+  // Phase E section 2.5 (per IP; NAT-friendly).
+  ssoDiscover: { rateLimit: { max: 120, timeWindow: 60_000 } },
+  ssoBegin: { rateLimit: { max: 120, timeWindow: 60_000 } },
+  ssoReturn: { rateLimit: { max: 300, timeWindow: 60_000 } },
 };

@@ -40,11 +40,22 @@ import { toSeat, toUser } from '../lib/mappers.js';
 import { parseOr400 } from '../lib/validate.js';
 import { authenticate } from '../plugins/auth.js';
 import { afterTokenRevoked, revokeTokenRow } from '../services/token-revoke.js';
+import { clearBreakGlass, countUsableBreakGlass } from '../sso/repo.js';
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function checkTier(org: OrgRow, tier: PackageTier): void {
   if (!tierWithin(tier, org.planTier)) fail('tier_not_licensed', `the org plan does not include ${tier}`);
+}
+
+/**
+ * Phase E rule 3.7e: while SSO is required, the last usable break-glass administrator cannot be moved off org_admin
+ * or disabled.
+ */
+async function guardLastBreakGlass(ctx: AppContext, org: OrgRow, target: UserRow): Promise<void> {
+  if (!org.ssoRequired || !target.ssoBreakGlass) return;
+  if ((await countUsableBreakGlass(ctx.db, org.id, target.id)) === 0)
+    fail('last_break_glass', 'SSO is required and this is the last break-glass administrator');
 }
 
 async function orgUser(ctx: AppContext, org: OrgRow, id: string): Promise<UserRow> {
@@ -102,11 +113,15 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
     if (target.role === 'org_admin' && body.role !== 'org_admin' && target.status === 'active') {
       if ((await countOrgAdmins(ctx.db, p.org.id, 'active')) <= 1) fail('last_org_admin', 'the org needs an admin');
     }
+    const demotesBreakGlass = target.ssoBreakGlass && body.role !== 'org_admin';
+    if (demotesBreakGlass) await guardLastBreakGlass(ctx, p.org, target);
     const seat = await getSeatByUser(ctx.db, target.id);
     const toTier: PackageTier | null = roleHasSeat(body.role) ? (body.tier ?? seat?.tier ?? 'p1_browser') : null;
     if (toTier) checkTier(p.org, toTier);
     const updated = await ctx.db.transaction(async (tx) => {
       const u = await updateUser(tx, target.id, { role: body.role });
+      // Rule 3.7e: break-glass is an org_admin flag; a demotion clears it in the same transaction.
+      if (demotesBreakGlass) await clearBreakGlass(tx, target.id);
       if (toTier && seat) await updateSeat(tx, target.id, { tier: toTier });
       else if (toTier) await createSeat(tx, { orgId: p.org.id, userId: target.id, tier: toTier });
       else if (seat) await deleteSeatByUser(tx, target.id);
@@ -131,10 +146,14 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext): Promise
     if (body.status === 'disabled' && target.role === 'org_admin' && target.status === 'active') {
       if ((await countOrgAdmins(ctx.db, p.org.id, 'active')) <= 1) fail('last_org_admin', 'the org needs an admin');
     }
+    const disablesBreakGlass = body.status === 'disabled' && target.ssoBreakGlass;
+    if (disablesBreakGlass) await guardLastBreakGlass(ctx, p.org, target);
     const actor = userActor(p.user);
     const revokedTokenIds: string[] = [];
     const updated = await ctx.db.transaction(async (tx) => {
       const u = await updateUser(tx, target.id, { status: body.status });
+      // A disabled user cannot be a break-glass administrator (rule 3.7a requires every one active).
+      if (disablesBreakGlass) await clearBreakGlass(tx, target.id);
       let revokedSessions = 0;
       if (body.status === 'disabled') {
         revokedSessions = await revokeUserAuthSessions(tx, target.id);

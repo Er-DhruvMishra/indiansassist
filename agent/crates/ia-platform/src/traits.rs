@@ -1,4 +1,5 @@
-//! The platform traits (contract §11.1). Implementations are Windows-only in Phase C.
+//! The platform traits (contract §11.1). Windows implementations since Phase C; the Linux X11
+//! ones (`ia-capture-x11`, `ia-input-x11`, [`crate::linux`]) since Phase E §7.2.
 
 use ia_core::types::MonitorInfo;
 
@@ -16,7 +17,9 @@ pub struct Frame {
 /// Screen capture of one or more monitors (DXGI/GDI on Windows, §4.1).
 pub trait Capturer: Send {
     fn enumerate(&self) -> Vec<MonitorInfo>;
-    /// Grab the next frame for `monitor_id`, or `None` if nothing changed (dirty-rect aware).
+    /// Grab the next frame for `monitor_id`. When nothing changed the capturer returns the last
+    /// frame again (DXGI on a wait timeout, X11 when no tile changed), so the encoder keeps its
+    /// pace; `None` only for an unknown monitor or before any frame could be read.
     fn next_frame(&mut self, monitor_id: u32) -> Option<Frame>;
 }
 
@@ -35,6 +38,21 @@ pub trait InputSink: Send {
     /// The default is "this platform cannot", so a Phase C sink and the Phase E platforms
     /// answer honestly without implementing anything, and the op reports `not_supported`.
     fn block_local_input(&mut self, _locked: bool) -> bool {
+        false
+    }
+    /// Phase E rule 7.3c: whether this sink refuses a pointer or scroll event **before** injecting
+    /// it, because the point lies inside one of the agent's own windows (consent window, pill,
+    /// panel, prompts). The control server answers a refusal with `ctl.res { ok: false, error:
+    /// 'not_allowed' }` and counts it as refused, exactly as C §3.5 answers on Windows.
+    ///
+    /// The default is "never": on Windows the §3.5 low-level hooks drop tagged events after
+    /// injection instead, because Windows marks injected events and X11 does not.
+    fn refuses_pointer(&mut self, _monitor: &MonitorInfo, _nx: f32, _ny: f32) -> bool {
+        false
+    }
+    /// Phase E rule 7.3c: whether this sink refuses a key or text event before injecting it,
+    /// because an agent window holds the input focus. Default "never" (see [`Self::refuses_pointer`]).
+    fn refuses_keyboard(&mut self) -> bool {
         false
     }
 }

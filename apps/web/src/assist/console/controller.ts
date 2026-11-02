@@ -14,6 +14,7 @@ import { SessionControllerBase, type GetUserMedia } from '../../lib/sessionBase'
 import type { SignalClient } from '../../lib/signal';
 import { computeNetStats, type NetStats } from '../../lib/stats';
 import { asClient } from '../../lib/wire';
+import { registerLiveConsole } from '../summary/liveConsoles';
 import { ConsoleRecording, type RecorderFactory } from './consoleRecording';
 import { CONSOLE_INITIAL, serverRecordingFromPolicy, type ConsoleSnapshot } from './consoleState';
 
@@ -58,7 +59,11 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
       audioSources: () => [this.snap.remoteAudio, this.mic].filter((s): s is MediaStream => s !== null),
       createRecorder: deps.createRecorder,
     });
+    // Phase E 5.3: the transcript hook finds this console by session id (stream ai).
+    this.unregisterLive = registerLiveConsole(deps.sessionId, this);
   }
+
+  private readonly unregisterLive: () => void;
 
   protected signalClient(): SignalClient {
     return this.deps.signal;
@@ -361,6 +366,7 @@ export class AssistConsoleController extends SessionControllerBase<ConsoleSnapsh
 
   /** Unmount: hard rule 2 locally (an upload in flight continues); the 30 s grace allows `assist.resume`. */
   dispose(): void {
+    this.unregisterLive();
     this.teardown();
     for (const off of this.offs) off();
     this.offs = [];

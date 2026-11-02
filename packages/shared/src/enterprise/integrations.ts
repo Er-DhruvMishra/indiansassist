@@ -6,6 +6,7 @@
  */
 import { z } from 'zod';
 import {
+  LIMITS,
   PACKAGE_TIERS,
   TICKET_FAILURE_CAUSES,
   TICKET_PRIORITIES,
@@ -16,7 +17,9 @@ import {
 } from '../enums.js';
 import type { Region } from '../regions.js';
 import { emailSchema, hex64Schema, isoTimestampSchema, uuidSchema } from '../schemas/common.js';
-import { notBuilt } from './not-built.js';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha2';
+import { base64urlDecode, bytesToHex, constantTimeEqual, utf8Encode } from '../encoding.js';
 import type { SessionSummaryOutput } from './summary.js';
 
 /** Receivers refuse a webhook timestamp further than this from their clock (section 4.5). */
@@ -190,38 +193,141 @@ export type RenderTicketBodyInput = {
   session: TicketContent['session'];
 };
 
-/** Section 4.3: the plain-text ticket body with its footer (tickets stream). */
-export function renderTicketBody(_input: RenderTicketBodyInput): string {
-  return notBuilt('tickets', 'renderTicketBody');
+/** Section 4.4d: the wait after attempt n (n = 1..5); later attempts reuse the last step. */
+export const TICKET_RETRY_SCHEDULE_SEC = [30, 120, 600, 1800, 7200] as const;
+
+/** Section 4.1: `Retry-After` (and the schedule) is capped at this many seconds. */
+export const TICKET_RETRY_AFTER_CAP_SEC = 7200;
+
+/** The footer marker line of a ticket body (section 4.3). */
+const FOOTER_RULE = '—';
+
+function chainWord(v: boolean | null): string {
+  return v === null ? 'not checked' : v ? 'yes' : 'no';
 }
 
-/** Section 4.1: the failure cause of an upstream status, or of a transport failure when `status` is null (tickets stream). */
-export function classifyHttpFailure(_status: number | null, _sent: boolean): TicketFailureCause {
-  return notBuilt('tickets', 'classifyHttpFailure');
+/** Cuts `s` to at most `max` characters, at the last whitespace when one is near, ending with an ellipsis. */
+function cutText(s: string, max: number): string {
+  if (s.length <= max) return s;
+  if (max <= 1) return s.slice(0, Math.max(0, max));
+  const head = s.slice(0, max - 1);
+  const ws = head.search(/\s\S*$/);
+  return `${(ws > max / 2 ? head.slice(0, ws) : head).replace(/\s+$/, '')}…`;
 }
 
-/** Section 4.4c: whether a failed attempt is retried automatically (tickets stream). */
-export function isAutoRetryable(_failure: TicketFailure, _type: IntegrationType): boolean {
-  return notBuilt('tickets', 'isAutoRetryable');
+/**
+ * Section 4.3: the plain-text ticket body. `summary`: the summary's `ticketNote`, a blank line, "Actions taken:" with
+ * each item as `- item`, "Follow-ups:" likewise (each list only when non-empty), then the footer. `manual`: the
+ * technician's note, then the footer. Footer: a line `—`, `Remote session: <url>`, `Audit chain verified: yes | no |
+ * not checked`, `IndiansAssist session <first 8 chars of id>`. The whole body stays within `ticketBodyMax` (20000):
+ * the note part is cut at a word boundary with an ellipsis when it would not fit beside the footer.
+ */
+export function renderTicketBody(input: RenderTicketBodyInput): string {
+  const footer = [
+    FOOTER_RULE,
+    `Remote session: ${input.session.url}`,
+    `Audit chain verified: ${chainWord(input.session.chainVerified)}`,
+    `IndiansAssist session ${input.session.id.slice(0, 8)}`,
+  ].join('\n');
+  let head: string;
+  if (input.source === 'summary') {
+    if (!input.summary) throw new Error('renderTicketBody: a summary push needs the summary output');
+    const blocks = [input.summary.ticketNote.trim()];
+    if (input.summary.actionsTaken.length > 0) blocks.push(['Actions taken:', ...input.summary.actionsTaken.map((a) => `- ${a}`)].join('\n'));
+    if (input.summary.followUps.length > 0) blocks.push(['Follow-ups:', ...input.summary.followUps.map((a) => `- ${a}`)].join('\n'));
+    head = blocks.join('\n\n');
+  } else {
+    if (input.note === null || input.note.trim() === '') throw new Error('renderTicketBody: a manual push needs a note');
+    head = input.note.trim();
+  }
+  const room = LIMITS.ticketBodyMax - footer.length - 2;
+  return `${cutText(head, room)}\n\n${footer}`;
 }
 
-/** Section 4.4d: when attempt `attempt + 1` is due (tickets stream). */
-export function nextRetryAt(_attempt: number, _retryAfterSec: number | null, _now: Date): Date {
-  return notBuilt('tickets', 'nextRetryAt');
+/**
+ * Section 4.1: the failure cause of an upstream status, or of a transport failure when `status` is null: 401 `auth`,
+ * 403 `forbidden`, 404 `not_found`, 400 / 409 / 422 (and any other 4xx) `validation`, 429 `rate_limited`, 5xx (and any
+ * other unexpected status) `upstream_error`; no status: `unreachable` when nothing can have been sent, else `timeout`.
+ */
+export function classifyHttpFailure(status: number | null, sent: boolean): TicketFailureCause {
+  if (status === null) return sent ? 'timeout' : 'unreachable';
+  if (status === 401) return 'auth';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 429) return 'rate_limited';
+  if (status >= 400 && status < 500) return 'validation';
+  return 'upstream_error';
 }
 
-/** Section 4.5: `v1=<hex HMAC-SHA256(base64url-decoded secret, utf8(ts + "." + rawBody))>` (tickets stream). */
-export function webhookSignature(_secret: string, _ts: number, _rawBody: Uint8Array): string {
-  return notBuilt('tickets', 'webhookSignature');
+/**
+ * Section 4.4c: true for `unreachable` with nothing sent, `rate_limited` and any 503; for `webhook` also `timeout` and
+ * `upstream_error` (receivers de-duplicate on `X-IA-Push-Id`). Never for an ambiguous non-webhook failure, and never
+ * for `egress_refused` (configuration).
+ */
+export function isAutoRetryable(failure: TicketFailure, type: IntegrationType): boolean {
+  if (failure.cause === 'unreachable' && !failure.sent) return true;
+  if (failure.cause === 'rate_limited') return true;
+  if (failure.status === 503) return true;
+  if (type === 'webhook' && (failure.cause === 'timeout' || failure.cause === 'upstream_error')) return true;
+  return false;
 }
 
-/** Section 4.5: constant-time check of any listed `v1=` value within the 300 s window (tickets stream). */
+/**
+ * Section 4.4d: attempt `attempt + 1` is due 30 s, 2 min, 10 min, 30 min or 2 h after attempt `attempt` (1..5), or
+ * after `retryAfterSec` when that is larger (capped at 7200 s).
+ */
+export function nextRetryAt(attempt: number, retryAfterSec: number | null, now: Date): Date {
+  const i = Math.min(Math.max(1, Math.floor(attempt)), TICKET_RETRY_SCHEDULE_SEC.length) - 1;
+  const step = TICKET_RETRY_SCHEDULE_SEC[i]!;
+  const after = retryAfterSec !== null && Number.isFinite(retryAfterSec) ? Math.min(Math.max(0, retryAfterSec), TICKET_RETRY_AFTER_CAP_SEC) : 0;
+  return new Date(now.getTime() + Math.max(step, after) * 1000);
+}
+
+function webhookMac(secret: string, ts: number, rawBody: Uint8Array): Uint8Array {
+  const key = base64urlDecode(secret);
+  if (key.length !== 32) throw new Error('webhook secret must decode to 32 bytes');
+  const prefix = utf8Encode(`${ts}.`);
+  const msg = new Uint8Array(prefix.length + rawBody.length);
+  msg.set(prefix, 0);
+  msg.set(rawBody, prefix.length);
+  return hmac(sha256, key, msg);
+}
+
+/**
+ * Section 4.5: `v1=<lower-case hex HMAC-SHA256(key, utf8(ts + ".") || rawBody)>` where the key is the 32 raw bytes of
+ * the base64url-decoded `secret` (not the 43-character string).
+ */
+export function webhookSignature(secret: string, ts: number, rawBody: Uint8Array): string {
+  return `v1=${bytesToHex(webhookMac(secret, ts, rawBody))}`;
+}
+
+/**
+ * Section 4.5: true when `ts` is within `WEBHOOK_SIGNATURE_TOLERANCE_SEC` of `now` and any `v1=` value of the header
+ * verifies under any listed secret (constant-time comparison).
+ */
 export function verifyWebhookSignature(
-  _secrets: readonly string[],
-  _header: string,
-  _ts: number,
-  _rawBody: Uint8Array,
-  _now: Date,
+  secrets: readonly string[],
+  header: string,
+  ts: number,
+  rawBody: Uint8Array,
+  now: Date,
 ): boolean {
-  return notBuilt('tickets', 'verifyWebhookSignature');
+  if (!Number.isInteger(ts) || Math.abs(now.getTime() / 1000 - ts) > WEBHOOK_SIGNATURE_TOLERANCE_SEC) return false;
+  const given = header
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => /^v1=[0-9a-f]{64}$/.test(p))
+    .map((p) => p.slice(3));
+  if (given.length === 0) return false;
+  let ok = false;
+  for (const secret of secrets) {
+    let expected: string;
+    try {
+      expected = bytesToHex(webhookMac(secret, ts, rawBody));
+    } catch {
+      continue;
+    }
+    for (const g of given) if (constantTimeEqual(expected, g)) ok = true;
+  }
+  return ok;
 }

@@ -11,6 +11,13 @@
 //! ([`Guard::physical_press_recent`]). If the hooks cannot be installed, grant-direction
 //! controls fail closed while safe-direction ones (Decline, Refuse, Stop, View only) keep
 //! working.
+//!
+//! **Linux (Phase E rule 7.3c).** X11 marks no event as injected, so the guard is applied
+//! *before* injection instead: `ia-input-x11` refuses every injected pointer event over an agent
+//! window and every key while one holds focus. A press that reaches an agent window is therefore
+//! a physical one, so on Linux the guard counts as installed and the egui app records the presses
+//! it receives ([`note_physical_press`]). The 750 ms post-map gate (`model::MapGate`) closes the
+//! race between the guard's geometry check and a window appearing under the point.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -51,6 +58,10 @@ impl Guard {
             let thread_id = rx.recv_timeout(Duration::from_secs(2)).unwrap_or(0);
             Guard { thread_id, thread }
         }
+        #[cfg(target_os = "linux")]
+        {
+            INSTALLED.store(true, Ordering::SeqCst);
+        }
         #[cfg(not(windows))]
         {
             Guard { thread: None }
@@ -78,10 +89,19 @@ impl Guard {
     }
 }
 
+/// Linux: a pointer press reached one of the agent's windows. Injected input never does (the
+/// pre-injection guard of rule 7.3c), so this is a physical press.
+#[cfg(target_os = "linux")]
+pub fn note_physical_press() {
+    LAST_PHYSICAL_MS.store(now_ms(), Ordering::SeqCst);
+}
+
 impl Drop for Guard {
     fn drop(&mut self) {
         #[cfg(windows)]
         win::stop(self.thread_id);
+        #[cfg(target_os = "linux")]
+        INSTALLED.store(false, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

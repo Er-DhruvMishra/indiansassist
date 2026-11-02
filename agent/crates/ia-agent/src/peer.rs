@@ -186,6 +186,14 @@ impl AgentPeer {
         self.channels.lock().await.get(label).cloned()
     }
 
+    /// The SDP mid of each monitor's video track, read from the local description (§3.6 M3).
+    pub async fn monitor_mids(&self) -> HashMap<u32, String> {
+        self.local_sdp()
+            .await
+            .map(|sdp| monitor_mids(&sdp))
+            .unwrap_or_default()
+    }
+
     /// The VP8 track for a monitor id (Desk only).
     pub fn video_track(&self, monitor_id: u32) -> Option<Arc<TrackLocalStaticSample>> {
         self.video_tracks
@@ -193,6 +201,35 @@ impl AgentPeer {
             .find(|t| t.id() == format!("monitor-{monitor_id}"))
             .cloned()
     }
+}
+
+/// `monitor id -> mid` from an SDP: within each `m=video` section, the `a=mid:` value and the
+/// track id of its `a=msid:<stream> monitor-<id>` line (§3.6 M3). Pure, tested.
+pub fn monitor_mids(sdp: &str) -> HashMap<u32, String> {
+    let mut out = HashMap::new();
+    for section in sdp.split("\nm=").skip(1) {
+        if !section.starts_with("video") {
+            continue;
+        }
+        let mut mid = None;
+        let mut monitor = None;
+        for line in section.lines() {
+            let line = line.trim_end_matches('\r');
+            if let Some(v) = line.strip_prefix("a=mid:") {
+                mid = Some(v.trim().to_string());
+            } else if let Some(v) = line.strip_prefix("a=msid:") {
+                monitor = v
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|t| t.strip_prefix("monitor-"))
+                    .and_then(|n| n.parse::<u32>().ok());
+            }
+        }
+        if let (Some(mid), Some(id)) = (mid, monitor) {
+            out.insert(id, mid);
+        }
+    }
+    out
 }
 
 /// The track codec a Desk monitor stream uses (VP8 software default, §4.2).
@@ -250,6 +287,20 @@ pub fn configuration(ice_servers: Vec<RTCIceServer>) -> RTCConfiguration {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn monitor_mids_come_from_each_video_section() {
+        let sdp = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\n\
+m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:0\r\na=msid:ia-screen monitor-1\r\n\
+m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:1\r\na=msid:ia-screen monitor-2\r\n\
+m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:2\r\na=msid:ia-screen desk-audio\r\n\
+m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=mid:3\r\n";
+        let mids = monitor_mids(sdp);
+        assert_eq!(mids.len(), 2);
+        assert_eq!(mids.get(&1).map(String::as_str), Some("0"));
+        assert_eq!(mids.get(&2).map(String::as_str), Some("1"));
+        assert!(monitor_mids("v=0\r\n").is_empty());
+    }
 
     #[test]
     fn ice_servers_parse_urls_string_or_array() {

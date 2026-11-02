@@ -1,17 +1,16 @@
 /**
- * AuthProvider adapter (contracts section 10.3). `local` verifies argon2id hashes (memoryCost 65536, timeCost 3,
- * parallelism 1, section 6.1); `oidc` is the Phase E stub whose methods throw `not_implemented`.
- * Cookie sessions (`auth_session`) are provider independent and live in plugins/auth.ts.
+ * AuthProvider adapter (contracts section 10.3): the password provider. `local` verifies argon2id hashes (memoryCost
+ * 65536, timeCost 3, parallelism 1, section 6.1). Phase E W86 retired the throwing `oidc` stub, `beginLogin` /
+ * `completeLogin` and `AUTH_PROVIDER=oidc`: per-org SSO is the `SsoProvider` seam in `apps/api/src/sso/provider.ts`
+ * (docs/specs/phase-e-contracts.md section 3.10). Cookie sessions (`auth_session`) live in plugins/auth.ts.
  */
 import argon2 from 'argon2';
 import { findUserByEmail, type Db } from '@indiansassist/db';
 
 export interface AuthProvider {
-  readonly kind: 'local' | 'oidc';
+  readonly kind: 'local';
   verifyPassword?(email: string, password: string): Promise<{ userId: string } | null>;
   hashPassword?(password: string): Promise<string>;
-  beginLogin?(redirectUri: string): Promise<{ url: string; state: string }>;
-  completeLogin?(params: Record<string, string>): Promise<{ email: string; subject: string; name: string }>;
 }
 
 export const ARGON2_OPTIONS = { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1 } as const;
@@ -56,16 +55,7 @@ export class LocalAuthProvider implements AuthProvider {
   }
 }
 
-export class OidcAuthProviderStub implements AuthProvider {
-  readonly kind = 'oidc' as const;
-  async beginLogin(): Promise<{ url: string; state: string }> {
-    throw new Error('not_implemented');
-  }
-  async completeLogin(): Promise<{ email: string; subject: string; name: string }> {
-    throw new Error('not_implemented');
-  }
-}
-
-export function buildAuthProvider(kind: 'local' | 'oidc', db: Db): AuthProvider {
-  return kind === 'oidc' ? new OidcAuthProviderStub() : new LocalAuthProvider(db);
+/** The password provider (section 3.10). config.ts accepts only `AUTH_PROVIDER=local`; SSO lives in apps/api/src/sso. */
+export function buildAuthProvider(db: Db): AuthProvider {
+  return new LocalAuthProvider(db);
 }

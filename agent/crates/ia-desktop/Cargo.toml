@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [features]
 # The worker is the C agent: the same media stack, the same Win32 layer, the same UI.
-default = ["ia-agent/media", "ia-agent/winapi", "ia-agent/gui", "ia-session0/winapi"]
+default = ["ia-agent/media", "ia-agent/voice", "ia-agent/winapi", "ia-agent/gui", "ia-session0/winapi"]
 # `dev` passes the C local-testing switches through (`--synthetic-capture` for an automated run).
 dev = ["ia-agent/dev"]
 

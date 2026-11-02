@@ -31,8 +31,20 @@ pub const MOTW: &str = "[ZoneTransfer]\r\nZoneId=3\r\n";
 /// How old a stale `.iapart` must be before it is swept.
 pub const STALE_PART_AGE: Duration = Duration::from_secs(24 * 3600);
 
-/// `Downloads\IndiansAssist\` (`FOLDERID_Downloads` when the Win32 layer is built).
+/// `Downloads\IndiansAssist\` (`FOLDERID_Downloads` when the Win32 layer is built); on Linux
+/// `$(xdg-user-dir DOWNLOAD)/IndiansAssist/` read from `$XDG_CONFIG_HOME/user-dirs.dirs`, fallback
+/// `~/Downloads` (Phase E §7.3f).
 pub fn received_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        let env = ia_platform::linux::XdgEnv::from_process();
+        let dirs = env
+            .config_home()
+            .and_then(|c| std::fs::read_to_string(c.join("user-dirs.dirs")).ok());
+        if let Some(d) = ia_platform::linux::paths::received_dir(&env, dirs.as_deref()) {
+            return d;
+        }
+    }
     #[cfg(all(windows, feature = "winapi"))]
     {
         use ia_platform::traits::KnownFolders;
@@ -129,11 +141,16 @@ impl PartFile {
         std::fs::create_dir_all(long_path(dir))?;
         for _ in 0..8 {
             let part_path = dir.join(format!("{final_name}.{}.iapart", random_hex8()));
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(long_path(&part_path))
+            let mut opts = OpenOptions::new();
+            opts.write(true).create_new(true);
+            // Phase E §7.3f: the executable bit is never set on a received file (the mode
+            // survives the no-replace rename; the umask can only take bits away).
+            #[cfg(unix)]
             {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o644);
+            }
+            match opts.open(long_path(&part_path)) {
                 Ok(file) => {
                     return Ok(PartFile {
                         dir: dir.to_path_buf(),
@@ -315,6 +332,13 @@ mod tests {
         assert_eq!(std::fs::read(&saved).unwrap(), b"hello world");
         #[cfg(windows)]
         assert_eq!(read_motw(&saved).unwrap(), MOTW);
+        // Phase E §7.3f: no execute bit on a received file.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&saved).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0, "mode {mode:o}");
+        }
         // No part file is left behind.
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
         assert_eq!(left.len(), 1);

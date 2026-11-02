@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "The IndiansAssist Windows agent binary: token-source precedence, elevation hand-over flow, self-delete decision (pure, tested), and the webrtc-rs peer / encoders / signaling wiring behind the `media` feature (contract §11.1)."
+description = "The IndiansAssist agent binary (Windows; Linux X11 since Phase E §7): token-source precedence, elevation hand-over flow, self-delete decision (pure, tested), and the webrtc-rs peer / encoders / signaling wiring behind the `media` feature (contract §11.1)."
 
 [[bin]]
 name = "IndiansAssist"
@@ -16,13 +16,15 @@ name = "ia_agent"
 path = "src/lib.rs"
 
 [features]
-# Default on the MSVC host is the full runnable agent. The library crates still build
-# pure-Rust with `--no-default-features` on the gnu toolchain for the ia-core cross-check.
-default = ["media", "winapi", "gui"]
+# Default on the Windows MSVC host is the full runnable agent. The library crates still build
+# pure-Rust with `--no-default-features` on the gnu toolchain for the ia-core cross-check. The
+# Linux build (Phase E §7.2, §15.6) is `--no-default-features --features
+# ia-agent/media,ia-agent/x11,ia-agent/gui,ia-agent/linux-os` (no `voice`, so no ALSA).
+default = ["media", "voice", "winapi", "gui"]
 # `dev` compiles the local-testing switches (`--api-origin`, `--signal-url`,
 # `--auto-consent`, `IA_CODEC_PREF`); a release build omits them (§2.1, §4.2).
 dev = ["ia-ui/dev"]
-# The webrtc-rs peer, VP8/VP9 (libvpx) + Opus encoders, rustls signaling client.
+# The webrtc-rs peer, VP8/VP9 (libvpx) encoders, rustls signaling client.
 media = [
     "dep:tokio",
     "dep:tokio-tungstenite",
@@ -31,9 +33,10 @@ media = [
     "dep:bytes",
     "dep:async-trait",
     "dep:shiguredo_libvpx",
-    "dep:audiopus",
-    "dep:cpal",
 ]
+# Phase E §7.2: voice (cpal + Opus, C §6.3) split out of `media`, on by default on Windows and off
+# on Linux, so the Linux build needs neither ALSA nor libopus.
+voice = ["media", "dep:audiopus", "dep:cpal"]
 # The Win32 syscall layer (DXGI/GDI capture, SendInput, registry, known folders).
 winapi = [
     "ia-input-win/winapi",
@@ -41,6 +44,11 @@ winapi = [
     "ia-platform/winapi",
     "ia-session0/winapi",
 ]
+# Phase E §7.2: X11 capture (RandR, MIT-SHM, XFixes) and XTEST input + clipboard. Compiles to
+# nothing off Linux.
+x11 = ["ia-capture-x11/x11", "ia-input-x11/x11"]
+# Phase E §7.7: the Linux platform impls (self-delete, deep link, single instance, folders).
+linux-os = ["ia-platform/linux-os"]
 # The egui/eframe consent window, pill, panel and tray icon.
 gui = ["ia-ui/gui"]
 
@@ -50,6 +58,9 @@ ia-platform.workspace = true
 ia-session0.workspace = true
 ia-input-win.workspace = true
 ia-capture-win.workspace = true
+ia-frame.workspace = true
+ia-capture-x11.workspace = true
+ia-input-x11.workspace = true
 ia-ui.workspace = true
 # The §7.2 / D §4.2 blobs are serde types, and the hand-over errors are `thiserror` ones.
 serde.workspace = true
@@ -74,6 +85,10 @@ webrtc = { workspace = true, optional = true }
 shiguredo_libvpx = { workspace = true, optional = true }
 audiopus = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
+
+# Phase E §7.8: the Linux `sh` runner (setsid, killpg, the fd-3 pipe) and the root refusal.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 
 # The Win32 calls the binary makes itself (§8.4 playbook job object, owner-only run file,
 # token queries; §6.1 rename-without-replace). Pure bindings; no extra DLL is imported.

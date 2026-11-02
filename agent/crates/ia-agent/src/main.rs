@@ -1,4 +1,5 @@
-//! IndiansAssist Windows agent entry point (contract §11.1 `ia-agent`).
+//! IndiansAssist agent entry point (contract §11.1 `ia-agent`; Windows, and Linux X11 since
+//! Phase E §7).
 //!
 //! The full build (feature `media`, default on the MSVC host) has no console window and
 //! drives the signaling client, the webrtc-rs peer, the VP8 encoder and the egui UI. It
@@ -20,7 +21,8 @@ fn main() {
     // load, restrict the loader to System32 and clear the DLL directory so a planted DLL in
     // the exe's folder (Downloads) cannot be side-loaded. Must be the first statement.
     harden_dll_search();
-    // Physical-pixel monitor geometry before anything enumerates monitors or opens a window.
+    // Physical-pixel monitor geometry before anything enumerates monitors or opens a window
+    // (Windows only; Phase E §7.2).
     #[cfg(all(windows, feature = "winapi"))]
     ia_capture_win::enumerate::ensure_per_monitor_dpi_awareness();
 
@@ -53,10 +55,15 @@ fn main() {
         .arg
         .as_ref()
         .and_then(|(src, t)| normalise_token_input(&t.0).map(|tok| (*src, tok)));
-    let candidates = Candidates {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut candidates = Candidates {
         arg,
         ..Default::default()
     };
+    // Phase E §7.6 / §7.7 (Linux): the start-up checks, the filename and clipboard carriers,
+    // the deep-link handler and the single instance.
+    #[cfg(target_os = "linux")]
+    linux_start(&cli, &mut candidates);
     let resolved = resolve(&candidates);
 
     println!("IndiansAssist agent {}", env!("CARGO_PKG_VERSION"));
@@ -66,6 +73,86 @@ fn main() {
     }
 
     run(&cli, resolved);
+}
+
+/// Phase E rule 7.3d: never as root. §7.4: a graphical session is required (a synthetic dev run
+/// needs none). §7.6 carriers: rank 3 the extension-less filename (`IndiansAssist-<region>-<dddd>-
+/// <dddd>-<dddd>`), rank 4 the clipboard (read once, cleared only while it still holds the value
+/// read). §7.7: the deep-link handler is registered under the XDG roots, and a second start of
+/// this image forwards its link to the running instance and exits.
+#[cfg(target_os = "linux")]
+fn linux_start(cli: &Cli, candidates: &mut Candidates) {
+    use ia_platform::linux::display::NO_SESSION_MESSAGE;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Run IndiansAssist as your normal user account");
+        std::process::exit(1);
+    }
+    let mode = ia_agent::desk::detect(cli.synthetic_capture);
+    if mode == ia_agent::desk::ScreenMode::NoSession {
+        eprintln!("{NO_SESSION_MESSAGE}");
+        std::process::exit(1);
+    }
+    let exe = std::env::current_exe().ok();
+    if candidates.arg.is_none() {
+        if let Some(name) = exe
+            .as_ref()
+            .and_then(|e| e.file_name())
+            .and_then(|n| n.to_str())
+        {
+            if let Some(p) = ia_core::download::parse_linux_filename(name, ia_core::token::REGIONS)
+            {
+                candidates.filename_code = Some(ia_core::join_input::TokenInput::ShortCode(p.code));
+            }
+        }
+    }
+    #[cfg(feature = "x11")]
+    if candidates.arg.is_none() && candidates.filename_code.is_none() {
+        if let ia_agent::desk::ScreenMode::X11 { .. } = mode {
+            if let Some(text) = ia_input_x11::clipboard_read_once() {
+                if let Some(tok) = normalise_token_input(text.trim()) {
+                    let _ = ia_input_x11::clipboard_clear_if_unchanged(&text);
+                    candidates.clipboard = Some(tok);
+                }
+            }
+        }
+    }
+    #[cfg(feature = "linux-os")]
+    {
+        use ia_platform::linux::{os, XdgEnv};
+        use ia_platform::traits::ProtocolHandler;
+        let env = XdgEnv::from_process();
+        let forward = cli
+            .arg
+            .as_ref()
+            .map(|(_, t)| t.0.clone())
+            .unwrap_or_default();
+        match os::acquire_single_instance(&env, &forward) {
+            Ok(os::InstanceOutcome::Primary(server)) => {
+                let _ = server.spawn(|line| {
+                    // A second start while this one runs: never acted on as a command; the
+                    // running session continues (C §11.5).
+                    eprintln!(
+                        "Another start of IndiansAssist was ignored ({} bytes); this session continues.",
+                        line.len()
+                    );
+                });
+            }
+            Ok(os::InstanceOutcome::Forwarded) => {
+                println!("IndiansAssist is already running.");
+                std::process::exit(0);
+            }
+            Ok(os::InstanceOutcome::Squatted(why)) => {
+                eprintln!("single instance: {why}; continuing on our own")
+            }
+            Err(e) => eprintln!("single instance unavailable: {e}"),
+        }
+        if let Some(exe) = &exe {
+            if let Err(e) = (os::LinuxProtocolHandler { env }).register(&exe.to_string_lossy()) {
+                eprintln!("the indiansassist:// link handler could not be registered: {e}");
+            }
+        }
+    }
 }
 
 /// §7.3 step 4: read the blob, check this image is the one the parent hashed and that it is

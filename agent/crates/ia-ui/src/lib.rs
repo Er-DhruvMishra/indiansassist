@@ -23,3 +23,5 @@ pub mod guard;
 pub mod tray;
 #[cfg(all(feature = "gui", windows))]
 pub mod winhelp;
+#[cfg(all(feature = "gui", target_os = "linux"))]
+pub mod x11help;

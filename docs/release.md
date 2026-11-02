@@ -191,6 +191,12 @@ Each release:
   a production node refuses to boot without them, and `AUTH_PROVIDER=oidc` (never functional) now refuses to boot too (W86).
   To rotate `ORG_SECRETS_KEY`, move the old value into `ORG_SECRETS_KEYS_PREVIOUS`, set a new key id, deploy, run
   `pnpm secrets:reseal` (or let values re-seal lazily) and drop the old key only once the re-seal reports none left under it.
+- **Token-signing key rotation keeps the retired public key** (`docs/specs/phase-e-contracts.md` rule 6.3d): the region's
+  `TOKEN_SIGNING_KEY` also signs the data residency reports, which customers keep and verify offline with
+  `node scripts/verify-residency.mjs <report.json> --keys <well-known.json>` (or `--fetch <origin>`). At a rotation, move the
+  old key's public half (`TOKEN_SIGNING_KEY=<old> node scripts/signing-pubkey.mjs`) into `TOKEN_SIGNING_KEYS_PREVIOUS`, so
+  `/.well-known/indiansassist.json` keeps listing it, and **never remove it from that list** for as long as signed residency
+  reports must verify (at least 7 years by default). Removing it makes every report it signed fail with `unknown_kid`.
 
 ### 2.3 Server release gates (section 15.5)
 

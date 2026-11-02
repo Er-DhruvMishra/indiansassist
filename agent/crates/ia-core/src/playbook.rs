@@ -453,11 +453,23 @@ pub fn check_run(
     if run.requires_elevation && integrity != crate::types::ElevationLevel::Admin {
         return Err(PlaybookError::ElevationRequired);
     }
-    // `sh` is Android/Phase E; the Windows agent answers not_allowed for it.
-    if run.interpreter == PlaybookInterpreter::Sh {
+    // An interpreter this agent does not run is not_allowed: the Windows agent runs PowerShell
+    // and cmd, the Linux agent `sh` only (Phase E §7.5 / §7.8; the manifest already filters by
+    // the advertised interpreters, so this is the agent's own check).
+    if !native_interpreters().contains(&run.interpreter) {
         return Err(PlaybookError::NotAllowed);
     }
     Ok(())
+}
+
+/// The interpreters the agent on this target runs (and advertises): `powershell` and `cmd`
+/// on Windows, `sh` on Linux (Phase E §7.5).
+pub fn native_interpreters() -> &'static [PlaybookInterpreter] {
+    if cfg!(target_os = "linux") {
+        &[PlaybookInterpreter::Sh]
+    } else {
+        &[PlaybookInterpreter::Powershell, PlaybookInterpreter::Cmd]
+    }
 }
 
 /// How a playbook is launched (contract §8.4 execution table). Pure decision; the binary
@@ -680,11 +692,34 @@ mod tests {
             playbook_id: "pb-1".into(),
             body_hash: hex::encode(Sha256::digest(body.as_bytes())),
             body: body.into(),
-            interpreter: PlaybookInterpreter::Powershell,
+            interpreter: native_interpreters()[0],
             requires_elevation,
             timeout_sec: 120,
             args: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn check_run_refuses_an_interpreter_this_agent_does_not_run() {
+        for i in PlaybookInterpreter::ALL {
+            let mut run = run_req("echo hi", false);
+            run.interpreter = i;
+            let manifest = vec![entry("pb-1", &run.body_hash, false)];
+            let want = if native_interpreters().contains(&i) {
+                Ok(())
+            } else {
+                Err(PlaybookError::NotAllowed)
+            };
+            assert_eq!(
+                check_run(&run, &manifest, ElevationLevel::User),
+                want,
+                "{i:?}"
+            );
+        }
+        assert_eq!(
+            native_interpreters().contains(&PlaybookInterpreter::Sh),
+            cfg!(target_os = "linux")
+        );
     }
 
     fn entry(id: &str, body_hash: &str, requires_elevation: bool) -> ManifestEntry {

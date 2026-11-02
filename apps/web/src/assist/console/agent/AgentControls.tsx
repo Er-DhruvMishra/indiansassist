@@ -21,12 +21,15 @@ export function NavButtons({ show, disabled, onNav }: { show: boolean; disabled:
 export function ClipboardToggle({
   on,
   allowed,
+  supported,
   received,
   onToggle,
 }: {
   on: boolean;
   /** The Desk switch is on (`consent.changed.clipboard`) and the `clipboard` feature is present. */
   allowed: boolean;
+  /** The Desk advertises the `clipboard` feature at all (a Wayland Linux Desk does not). */
+  supported: boolean;
   received: string | null;
   onToggle: (on: boolean) => void;
 }) {
@@ -36,7 +39,11 @@ export function ClipboardToggle({
         <input type="checkbox" checked={on && allowed} disabled={!allowed} onChange={(e) => onToggle(e.target.checked)} />
         Clipboard sync
       </label>
-      {!allowed && <p className="text-xs text-slate-600 dark:text-slate-400">The user has not turned on clipboard sharing.</p>}
+      {!allowed && (
+        <p className="text-xs text-slate-600 dark:text-slate-400">
+          {supported ? 'The user has not turned on clipboard sharing.' : 'This Desk cannot share its clipboard.'}
+        </p>
+      )}
       {received !== null && <CopyButton size="sm" variant="secondary" text={received} label="Clipboard received, click to copy" />}
     </div>
   );

@@ -6,6 +6,7 @@ import {
   acceptInviteRequestSchema,
   changePasswordRequestSchema,
   isRegionServed,
+  LIMITS,
   loginRequestSchema,
   sha256Hex,
   signupRequestSchema,
@@ -47,6 +48,8 @@ import {
 } from '../plugins/auth.js';
 import { limits } from '../plugins/security.js';
 import { planHasPlaybooks, seedStarterPlaybooks } from '../services/playbook-seed.js';
+import { notifyBreakGlassLogin } from '../sso/break-glass.js';
+import { beginPath } from '../sso/urls.js';
 
 const LOCKOUT_WINDOW_MS = 15 * 60_000;
 const LOCKOUT_FAILURES = 10;
@@ -111,7 +114,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
         });
         // Phase C section 8.6: an org whose plan includes P3 starts with the starter playbooks.
         if (planHasPlaybooks(org.planTier)) await seedStarterPlaybooks(ctx, tx, org, user.id);
-        const minted = await mintSession(tx, req, user, org);
+        const minted = await mintSession(tx, req, user, org, { loginMethod: 'local' });
         return { org, user, seat, raw: minted.raw };
       });
       setSessionCookie(ctx, reply, out.raw);
@@ -139,14 +142,26 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
       fail('invalid_credentials', 'email or password is wrong');
     }
     assertOrgServed(ctx, org, req.log);
+    // Phase E rule 3.7b: only after the password is verified, so a wrong one still answers 401 and counts.
+    if (org.ssoRequired && !user.ssoBreakGlass)
+      fail('sso_required', 'your organisation signs in with single sign-on', { beginUrl: beginPath(org.slug, { loginHint: user.email }) });
+    // Rule 3.7d: a break-glass password login while SSO is required gets a 1 h session, is chained and mailed.
+    const breakGlass = org.ssoRequired && user.ssoBreakGlass;
+    const bgSec = LIMITS.breakGlassSessionHours * 3600;
     const out = await ctx.db.transaction(async (tx) => {
       await recordLoginAttempt(tx, { emailHash, ip: req.ip, success: true });
       const updated = await updateUser(tx, user.id, { lastLoginAt: new Date() });
       await writeAudit(ctx, tx, org, { actor: userActor(updated), action: 'auth.login', data: { method: 'local' } });
-      const minted = await mintSession(tx, req, updated, org);
+      if (breakGlass)
+        await writeAudit(ctx, tx, org, { actor: userActor(updated), action: 'auth.break_glass_used', data: { userId: updated.id } });
+      const minted = await mintSession(tx, req, updated, org, {
+        loginMethod: 'local',
+        ...(breakGlass ? { expiresAt: new Date(Date.now() + bgSec * 1000) } : {}),
+      });
       return { user: updated, raw: minted.raw };
     });
-    setSessionCookie(ctx, reply, out.raw);
+    setSessionCookie(ctx, reply, out.raw, breakGlass ? bgSec : undefined);
+    if (breakGlass) void notifyBreakGlassLogin(ctx, org, out.user, req.ip);
     return authBody(out.user, org, await getSeatByUser(ctx.db, user.id));
   });
 
@@ -181,6 +196,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
     const org = await getOrg(ctx.db, user.orgId);
     if (!org) fail('invite_invalid', 'this invite is not valid');
     assertOrgServed(ctx, org, req.log);
+    // Phase E rule 3.7b: the invitee signs in with SSO, which activates them (section 3.6 rule 2).
+    if (org.ssoRequired) fail('sso_required', 'your organisation signs in with single sign-on', { beginUrl: beginPath(org.slug, { loginHint: user.email }) });
     const passwordHash = await hashPassword(body.password);
     const out = await ctx.db.transaction(async (tx) => {
       const updated = await updateUser(tx, user.id, {
@@ -192,7 +209,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
         lastLoginAt: new Date(),
       });
       await writeAudit(ctx, tx, org, { actor: userActor(updated), action: 'auth.login', data: { method: 'invite' } });
-      const minted = await mintSession(tx, req, updated, org);
+      const minted = await mintSession(tx, req, updated, org, { loginMethod: 'invite' });
       return { user: updated, raw: minted.raw };
     });
     setSessionCookie(ctx, reply, out.raw);
@@ -201,6 +218,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
 
   app.post('/api/v1/auth/password', { config: limits.auth }, async (req, reply) => {
     const p = await authenticate(ctx, req);
+    // Phase E rule 3.7b: no password changes for SSO-required users other than break-glass administrators.
+    if (p.org.ssoRequired && !p.user.ssoBreakGlass) fail('sso_required', 'your organisation signs in with single sign-on');
     const body = parseOr400(changePasswordRequestSchema, req.body);
     if (!(await verifyPasswordHash(p.user.passwordHash, body.currentPassword)))
       fail('reauth_required', 'current password is wrong');

@@ -91,6 +91,12 @@ describe('family rule and chips', () => {
     expect(levelChip({ consent: { level: 'control', monitors: 1, clipboard: false }, agentLevel: { level: 'control', clipboard: false, elevation: 'admin' } })).toBe('Elevated process (control)');
     expect(controlBlocker({ ...AGENT_INITIAL })).toBe('Securing the connection');
   });
+  it('a Desk without the input feature (a Wayland Linux Desk) cannot be switched to Control', () => {
+    const sec = { state: 'established' as const, gen: 1, sas: '1234', failReason: null };
+    const caps = { monitors: 1, elevation: 'user' as const, features: ['chat', 'files'] as const, encoders: [], hwEncoder: false, interpreters: [] };
+    expect(controlBlocker({ ...AGENT_INITIAL, sec, capabilities: { ...caps, features: [...caps.features] } })).toBe('This Desk cannot take remote control');
+    expect(controlBlocker({ ...AGENT_INITIAL, sec, capabilities: { ...caps, features: ['screen', 'input'] } })).not.toBe('This Desk cannot take remote control');
+  });
 });
 
 describe('stats fold (section 4.4)', () => {

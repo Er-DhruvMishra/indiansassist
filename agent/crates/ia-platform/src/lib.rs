@@ -11,6 +11,7 @@
 //! `Amt` and `SecretInjector` ([`service`]) — on the same principle: the trait is the OS
 //! boundary, the decision behind it is a pure function in the crate that owns it.
 
+pub mod linux;
 pub mod protocol;
 pub mod selfdelete;
 pub mod service;

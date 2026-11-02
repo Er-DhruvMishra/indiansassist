@@ -1,0 +1,131 @@
+{
+  "comment": "Phase E section 5.4 redaction vectors. Each positive must be redacted as `kind` (count >= 1) and its `secret` must not survive; `expected`, when present, is the exact output with a fresh RedactionState. Each negative must yield a zero count for `kind` (another kind may still fire).",
+  "kinds": {
+    "private_key": {
+      "positives": [
+        { "text": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----", "secret": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC", "expected": "[private_key-1]" },
+        { "text": "key:\n-----BEGIN RSA PRIVATE KEY-----\nabc123\n-----END RSA PRIVATE KEY-----\ndone", "secret": "abc123", "expected": "key:\n[private_key-1]\ndone" },
+        { "text": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA", "secret": "b3BlbnNzaC1rZXktdjEAAAAA" }
+      ],
+      "negatives": ["-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----", "-----BEGIN PUBLIC KEY-----"]
+    },
+    "jwt": {
+      "positives": [
+        { "text": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop", "secret": "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "expected": "[jwt-1]" },
+        { "text": "cookie=eyJ0eXAiOiJKV1QiLCJh.eyJleHAiOjE3MDAwMDAw.c2lnbmF0dXJlXzEyMw done", "secret": "eyJleHAiOjE3MDAwMDAw" },
+        { "text": "id eyJraWQiOiIxMjM0NTY3OCJ9.eyJpc3MiOiJodHRwcyJ9.QUJDREVGR0hJSktM", "secret": "QUJDREVGR0hJSktM" }
+      ],
+      "negatives": ["eyJhbGc.short.x", "the eyes have it"]
+    },
+    "url_credential": {
+      "positives": [
+        { "text": "https://admin:s3cret@db.local/x", "secret": "s3cret", "expected": "https://[url_credential-1]@db.local/x" },
+        { "text": "postgres://app:Pa55w0rd@10.0.0.5:5432/main", "secret": "Pa55w0rd" },
+        { "text": "ftp://user:pw@files.example.test", "secret": "user:pw" }
+      ],
+      "negatives": ["https://example.test/path", "mailto user at host"]
+    },
+    "secret": {
+      "positives": [
+        { "text": "password: hunter2", "secret": "hunter2", "expected": "password: [secret-1]" },
+        { "text": "Authorization: Bearer abc.def.ghi", "secret": "abc.def.ghi", "expected": "Authorization: Bearer [secret-1]" },
+        { "text": "API_KEY=xyz987", "secret": "xyz987" },
+        { "text": "id AKIAIOSFODNN7EXAMPLE", "secret": "AKIAIOSFODNN7EXAMPLE", "expected": "id [secret-1]" },
+        { "text": "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB", "secret": "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB" },
+        { "text": "slack xoxb-1234567890-abcdef", "secret": "xoxb-1234567890-abcdef" },
+        { "text": "use sk-proj-abcdefghijklmnopqrstuv", "secret": "sk-proj-abcdefghijklmnopqrstuv" },
+        { "text": "    Key Content            : My Wifi Pass 1", "secret": "My Wifi Pass 1", "expected": "    Key Content            : [secret-1]" },
+        { "text": "psk=\"secret phrase\"", "secret": "secret phrase", "expected": "psk=[secret-1]" },
+        { "text": "wpa_passphrase=CorrectHorse9", "secret": "CorrectHorse9" }
+      ],
+      "negatives": ["no credentials were shared here", "the user reset the router"]
+    },
+    "email": {
+      "positives": [
+        { "text": "mail priya@example.com", "secret": "priya@example.com", "expected": "mail [email-1]" },
+        { "text": "cc: Ravi.Kumar+it@corp.example.in", "secret": "Ravi.Kumar+it@corp.example.in" },
+        { "text": "<a_b@x.io>", "secret": "a_b@x.io", "expected": "<[email-1]>" }
+      ],
+      "negatives": ["user at example dot com", "@handle on chat"]
+    },
+    "card": {
+      "positives": [
+        { "text": "card 4111 1111 1111 1111", "secret": "4111 1111 1111 1111", "expected": "card [card-1]" },
+        { "text": "5500-0000-0000-0004", "secret": "5500-0000-0000-0004", "expected": "[card-1]" },
+        { "text": "amex 378282246310005.", "secret": "378282246310005" }
+      ],
+      "negatives": ["card 4111 1111 1111 1112 (Luhn-invalid)", "order 12345"]
+    },
+    "aadhaar": {
+      "positives": [
+        { "text": "aadhaar 2345 6789 0124", "secret": "2345 6789 0124", "expected": "aadhaar [aadhaar-1]" },
+        { "text": "id 498765432102", "secret": "498765432102", "expected": "id [aadhaar-1]" },
+        { "text": "876543210988 on file", "secret": "876543210988" }
+      ],
+      "negatives": ["234567890125 (Verhoeff-invalid)", "123456789012 starts with 1"]
+    },
+    "pan": {
+      "positives": [
+        { "text": "PAN ABCDE1234F", "secret": "ABCDE1234F", "expected": "PAN [pan-1]" },
+        { "text": "pan:AAAPL1234C.", "secret": "AAAPL1234C" },
+        { "text": "BNZPM2501F is the PAN", "secret": "BNZPM2501F" }
+      ],
+      "negatives": ["ABCDE12345", "abcde1234f"]
+    },
+    "phone": {
+      "positives": [
+        { "text": "call +919876543210", "secret": "9876543210", "expected": "call [phone-1]" },
+        { "text": "mobile 98765 43210", "secret": "98765 43210", "expected": "mobile [phone-1]" },
+        { "text": "office (555) 123-4567", "secret": "123-4567" },
+        { "text": "landline 022-2345-6789", "secret": "2345-6789" },
+        { "text": "+14155552671 ext", "secret": "4155552671" }
+      ],
+      "negatives": ["on 2026-11-02 at 10:30", "Windows 10.0.22631.4317"]
+    },
+    "mac": {
+      "positives": [
+        { "text": "mac 00:1A:2B:3C:4D:5E", "secret": "00:1A:2B:3C:4D:5E", "expected": "mac [mac-1]" },
+        { "text": "Physical Address. . . : 00-11-22-33-44-55", "secret": "00-11-22-33-44-55" },
+        { "text": "cisco 0011.2233.44aa", "secret": "0011.2233.44aa" }
+      ],
+      "negatives": ["at 10:30:45", "version 1.2.3.4.5"]
+    },
+    "ip": {
+      "positives": [
+        { "text": "host 192.168.1.10 down", "secret": "192.168.1.10", "expected": "host [ip-1] down" },
+        { "text": "link fe80::1ff:fe23:4567:890a", "secret": "fe80::1ff:fe23:4567:890a" },
+        { "text": "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "secret": "2001:0db8:85a3:0000:0000:8a2e:0370:7334" }
+      ],
+      "negatives": ["loopback 127.0.0.1 and ::1", "build 10.0.22631.4317 at 12:30:45"]
+    },
+    "user_path": {
+      "positives": [
+        { "text": "C:\\Users\\priya\\AppData\\Local", "secret": "priya", "expected": "C:\\Users\\[user_path-1]\\AppData\\Local" },
+        { "text": "/home/ravi/.ssh/config", "secret": "ravi", "expected": "/home/[user_path-1]/.ssh/config" },
+        { "text": "open /Users/anita/Desktop/x.txt", "secret": "anita" },
+        { "text": "d:/users/Mohan.K/Documents", "secret": "Mohan.K" }
+      ],
+      "negatives": ["C:\\Program Files\\App", "/usr/local/bin"]
+    },
+    "long_token": {
+      "positives": [
+        { "text": "hash 0123456789abcdef0123456789abcdef0123456789abcdef", "secret": "0123456789abcdef0123456789abcdef0123456789abcdef", "expected": "hash [long_token-1]" },
+        { "text": "cookie sessionid=QWxhZGRpbjpvcGVuIHNlc2FtZQAAAAAAAAAAAAAAAAAAAAAA", "secret": "QWxhZGRpbjpvcGVuIHNlc2FtZQAAAAAAAAAAAAAAAAAAAAAA" },
+        { "text": "x AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhAAAA", "secret": "AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhAAAA" }
+      ],
+      "negatives": ["short-token-123", "a sentence with many ordinary words in it"]
+    }
+  },
+  "numbering": [
+    {
+      "comment": "one state across several texts: the same value keeps its number, case-insensitive for emails",
+      "texts": ["mail priya@example.com", "again PRIYA@example.com and bob@x.org", "call +919876543210 or +91 98765 43210"],
+      "expected": ["mail [email-1]", "again [email-1] and [email-2]", "call [phone-1] or [phone-1]"]
+    },
+    {
+      "comment": "placeholders already present are opaque and new numbers start above them",
+      "texts": ["[email-3] new a@b.co and [phone-1]"],
+      "expected": ["[email-3] new [email-4] and [phone-1]"]
+    }
+  ]
+}

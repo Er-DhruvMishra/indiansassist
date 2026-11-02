@@ -68,7 +68,7 @@ export const E_CHAIN_SCHEMAS = {
     summaryVersion: int.nullable(),
     contentSha256: hash,
   }),
-  'ticket.push_delivered': z.strictObject({ pushId: id, type: integrationType, externalId: text(100), attempts: int }),
+  'ticket.push_delivered': z.strictObject({ pushId: id, type: integrationType, externalId: text(100).nullable(), attempts: int }),
   'ticket.push_failed': z.strictObject({
     pushId: id,
     type: integrationType,

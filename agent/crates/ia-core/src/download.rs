@@ -54,6 +54,63 @@ pub fn parse_filename(file_name: &str, allowed_regions: &[&str]) -> Option<Parse
     Some(ParsedFilename { region, code })
 }
 
+/// `AGENT_LINUX_FILENAME_RE` (Phase E §7.6): the inner binary of the Linux `.tar.gz` is
+/// `IndiansAssist-<region>-<dddd>-<dddd>-<dddd>` with **no extension**. Case-sensitive, and no
+/// ` (1)` suffix: the browser's suffix lands on the archive, never on the name inside it.
+fn linux_filename_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"^IndiansAssist-(?P<region>[a-z]{2}-[a-z]{3,5})-(?P<a>\d{4})-(?P<b>\d{4})-(?P<c>\d{4})$",
+        )
+        .unwrap()
+    })
+}
+
+/// `agentLinuxFileName(region, deskCode)` (Phase E §7.6): `IndiansAssist-in-mum-4821-9365-7715`.
+/// `None` unless the desk code is 12 digits.
+pub fn agent_linux_file_name(region: &str, desk_code: &str) -> Option<String> {
+    if desk_code.len() != 12 || !desk_code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(
+        "IndiansAssist-{region}-{}-{}-{}",
+        &desk_code[0..4],
+        &desk_code[4..8],
+        &desk_code[8..12]
+    ))
+}
+
+/// `parseAgentLinuxFileName` (Phase E §7.6, mirrors the shared TS): the region must be in
+/// `allowed_regions` and the 12 digits Luhn-valid.
+pub fn parse_linux_filename(file_name: &str, allowed_regions: &[&str]) -> Option<ParsedFilename> {
+    let caps = linux_filename_re().captures(file_name)?;
+    let region = caps.name("region")?.as_str().to_string();
+    if !allowed_regions.contains(&region.as_str()) {
+        return None;
+    }
+    let code = format!(
+        "{}{}{}",
+        caps.name("a")?.as_str(),
+        caps.name("b")?.as_str(),
+        caps.name("c")?.as_str()
+    );
+    if !is_valid_short_code(&code) {
+        return None;
+    }
+    Some(ParsedFilename { region, code })
+}
+
+/// The filename carrier on this target: the `.exe` grammar on Windows (§2.3), the extension-less
+/// Linux grammar elsewhere (Phase E §7.6).
+pub fn parse_own_filename(file_name: &str, allowed_regions: &[&str]) -> Option<ParsedFilename> {
+    if cfg!(windows) {
+        parse_filename(file_name, allowed_regions)
+    } else {
+        parse_linux_filename(file_name, allowed_regions)
+    }
+}
+
 /// The signed sidecar `iaconfigSchema` (contract §2.4). Unknown keys are an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

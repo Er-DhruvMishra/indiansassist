@@ -122,8 +122,13 @@ impl SignalClient {
         let mut req = signal_url
             .into_client_request()
             .map_err(|e| format!("bad signal url: {e}"))?;
+        let os = if cfg!(target_os = "linux") {
+            "Linux"
+        } else {
+            "Windows"
+        };
         let ua = format!(
-            "IndiansAssist-Agent/{} (Windows {}; {})",
+            "IndiansAssist-Agent/{} ({os} {}; {})",
             id.version, id.os_version, id.arch
         );
         req.headers_mut().insert(
@@ -184,7 +189,7 @@ impl SignalClient {
             "client": {
                 "kind": "native",
                 "version": id.version,
-                "os": "windows",
+                "os": crate::desk::native_os(),
                 "platform": { "osVersion": id.os_version, "arch": id.arch },
                 "tokenSource": token_source,
                 "capabilities": serde_json::to_value(caps).map_err(|e| e.to_string())?,

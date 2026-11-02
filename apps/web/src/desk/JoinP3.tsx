@@ -4,10 +4,12 @@
  * writes nothing to the clipboard on its own; **Copy support code** copies the per-download desk code only; ARM64
  * link; sha256 / version and the signed line; **Download again** after a `410`; deep link only after Keep (L3) or on
  * **I already have IndiansAssist**. Android: the App Link, then **Get the app**, **Copy token** and a QR. iOS: text.
+ * Linux (Phase E section 7.6): **Download for Linux (x86-64, X11)** of the per-download `.tar.gz`, the X11 line, a
+ * copy button for the exact `cd ~/Downloads && tar -xzf ... && ./...` line, and the ELF's sha256 from the build.
  * Nothing is stored for the room and the page never navigates to /room for this tier.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { AgentArch, AgentPlatform, DownloadPrepareReply, PublicToken } from '@indiansassist/shared';
+import type { AgentArch, AgentPlatform, DownloadManifest, DownloadPrepareReply, PublicToken } from '@indiansassist/shared';
 import { CopyButton } from '../components/CopyButton';
 import { QrCode } from '../components/QrCode';
 import { Alert, Button } from '../components/ui';
@@ -23,6 +25,7 @@ import {
   detectPlatform,
   groupCode,
   joinLinkFor,
+  linuxRunCommand,
   tryDeepLink,
   type DeepLinkEnv,
 } from './agentDownload';
@@ -30,6 +33,8 @@ import {
 export const P3_INTRO = 'This session uses the IndiansAssist support client. It runs without installing anything and removes itself when you close it.';
 export const P3_UNAVAILABLE = 'The support client is not available on this server; ask your technician for a browser screen-share link instead.';
 export const P3_IOS = 'Android only for now; ask your technician for a browser screen-share link.';
+export const P3_LINUX_DOWNLOAD = 'Download for Linux (x86-64, X11)';
+export const P3_LINUX_X11 = 'Needs an X11 (Xorg) session to share the screen';
 
 export type JoinP3Env = {
   nav: { userAgent: string; userAgentData?: { platform?: string } };
@@ -40,6 +45,8 @@ export type JoinP3Env = {
   /** HEAD of a grant URL (uncounted): the status, 0 on a network error. */
   probe: (url: string) => Promise<number>;
   prepare: (code: string, platform: AgentPlatform, arch: AgentArch) => Promise<DownloadPrepareReply>;
+  /** `GET /download/manifest` (public): whether this server has a Linux build (`PublicToken.agent` has no Linux flag). */
+  manifest: () => Promise<DownloadManifest>;
   setTimeout: (cb: () => void, ms: number) => unknown;
 };
 
@@ -52,6 +59,7 @@ function defaultEnv(): JoinP3Env {
     download: (url, name) => clickDownload(url, name),
     probe: (url) => fetch(url, { method: 'HEAD', credentials: 'omit' }).then((r) => r.status, () => 0),
     prepare: downloadApi.prepare,
+    manifest: downloadApi.manifest,
     setTimeout: (cb, ms) => window.setTimeout(cb, ms),
   };
 }
@@ -74,6 +82,8 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
   const [showDownload, setShowDownload] = useState(!seen);
   const [androidFallback, setAndroidFallback] = useState(false);
   const tried = useRef(false);
+  /** Linux only: true / false once the manifest answered, null before (or when it could not be read: prepare decides). */
+  const [linuxAvailable, setLinuxAvailable] = useState<boolean | null>(null);
   const joinLink = joinLinkFor(env.origin, code);
 
   const openApp = async () => {
@@ -83,9 +93,23 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
 
   useEffect(() => {
     // L3: the deep link is tried automatically only after the Desk chose Keep on this browser.
-    if (tried.current || !seen || platform !== 'windows') return;
+    if (tried.current || !seen || (platform !== 'windows' && platform !== 'linux')) return;
     tried.current = true;
     void openApp();
+  }, []);
+
+  useEffect(() => {
+    if (platform !== 'linux') return;
+    let live = true;
+    env.manifest().then(
+      (m) => {
+        if (live) setLinuxAvailable(m.builds.some((b) => b.platform === 'linux' && b.arch === 'x64'));
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
   }, []);
 
   const download = async (arch: AgentArch, p: AgentPlatform = 'windows') => {
@@ -148,6 +172,79 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
           <CopyButton text={code} label="Copy token" againLabel="Copy token again" variant="secondary" />
         </div>
         <QrCode text={joinLink} label="QR code of this join link for another device" size={176} />
+      </div>
+    );
+  }
+
+  if (platform === 'linux') {
+    const command = prep ? linuxRunCommand(prep.filename) : null;
+    const inner = prep ? prep.filename.replace(/\.tar\.gz$/, '') : '';
+    return (
+      <div className="flex flex-col gap-3" data-testid="join-p3-linux">
+        <p className="text-sm">{P3_INTRO}</p>
+        {linuxAvailable === false && <Alert tone="amber">{P3_UNAVAILABLE}</Alert>}
+        {seen && (
+          <Button size="lg" onClick={() => void openApp()} disabled={expired} style={!expired ? { backgroundColor: accent } : undefined}>
+            Open IndiansAssist
+          </Button>
+        )}
+        {linuxAvailable !== false && showDownload && !prep && (
+          <div className="flex flex-col gap-2">
+            <Button size="lg" onClick={() => start('x64', 'linux')} disabled={busy || expired} style={!expired ? { backgroundColor: accent } : undefined}>
+              {busy ? 'Preparing your download...' : P3_LINUX_DOWNLOAD}
+            </Button>
+            <p className="text-xs text-slate-600 dark:text-slate-400">{P3_LINUX_X11}.</p>
+            {!seen && (
+              <Button variant="secondary" onClick={() => void openApp()} disabled={expired}>
+                I already have IndiansAssist
+              </Button>
+            )}
+          </div>
+        )}
+        {error && <Alert>{error}</Alert>}
+        {prep && (
+          <section aria-label="Your download" className="flex flex-col gap-2 rounded-md border border-slate-300 p-3 text-sm dark:border-slate-700">
+            <p>
+              The download is <strong className="break-all">{prep.filename}</strong>. Open a terminal and run this line: it unpacks the client and starts it, and
+              it connects on its own.
+            </p>
+            {command && (
+              <>
+                <pre className="whitespace-pre-wrap break-all rounded bg-slate-100 p-2 font-mono text-xs dark:bg-slate-800" data-testid="p3-linux-command">
+                  {command}
+                </pre>
+                <div>
+                  <CopyButton text={command} label="Copy command" againLabel="Copy command again" variant="secondary" size="sm" />
+                </div>
+              </>
+            )}
+            <p className="text-xs">{P3_LINUX_X11}.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <CopyButton text={prep.deskCode} label="Copy support code" againLabel="Copy support code again" variant="secondary" size="sm" />
+              <span className="font-mono text-xs">{groupCode(prep.deskCode)}</span>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400">Use the support code only if the client asks for it.</p>
+            <p className="text-xs" data-testid="p3-sha">
+              Version {prep.version}, sha256 of the program <span className="break-all font-mono">{inner}</span>:{' '}
+              <span className="break-all font-mono">{prep.sha256}</span>
+            </p>
+            <Alert tone="amber">
+              The Linux client is not code-signed. To verify it, run <span className="break-all font-mono">sha256sum {inner}</span> after unpacking: it must print the
+              value above.
+            </Alert>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" disabled={busy || expired} onClick={() => void again()}>
+                Download again
+              </Button>
+            </div>
+          </section>
+        )}
+        <details className="rounded-md border border-slate-300 p-3 text-sm dark:border-slate-700">
+          <summary className="cursor-pointer font-medium">Join from another device</summary>
+          <div className="mt-2">
+            <QrCode text={joinLink} label="QR code of this join link for another device" size={176} />
+          </div>
+        </details>
       </div>
     );
   }
