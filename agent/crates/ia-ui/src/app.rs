@@ -1187,7 +1187,11 @@ impl IaApp {
     /// exclusion (an `SCContentFilter` that leaves the agent's own windows out of the stream,
     /// the macOS `WDA_EXCLUDEFROMCAPTURE`) are applied here by the apple stream; empty until then.
     #[cfg(target_os = "macos")]
-    fn housekeeping(&mut self, _ctx: &egui::Context) {}
+    fn housekeeping(&mut self, _ctx: &egui::Context) {
+        if self.last_housekeeping.elapsed() >= Duration::from_secs(2) {
+            self.last_housekeeping = Instant::now();
+        }
+    }
     // apple-owned: end
 
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]

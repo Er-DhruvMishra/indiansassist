@@ -474,10 +474,10 @@ pub fn native_interpreters() -> &'static [PlaybookInterpreter] {
 }
 
 // apple-owned: begin
-/// Phase F §17.2: the macOS agent runs `zsh` and `sh`. Empty until the apple stream fills it.
+/// Phase F §17.2: the macOS agent runs `zsh` (the default shell since macOS 10.15) and `sh`.
 #[cfg(target_os = "macos")]
 pub fn native_interpreters() -> &'static [PlaybookInterpreter] {
-    &[]
+    &[PlaybookInterpreter::Zsh, PlaybookInterpreter::Sh]
 }
 // apple-owned: end
 
