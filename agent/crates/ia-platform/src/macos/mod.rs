@@ -10,6 +10,7 @@ pub mod deeplink;
 pub mod instance;
 pub mod os;
 pub mod paths;
+pub mod restart;
 pub mod selfdel;
 
 pub use os::{

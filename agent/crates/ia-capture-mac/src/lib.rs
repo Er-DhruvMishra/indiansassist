@@ -18,9 +18,24 @@ pub use sck::{active_displays, SckCapturer, RETRY_EVERY};
 
 /// Whether this process may capture the screen now (`CGPreflightScreenCaptureAccess`; never shows
 /// a prompt).
+/// `CGPreflightScreenCaptureAccess` can answer no for a process that has the grant (seen on
+/// macOS 15 with an ad hoc signed bundle), so a no is checked once per process against
+/// ScreenCaptureKit itself, which hands over the shareable content only with the grant. The
+/// answer is kept: macOS applies a new grant only to a new process anyway.
 #[cfg(all(target_os = "macos", feature = "macos"))]
 pub fn screen_recording_granted() -> bool {
+    static CONFIRMED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     objc2_core_graphics::CGPreflightScreenCaptureAccess()
+        || *CONFIRMED.get_or_init(|| match sck::shareable_content_available() {
+            Ok(()) => {
+                eprintln!("Screen Recording: preflight said no, ScreenCaptureKit says yes");
+                true
+            }
+            Err(e) => {
+                eprintln!("Screen Recording: not granted ({e})");
+                false
+            }
+        })
 }
 
 /// Asks the system for Screen Recording (`CGRequestScreenCaptureAccess`): the first call shows

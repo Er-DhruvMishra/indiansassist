@@ -27,6 +27,13 @@ fn main() {
     ia_capture_win::enumerate::ensure_per_monitor_dpi_awareness();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // apple-owned: begin
+    // Phase F §17.2: a start with no arguments right after the permissions window restarted
+    // IndiansAssist (System Settings' "Quit & Reopen", or its own button) takes the support code
+    // and switches back from the restart hand-off.
+    #[cfg(target_os = "macos")]
+    let args = macos_resume_args(args);
+    // apple-owned: end
 
     let cli = match Cli::parse(&args) {
         Ok(c) => c,
@@ -101,8 +108,11 @@ fn macos_run_on_worker(
     let cli = cli.clone();
     let worker = match std::thread::Builder::new()
         .name("ia-agent".into())
-        .spawn(move || run(&cli, resolved))
-    {
+        .spawn(move || {
+            if macos_permissions_first(&cli, resolved.is_some()) {
+                run(&cli, resolved)
+            }
+        }) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("the agent thread could not start: {e}");
@@ -118,6 +128,149 @@ fn macos_run_on_worker(
 // apple-owned: end
 
 // apple-owned: begin
+/// The arguments this process runs with (its own, or the ones a restart took back), for a
+/// further restart.
+#[cfg(target_os = "macos")]
+static MACOS_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Phase F §17.2: `args`, or, when there are none (Launch Services adds at most a `-psn_` one),
+/// the arguments of a fresh restart hand-off, whose carried environment is applied here, before
+/// any thread starts.
+#[cfg(target_os = "macos")]
+fn macos_resume_args(args: Vec<String>) -> Vec<String> {
+    use ia_platform::macos::{restart, MacEnv};
+    let args = if args.iter().all(|a| a.starts_with("-psn_")) {
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let uid = unsafe { libc::getuid() };
+        match restart::take(&MacEnv::from_process(), uid) {
+            Some(h) => {
+                for (k, v) in &h.env {
+                    std::env::set_var(k, v);
+                }
+                #[cfg(feature = "dev")]
+                if let Some(log) = &h.log {
+                    macos_log_to(log);
+                }
+                eprintln!("IndiansAssist restarted; the support code was kept");
+                h.args
+            }
+            None => args,
+        }
+    } else {
+        args
+    };
+    let _ = MACOS_ARGS.set(args.clone());
+    args
+}
+
+/// Dev builds: stdout and stderr to `path` (appending), so a restarted process keeps logging
+/// where the first one did.
+#[cfg(all(target_os = "macos", feature = "dev"))]
+fn macos_log_to(path: &std::path::Path) {
+    use std::os::fd::AsRawFd;
+    if let Ok(f) = std::fs::OpenOptions::new().append(true).open(path) {
+        // SAFETY: both descriptors are valid; dup2 replaces 1 and 2 atomically.
+        unsafe {
+            libc::dup2(f.as_raw_fd(), 1);
+            libc::dup2(f.as_raw_fd(), 2);
+        }
+    }
+}
+
+/// Dev builds: the file stdout goes to, when it is a regular file (`F_GETPATH`).
+#[cfg(all(target_os = "macos", feature = "dev"))]
+fn macos_log_path() -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: fstat and fcntl(F_GETPATH) write into buffers of the sizes they require.
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(1, &mut st) != 0 || st.st_mode & libc::S_IFMT != libc::S_IFREG {
+            return None;
+        }
+        let mut buf = [0u8; libc::PATH_MAX as usize];
+        if libc::fcntl(1, libc::F_GETPATH, buf.as_mut_ptr()) != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0)?;
+        Some(std::ffi::OsStr::from_bytes(&buf[..end]).into())
+    }
+}
+
+/// Phase F §17.2: before connecting (so the support code is not used yet), the permissions
+/// window when Screen Recording or Accessibility is missing. While it is open the start-up
+/// arguments are kept in the restart hand-off, so "Quit & Reopen" in System Settings, or
+/// "Restart IndiansAssist", comes back with the same code. Returns whether to connect. Skipped
+/// for synthetic capture, `--auto-consent` and a start without a code (TCC is never touched by
+/// automated runs; the consent window still has the steps).
+#[cfg(all(target_os = "macos", feature = "gui"))]
+fn macos_permissions_first(cli: &Cli, has_code: bool) -> bool {
+    use ia_platform::macos::{paths, restart, MacEnv};
+    use ia_ui::tray::Preflight;
+    if cli.synthetic_capture || cli.auto_consent.is_some() || !has_code {
+        return true;
+    }
+    #[cfg(feature = "macos")]
+    if ia_capture_mac::screen_recording_granted() && ia_input_mac::accessibility_granted() {
+        return true;
+    }
+    let Some(bundle) = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(paths::bundle_of)
+    else {
+        return true;
+    };
+    let env = MacEnv::from_process();
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let handoff = restart::Handoff {
+        args: MACOS_ARGS.get().cloned().unwrap_or_default(),
+        env: restart::CARRIED_ENV
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+            .collect(),
+        #[cfg(feature = "dev")]
+        log: macos_log_path(),
+        #[cfg(not(feature = "dev"))]
+        log: None,
+    };
+    if let Err(e) = restart::save(&env, uid, &handoff) {
+        tracing::warn!("the restart hand-off could not be kept: {e}");
+    }
+    let answer = ia_ui::app::macos_permissions_window();
+    tracing::info!(?answer, "permissions window");
+    match answer {
+        Preflight::Continue => {
+            restart::clear(&env, uid);
+            true
+        }
+        Preflight::Cancel => {
+            restart::clear(&env, uid);
+            false
+        }
+        Preflight::Restart => {
+            // A second start while this one still holds the single instance would only be
+            // forwarded to it, so the new start waits a second for this process to be gone.
+            let spawned = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "sleep 1; exec /usr/bin/open -n \"$0\"",
+                    &bundle.to_string_lossy(),
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            if let Err(e) = spawned {
+                tracing::warn!("IndiansAssist could not restart itself: {e}");
+                restart::clear(&env, uid);
+                return true;
+            }
+            false
+        }
+    }
+}
+
 /// Phase F §17.2: the macOS start-up. Never as root; the signed `IndiansAssist.iaconfig` sidecar
 /// beside `IndiansAssist.app` (the macOS carrier: the zip's name is gone after extraction); the
 /// `indiansassist://` link of a Launch Services launch, which arrives as a `GetURL` Apple Event

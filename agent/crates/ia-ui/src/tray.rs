@@ -18,7 +18,7 @@ pub use sni::Tray;
 
 // apple-owned: begin
 #[cfg(target_os = "macos")]
-pub use mac::{tcc_guide, tcc_steps, Tray};
+pub use mac::{permissions_ui, tcc_guide, tcc_steps, Preflight, Tray};
 // apple-owned: end
 
 /// The tray state, mapped to colour + tooltip.
@@ -468,10 +468,19 @@ mod mac {
         walked: [bool; 2],
         /// The consent window is stepped down from always-on-top (while the guide is open).
         lowered: bool,
+        /// macOS was asked for the grant this run (its box once is enough: it lists the app).
+        asked: [bool; 2],
     }
 
     thread_local! {
-        static GUIDE: Cell<Guide> = const { Cell::new(Guide { shown: None, walked: [false; 2], lowered: false }) };
+        static GUIDE: Cell<Guide> = const { Cell::new(Guide { shown: None, walked: [false; 2], lowered: false, asked: [false; 2] }) };
+    }
+
+    thread_local! {
+        /// The window asking is the pre-connect permissions window: a restart keeps the code.
+        static RESTART_SAFE: Cell<bool> = const { Cell::new(false) };
+        /// The guide's "Restart IndiansAssist" was clicked.
+        static RESTART_ASKED: Cell<bool> = const { Cell::new(false) };
     }
 
     /// The first grant still missing.
@@ -489,7 +498,12 @@ mod mac {
         tracing::info!(?grant, "walking the person to a missing macOS grant");
         g.walked[grant.index()] = true;
         g.shown = Some(grant);
-        grant.request();
+        // Ask macOS once per run: its box puts IndiansAssist in the pane's list. Asking again
+        // only shows the same box again over a pane that is already open.
+        if !g.asked[grant.index()] {
+            g.asked[grant.index()] = true;
+            grant.request();
+        }
         open(&[grant.pane()]);
         grants(true);
     }
@@ -573,6 +587,63 @@ mod mac {
         (screen, control)
     }
 
+    /// How the pre-connect permissions window was left.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Preflight {
+        /// Both grants are there, or the person goes on without the missing ones.
+        Continue,
+        /// Restart IndiansAssist (with the same support code) so macOS applies the new grant.
+        Restart,
+        /// Cancel: quit without connecting.
+        Cancel,
+    }
+
+    /// Phase F §17.2: the pre-connect permissions window. It runs before the agent connects, so
+    /// the support code is not used yet and a restart (System Settings' "Quit & Reopen", or
+    /// "Restart IndiansAssist" here and in the guide) keeps it. The steps and the guide are the
+    /// consent window's; the window answers by itself once both grants are there. Returns the
+    /// answer once there is one.
+    pub fn permissions_ui(ctx: &egui::Context) -> Option<Preflight> {
+        RESTART_SAFE.set(true);
+        let (screen, control) = grants(false);
+        if screen && control {
+            return Some(Preflight::Continue);
+        }
+        let mut out = None;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(6.0);
+            ui.heading("Before IndiansAssist connects");
+            ui.add_space(4.0);
+            ui.label(
+                "So a technician can help, macOS asks you for two permissions. Your support \
+                 code is kept while you do this, even if IndiansAssist restarts.",
+            );
+            tcc_steps(ui);
+            if !screen && GUIDE.get().asked[Grant::Screen.index()] {
+                ui.separator();
+                ui.label(RichText::new("Turned screen recording on?").strong());
+                ui.label("macOS lets IndiansAssist use it after a restart.");
+                if ui.button("Restart IndiansAssist").clicked() {
+                    out = Some(Preflight::Restart);
+                }
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Continue without them").clicked() {
+                    out = Some(Preflight::Continue);
+                }
+                if ui.button("Cancel").clicked() {
+                    out = Some(Preflight::Cancel);
+                }
+            });
+        });
+        tcc_guide(ctx);
+        if RESTART_ASKED.replace(false) {
+            out = Some(Preflight::Restart);
+        }
+        out
+    }
+
     const GUIDE_W: f32 = 300.0;
     const GUIDE_H: f32 = 500.0;
     /// The gap between the guide and System Settings.
@@ -624,6 +695,7 @@ mod mac {
     enum GuideAction {
         OpenAgain,
         ShowInFinder,
+        Restart,
         Close,
     }
 
@@ -685,6 +757,7 @@ mod mac {
                     open(&["-R", &app.to_string_lossy()]);
                 }
             }
+            Some(GuideAction::Restart) => RESTART_ASKED.set(true),
             Some(GuideAction::Close) => g.shown = None,
             None => {}
         }
@@ -706,19 +779,24 @@ mod mac {
         ui.add_space(6.0);
         let mut lines = vec![
             format!(
-                "System Settings is open at Privacy & Security → {}. If a box about \
-                 IndiansAssist shows first, click Open System Settings.",
+                "System Settings is open at Privacy & Security > {}. If macOS also shows a \
+                 box about IndiansAssist, either button is fine: this page is already open.",
                 grant.pane_name()
             ),
             "Find IndiansAssist in the list and turn its switch on, like the picture.".to_owned(),
             "Enter your Mac password or use Touch ID if macOS asks.".to_owned(),
         ];
+        let safe = RESTART_SAFE.get();
         if grant == Grant::Screen {
-            lines.push(
+            lines.push(if safe {
+                "macOS then asks to quit and reopen IndiansAssist. Click Quit & Reopen (or Later, \
+                 then Restart IndiansAssist below): your support code is kept."
+                    .to_owned()
+            } else {
                 "If macOS says IndiansAssist must quit and reopen, click Later: quitting now \
                  would end this support request."
-                    .to_owned(),
-            );
+                    .to_owned()
+            });
         }
         lines.push("Come back here. This guide closes by itself when it is done.".to_owned());
         for (i, line) in lines.iter().enumerate() {
@@ -732,19 +810,25 @@ mod mac {
         ui.label(
             RichText::new(
                 "IndiansAssist not in the list? Click + under the list and choose it, or drag \
-                 it in from Finder.",
+                 it in from Finder. Already on but this still asks? Remove it with −, then \
+                 click Show me how again.",
             )
             .small(),
         );
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button("Open System Settings again").clicked() {
-                *action = Some(GuideAction::OpenAgain);
+        if safe && grant == Grant::Screen {
+            let restart = egui::Button::new(RichText::new("Restart IndiansAssist").strong());
+            if ui.add(restart).clicked() {
+                *action = Some(GuideAction::Restart);
             }
-            if own_bundle().is_some() && ui.button("Show IndiansAssist in Finder").clicked() {
-                *action = Some(GuideAction::ShowInFinder);
-            }
-        });
+            ui.add_space(2.0);
+        }
+        if ui.button("Open System Settings again").clicked() {
+            *action = Some(GuideAction::OpenAgain);
+        }
+        if own_bundle().is_some() && ui.button("Show IndiansAssist in Finder").clicked() {
+            *action = Some(GuideAction::ShowInFinder);
+        }
         if ui.button("Close guide").clicked() {
             *action = Some(GuideAction::Close);
         }
@@ -769,6 +853,14 @@ mod mac {
             rect.left_top() + vec2(10.0, 8.0),
             Align2::LEFT_TOP,
             grant.pane_name(),
+            FontId::proportional(11.0),
+            weak,
+        );
+        // A picture, not the real switch: say so, so nobody takes it for the setting itself.
+        p.text(
+            rect.right_top() + vec2(-10.0, 8.0),
+            Align2::RIGHT_TOP,
+            "Example",
             FontId::proportional(11.0),
             weak,
         );

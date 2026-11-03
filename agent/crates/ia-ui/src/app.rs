@@ -165,6 +165,13 @@ pub fn macos_main_thread_enable() {
     mac_host::enable();
 }
 
+/// Phase F §17.2: the pre-connect permissions window (Screen Recording, Accessibility, with the
+/// guide), shown from the agent's worker thread before it connects, run on the main thread.
+#[cfg(target_os = "macos")]
+pub fn macos_permissions_window() -> crate::tray::Preflight {
+    mac_host::permissions()
+}
+
 /// Phase F §17.2: run UI windows on this (the main) thread until `done()` holds.
 #[cfg(target_os = "macos")]
 pub fn macos_main_thread_host(done: impl Fn() -> bool) {
@@ -217,6 +224,67 @@ mod mac_host {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
+    }
+
+    /// Runs `f` on the main thread (through the host) and waits for its result; `None` when the
+    /// host is gone.
+    pub fn run<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> Option<R> {
+        let (tx, rx) = channel();
+        let job: Job = Box::new(move || {
+            let _ = tx.send(f());
+        });
+        queue().0.send(job).ok()?;
+        rx.recv().ok()
+    }
+
+    /// The pre-connect permissions window (`crate::tray::permissions_ui`) on the main thread.
+    pub fn permissions() -> crate::tray::Preflight {
+        use crate::tray::Preflight;
+        use std::cell::Cell;
+        struct PermissionsApp {
+            out: Rc<Cell<Option<Preflight>>>,
+        }
+        impl eframe::App for PermissionsApp {
+            fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+                if self.out.get().is_some() {
+                    return;
+                }
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.out.set(Some(Preflight::Cancel));
+                } else if let Some(p) = crate::tray::permissions_ui(ctx) {
+                    self.out.set(Some(p));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+        run(|| {
+            let out = Rc::new(Cell::new(None));
+            let app_out = out.clone();
+            let options = eframe::NativeOptions {
+                viewport: ViewportBuilder::default()
+                    .with_title("IndiansAssist")
+                    .with_inner_size([480.0, 520.0])
+                    .with_resizable(false)
+                    .with_maximize_button(false)
+                    .with_minimize_button(false)
+                    .with_window_level(WindowLevel::AlwaysOnTop)
+                    .with_active(true),
+                centered: true,
+                renderer: eframe::Renderer::Glow,
+                ..Default::default()
+            };
+            let result = eframe::run_native(
+                "IndiansAssist",
+                options,
+                Box::new(move |_| Ok(Box::new(PermissionsApp { out: app_out }))),
+            );
+            if let Err(e) = result {
+                tracing::warn!("the permissions window could not open: {e}");
+                return Preflight::Continue;
+            }
+            out.get().unwrap_or(Preflight::Cancel)
+        })
+        .unwrap_or(Preflight::Continue)
     }
 
     /// [`super::spawn`] on macOS: the same window, run by the main-thread host.
