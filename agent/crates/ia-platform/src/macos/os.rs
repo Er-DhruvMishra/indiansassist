@@ -82,7 +82,50 @@ impl KnownFolders for MacKnownFolders {
 pub struct SelfDeleteReport {
     pub removed: Vec<PathBuf>,
     pub kept_copy: Option<PathBuf>,
+    /// The bundle a detached helper removes once this process has exited.
+    pub bundle_after_exit: Option<PathBuf>,
     pub failures: Vec<String>,
+}
+
+/// How long the helper waits for the app to exit before giving up (it then removes nothing).
+const HELPER_WAIT_TICKS: u32 = 600;
+
+/// The running bundle cannot be removed by the process inside it, so a detached `/bin/sh`
+/// helper (its own process group, no inherited descriptors) waits until `parent` has exited, then
+/// removes exactly `bundle` with `/bin/rm -rf --`, and only while it is still a real directory
+/// (not a symlink planted in its place). It gives up after two minutes rather than delete under a
+/// live app. The path is passed as an argument, never interpolated into the script.
+fn remove_bundle_after_exit(
+    env: &MacEnv,
+    bundle: &Path,
+    parent: u32,
+    kept_remove_after: bool,
+) -> io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    if !selfdel::bundle_removal_allowed(env, bundle, kept_remove_after) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to remove a bundle that is not a downloaded IndiansAssist.app",
+        ));
+    }
+    let script = format!(
+        "n=0; while /bin/kill -0 \"$1\" 2>/dev/null; do n=$((n+1)); \
+         [ \"$n\" -ge {HELPER_WAIT_TICKS} ] && exit 1; /bin/sleep 0.2; done; \
+         [ -d \"$2\" ] && [ ! -L \"$2\" ] && exec /bin/rm -rf -- \"$2\""
+    );
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .arg("ia-self-delete")
+        .arg(parent.to_string())
+        .arg(bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
 }
 
 /// Keep (rule 3.4c): copies the bundle `from` to `to` with `ditto` (which keeps the signature)
@@ -139,6 +182,17 @@ pub fn apply_self_delete(
     env: &MacEnv,
     exe: &Path,
 ) -> io::Result<SelfDeleteReport> {
+    apply_self_delete_for(plan, env, exe, std::process::id())
+}
+
+/// [`apply_self_delete`] with the process whose exit the bundle removal waits for (tests pass a
+/// short-lived child of their own).
+fn apply_self_delete_for(
+    plan: &SelfDeletePlan,
+    env: &MacEnv,
+    exe: &Path,
+    parent: u32,
+) -> io::Result<SelfDeleteReport> {
     if !selfdel::plan_is_contained(plan, env, exe) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -157,7 +211,7 @@ pub fn apply_self_delete(
             Err(e) => report.failures.push(format!("{}: {e}", f.display())),
         }
     }
-    for d in plan.remove_dirs.iter().chain(plan.remove_bundle.iter()) {
+    for d in &plan.remove_dirs {
         // Never follow a symlink planted in place of the directory.
         match fs::symlink_metadata(d) {
             Ok(m) if m.file_type().is_dir() => match fs::remove_dir_all(d) {
@@ -169,6 +223,13 @@ pub fn apply_self_delete(
                 .push(format!("{}: not a directory", d.display())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => report.failures.push(format!("{}: {e}", d.display())),
+        }
+    }
+    // The bundle goes last, after this process exits.
+    if let Some(b) = &plan.remove_bundle {
+        match remove_bundle_after_exit(env, b, parent, plan.kept_remove_after) {
+            Ok(()) => report.bundle_after_exit = Some(b.clone()),
+            Err(e) => report.failures.push(format!("{}: {e}", b.display())),
         }
     }
     Ok(report)
@@ -381,15 +442,83 @@ mod tests {
             home: Some(home.clone()),
             tmpdir: None,
         };
-        let report = apply_self_delete(&selfdel::plan(&env, &exe, false), &env, &exe).unwrap();
+        // A short-lived child stands in for the app: the helper waits for it to exit.
+        let mut app = Command::new("/bin/sleep").arg("1").spawn().unwrap();
+        let plan = selfdel::plan(&env, &exe, false);
+        let report = apply_self_delete_for(&plan, &env, &exe, app.id()).unwrap();
         assert!(report.failures.is_empty(), "{:?}", report.failures);
-        assert!(!home.join("Downloads/IndiansAssist.app").exists());
+        let bundle = home.join("Downloads/IndiansAssist.app");
+        assert_eq!(report.bundle_after_exit, Some(bundle.clone()));
+        assert!(bundle.exists(), "the bundle stays while the app runs");
+        app.wait().unwrap();
+        let gone = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            !bundle.exists()
+        });
+        assert!(gone, "the helper removed the bundle after the app exited");
         assert!(!home.join("Downloads/IndiansAssist.iaconfig").exists());
         assert!(!home
             .join("Library/Application Support/IndiansAssist")
             .exists());
         assert!(home.join("Downloads/IndiansAssist/received.txt").exists());
         fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn the_helper_refuses_a_bundle_it_may_not_remove_and_spares_a_symlink() {
+        let home = temp_home("refuse");
+        let env = MacEnv {
+            home: Some(home.clone()),
+            tmpdir: None,
+        };
+        let kept = home.join("Applications/IndiansAssist.app");
+        fs::create_dir_all(&kept).unwrap();
+        assert!(remove_bundle_after_exit(&env, &kept, std::process::id(), false).is_err());
+        let other = home.join("Downloads/Other.app");
+        fs::create_dir_all(&other).unwrap();
+        assert!(remove_bundle_after_exit(&env, &other, std::process::id(), true).is_err());
+        // A symlink planted in place of the bundle is not followed: its target survives.
+        let target = home.join("Documents");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("precious.txt"), b"x").unwrap();
+        let link = home.join("Downloads/IndiansAssist.app");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut app = Command::new("/bin/sleep").arg("0.2").spawn().unwrap();
+        remove_bundle_after_exit(&env, &link, app.id(), false).unwrap();
+        app.wait().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        assert!(target.join("precious.txt").exists());
+        assert!(kept.exists() && other.exists());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_kept_copy_goes_after_exit_only_when_its_person_unticked_keep() {
+        for remove_after in [true, false] {
+            let home = temp_home(if remove_after { "kept-go" } else { "kept-stay" });
+            let env = MacEnv {
+                home: Some(home.clone()),
+                tmpdir: None,
+            };
+            let kept = home.join("Applications/IndiansAssist.app");
+            let exe = kept.join("Contents/MacOS/IndiansAssist");
+            fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            fs::write(&exe, b"#!/bin/sh\n").unwrap();
+            let support = home.join("Library/Application Support/IndiansAssist");
+            fs::create_dir_all(&support).unwrap();
+            let mut app = Command::new("/bin/sleep").arg("0.3").spawn().unwrap();
+            let plan = selfdel::removal_plan(&env, &exe, remove_after);
+            let r = apply_self_delete_for(&plan, &env, &exe, app.id()).unwrap();
+            assert!(r.failures.is_empty(), "{:?}", r.failures);
+            assert!(!support.exists());
+            app.wait().unwrap();
+            let gone = (0..30).any(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                !kept.exists()
+            });
+            assert_eq!(gone, remove_after, "remove_after {remove_after}");
+            fs::remove_dir_all(&home).unwrap();
+        }
     }
 
     #[test]
