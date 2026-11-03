@@ -349,8 +349,14 @@ pub fn active_displays() -> Vec<Display> {
         .collect()
 }
 
-/// The ScreenCaptureKit filter for one display without this application's windows.
-fn content_filter(display_id: u32) -> Result<Retained<SCContentFilter>, String> {
+/// Whether ScreenCaptureKit hands this process the shareable content (it does only with Screen
+/// Recording), with the error code otherwise. Called once per process (see
+/// `screen_recording_granted`), never on a timer.
+pub fn shareable_content_available() -> Result<(), String> {
+    shareable_content().map(|_| ())
+}
+
+fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
     struct SendContent(Option<Retained<SCShareableContent>>, Option<isize>);
     // SAFETY: SCShareableContent is an immutable snapshot, safe to move between threads.
     unsafe impl Send for SendContent {}
@@ -363,17 +369,18 @@ fn content_filter(display_id: u32) -> Result<Retained<SCContentFilter>, String> 
     });
     // SAFETY: the handler only sends on a channel.
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
-    let got = rx
-        .recv_timeout(SCK_TIMEOUT)
-        .map_err(|_| "the shareable content did not arrive".to_string())?;
-    let content = match got {
-        SendContent(Some(c), None) => c,
-        SendContent(_, code) => {
-            return Err(format!(
-                "no shareable content (error {code:?}; is Screen Recording granted?)"
-            ))
-        }
-    };
+    match rx.recv_timeout(SCK_TIMEOUT) {
+        Ok(SendContent(Some(c), None)) => Ok(c),
+        Ok(SendContent(_, code)) => Err(format!(
+            "no shareable content (error {code:?}; is Screen Recording granted?)"
+        )),
+        Err(_) => Err("the shareable content did not arrive".to_string()),
+    }
+}
+
+/// The ScreenCaptureKit filter for one display without this application's windows.
+fn content_filter(display_id: u32) -> Result<Retained<SCContentFilter>, String> {
+    let content = shareable_content()?;
     // SAFETY: reading the snapshot's arrays and properties.
     unsafe {
         let display = content

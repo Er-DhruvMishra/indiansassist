@@ -31,4 +31,4 @@ pub use access::{accessibility_granted, request_accessibility};
 #[cfg(all(target_os = "macos", feature = "macos"))]
 pub use clipboard::MacClipboard;
 #[cfg(all(target_os = "macos", feature = "macos"))]
-pub use input::{own_windows, MacInput};
+pub use input::{own_windows, settings_window, MacInput};

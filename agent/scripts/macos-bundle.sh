@@ -17,9 +17,10 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 repo=$(cd "$here/.." && pwd)
 features="media,macos,gui"
 out="$here/target/macos"
+dev=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --dev) features="$features,dev" ;;
+        --dev) features="$features,dev"; dev=1 ;;
         --out) out="$2"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -46,7 +47,16 @@ sed "s/@VERSION@/$version/g" "$repo/packaging/macos/Info.plist.in" > "$app/Conte
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
 plutil -lint "$app/Contents/Info.plist" >/dev/null
-codesign --force --sign - --timestamp=none --identifier com.indiansassist.agent "$app"
+# A dev bundle's designated requirement names only the identifier, so the Screen Recording and
+# Accessibility grants a developer gave survive a rebuild (an ad hoc default names the code
+# hash, which every build changes, and System Settings then shows a switch that is on but does
+# nothing). Never for a release bundle: anything signed with that identifier would match.
+if [ "$dev" = 1 ]; then
+    codesign --force --sign - --timestamp=none --identifier com.indiansassist.agent \
+        --requirements '=designated => identifier "com.indiansassist.agent"' "$app"
+else
+    codesign --force --sign - --timestamp=none --identifier com.indiansassist.agent "$app"
+fi
 codesign --verify --strict "$app"
 
 echo "$app ($version, features $features, signed ad hoc: not signed for distribution)"
