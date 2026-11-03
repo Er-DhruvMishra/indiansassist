@@ -21,26 +21,38 @@ pub struct SelfDeletePlan {
     pub keep_copy: Option<(PathBuf, PathBuf)>,
 }
 
-/// The plan for a clean exit. `kept` = the person chose Keep: the bundle is copied to
-/// `~/Applications/IndiansAssist.app` and the support directory stays (it holds the settings
-/// the kept app reuses). Received files are never in a plan (D1). A binary outside a bundle
-/// (a dev build) removes only the support directory.
+/// Whether `exe` runs from the Keep location, `~/Applications/IndiansAssist.app` (rule 3.4d).
+pub fn is_kept_copy(env: &MacEnv, exe: &Path) -> bool {
+    paths::bundle_of(exe).is_some_and(|b| Some(b) == paths::kept_bundle(env))
+}
+
+/// The plan for a clean exit. Received files are never in a plan (D1).
+///
+/// * `kept` (the person chose Keep, D5; rule 3.4c): the bundle is copied to
+///   `~/Applications/IndiansAssist.app` (no administrator needed), the support directory (logs and
+///   state) goes, and nothing else is removed. A kept app running again copies nothing and only
+///   clears the support directory (rule 3.4d).
+/// * otherwise: the support directory, the sidecar and the running bundle (a kept app removes
+///   itself the same way).
+///
+/// A binary outside a bundle (a dev build) never copies or removes a bundle.
 pub fn plan(env: &MacEnv, exe: &Path, kept: bool) -> SelfDeletePlan {
     let bundle = paths::bundle_of(exe);
+    let remove_dirs: Vec<PathBuf> = paths::support_dir(env).into_iter().collect();
     if kept {
         let keep_copy = match (bundle, paths::kept_bundle(env)) {
             (Some(from), Some(to)) if from != to => Some((from, to)),
             _ => None,
         };
         return SelfDeletePlan {
-            remove_dirs: Vec::new(),
+            remove_dirs,
             remove_files: Vec::new(),
             remove_bundle: None,
             keep_copy,
         };
     }
     SelfDeletePlan {
-        remove_dirs: paths::support_dir(env).into_iter().collect(),
+        remove_dirs,
         remove_files: paths::sidecar_for(exe).into_iter().collect(),
         remove_bundle: bundle,
         keep_copy: None,
@@ -105,9 +117,15 @@ mod tests {
     }
 
     #[test]
-    fn keep_copies_the_bundle_to_applications_and_removes_nothing() {
+    fn keep_copies_the_bundle_to_applications_and_removes_only_the_support_dir() {
         let p = plan(&env(), Path::new(EXE), true);
-        assert!(p.remove_dirs.is_empty() && p.remove_files.is_empty());
+        assert_eq!(
+            p.remove_dirs,
+            vec![PathBuf::from(
+                "/Users/pat/Library/Application Support/IndiansAssist"
+            )]
+        );
+        assert!(p.remove_files.is_empty());
         assert_eq!(p.remove_bundle, None);
         assert_eq!(
             p.keep_copy,
@@ -122,7 +140,19 @@ mod tests {
     #[test]
     fn the_kept_app_keeps_itself_without_copying_onto_itself() {
         let kept = "/Users/pat/Applications/IndiansAssist.app/Contents/MacOS/IndiansAssist";
-        assert_eq!(plan(&env(), Path::new(kept), true).keep_copy, None);
+        assert!(is_kept_copy(&env(), Path::new(kept)));
+        assert!(!is_kept_copy(&env(), Path::new(EXE)));
+        let p = plan(&env(), Path::new(kept), true);
+        assert_eq!(p.keep_copy, None);
+        assert_eq!(p.remove_bundle, None);
+        assert_eq!(p.remove_dirs.len(), 1);
+        // Remove-after-session on the kept app: it removes itself like any bundle.
+        let p = plan(&env(), Path::new(kept), false);
+        assert_eq!(
+            p.remove_bundle,
+            Some(PathBuf::from("/Users/pat/Applications/IndiansAssist.app"))
+        );
+        assert!(plan_is_contained(&p, &env(), Path::new(kept)));
     }
 
     #[test]
