@@ -6,6 +6,7 @@
 //! that need the OS (the self-delete applier, `getpeereid` / `LOCAL_PEERPID`, `proc_pidpath`, the
 //! instance socket) are [`os`].
 
+pub mod codesign;
 pub mod deeplink;
 pub mod instance;
 pub mod os;
