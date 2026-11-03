@@ -11,7 +11,7 @@ import type { AgentCapabilities, AuthResponse } from '@indiansassist/shared';
 import { StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
 import { NoScreenSlot } from '../src/assist/console/EnterpriseSlots';
 import { AgentConsole } from '../src/assist/console/agent/AgentConsole';
-import { NO_SCREEN_DETAIL, NO_SCREEN_TITLE, NoScreenState } from '../src/assist/console/agent/NoScreenState';
+import { NO_SCREEN_DETAIL, NO_SCREEN_HINT_MAC, NO_SCREEN_TITLE, NO_SCREEN_TITLE_MAC, NoScreenState } from '../src/assist/console/agent/NoScreenState';
 import { SignalClient } from '../src/lib/signal';
 import { FakePeerConnection, FakeWebSocket, IDS, ISO, LATER } from './fakes';
 
@@ -51,6 +51,15 @@ describe('NoScreenState', () => {
     expect(screen.getByRole('heading', { name: 'The Desk cannot share its screen: Wayland session' })).toBeTruthy();
     expect(status.textContent).toContain(NO_SCREEN_DETAIL);
     expect(status.textContent).toMatch(/Chat, files and playbooks still work/);
+  });
+
+  it('names the Screen Recording permission for a macOS Desk (zsh), never Wayland', () => {
+    const MAC: AgentCapabilities = { ...WAYLAND, interpreters: ['zsh'] };
+    render(<NoScreenState capabilities={MAC}><Screen /></NoScreenState>);
+    const status = screen.getByRole('status', { name: NO_SCREEN_TITLE_MAC });
+    expect(status.textContent).toContain(NO_SCREEN_HINT_MAC);
+    expect(status.textContent).toContain(NO_SCREEN_DETAIL);
+    expect(status.textContent).not.toMatch(/Wayland|Xorg/);
   });
 
   it('the foundation slot renders it', () => {

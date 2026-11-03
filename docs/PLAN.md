@@ -248,11 +248,13 @@ manual checks on a disposable machine; the full-size 2,000-device load run.
 ### 8.1 Status (3 Nov 2026): wave 1 and the apple stream integrated
 
 Done: F0; fixes, mail, erasure, camera and mobile; the apple stream's macOS P3 agent, macOS
-packaging, iOS app and broadcast extension; the coordinator's integration (contract revision 3).
+packaging, iOS app and broadcast extension, verified on a Mac with real ScreenCaptureKit capture
+and control (25 fps, 21 ms glass to glass on loopback), with a permissions window that runs
+before the agent connects; the coordinator's integration (contract revision 3).
 Every gate is green on this machine: build, typecheck, lint, unit tests, `test:scripts`,
 `license:check`, both fixture checks, `validate:infra`, `recorder:test`, Rust fmt, clippy and
 tests (646 passed), every smoke (`smoke:e` 47, `smoke:f` 27 in all four flows), `e2e:e`, the F
-specs, `e2e:mobile` and `e2e:p3`.
+specs (`pnpm e2e:f` now runs each against its own api settings), `e2e:mobile` and `e2e:p3`.
 
 Four defects found by the streams are fixed: an installed worker could delete itself; a missing
 or unknown playbook interpreter ran as PowerShell (now refused `not_allowed`); the Android agent
@@ -263,10 +265,15 @@ Open after wave 1:
 - The Jira, ServiceNow, Freshdesk and Zoho request shapes were checked against vendor
   documentation only; all four stay `verified: false` until a run against a vendor sandbox.
 - A phone camera that reconnects through a different api node cannot resume (§15.10).
-- `mobile-emulator.spec.ts` is flaky under load on this machine; touch on a real Android phone
-  is unverified.
-- Manual: iPhone and iPad Safari, a real iPhone broadcast, macOS capture with the permission
-  granted, Keep on a real desktop.
+- The Android emulator specs are unstable on this machine (a software-rendered emulator with
+  about 4 GB free): `mobile-emulator.spec.ts` passed on 3 Nov, `camera-emulator.spec.ts` did not
+  (the launcher stopped responding, then Android closed Chrome). The harness now bounds the Chrome
+  launch and serves a production build. Touch and the camera on a real Android phone are
+  unverified.
+- A Desk that dies and reconnects at once with the same token gets `token_busy` for about 10 s,
+  and the Assist keeps the old knock (wave 2, api).
+- The agent prints a Tokio shutdown panic after a session ends (pre-existing; wave 2).
+- Manual: iPhone and iPad Safari, a real iPhone broadcast, Keep on a real desktop.
 - apple: iOS file receive; macOS unattended waits on linux-p4's `ia-session0` unix half.
 
 Next: linux-p4 (wave 2), then wayland (wave 3), then macOS unattended on the linux-p4 base.

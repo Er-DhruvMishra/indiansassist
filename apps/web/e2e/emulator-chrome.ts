@@ -34,6 +34,9 @@ const LOCK_POLL_MS = 5_000;
  * reused its owner's pid for another process. */
 const LOCK_MAX_AGE_MS = 50 * 60_000;
 const BOOT_TIMEOUT_MS = 240_000;
+/** A software-rendered emulator on a busy host can show "Pixel Launcher isn't responding" over Chrome right after a
+ * cold boot, and Playwright's launch then waits for ever: each launch attempt gets this long. */
+const LAUNCH_TIMEOUT_MS = 180_000;
 const TAKEN_PORTS = [4000, 4100, 4105];
 
 export type EmulatorChrome = {
@@ -181,7 +184,7 @@ export async function withEmulatorChrome<T>(ports: { apiPort: number; webPort: n
     const devices = await _android.devices();
     device = devices[0] ?? null;
     if (!device) return { notRun: 'not met: Playwright found no Android device' };
-    context = await device.launchBrowser({ pkg: CHROME_PKG });
+    context = await launchChrome(device);
     return await fn({ device, context, serial: device.serial() });
   } finally {
     await context?.close().catch(() => undefined);
@@ -189,6 +192,30 @@ export async function withEmulatorChrome<T>(ports: { apiPort: number; webPort: n
     for (const p of reversed) adb(['reverse', '--remove', `tcp:${p}`], { allowFail: true });
     if (booted && env.IA_KEEP_EMULATOR !== '1') adb(['emu', 'kill'], { allowFail: true });
     releaseEmulatorLock();
+  }
+}
+
+/** Closes system dialogs (an ANR "isn't responding" box covers Chrome on a slow emulator). */
+function closeSystemDialogs(): void {
+  adb(['shell', 'am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS'], { allowFail: true });
+}
+
+/** Launches Chrome, clearing system dialogs first; one retry after a stalled launch, then a clear error. */
+async function launchChrome(device: AndroidDevice): Promise<BrowserContext> {
+  for (let attempt = 1; ; attempt += 1) {
+    closeSystemDialogs();
+    let timer: NodeJS.Timeout | undefined;
+    const stalled = new Promise<null>((r) => {
+      timer = setTimeout(() => r(null), LAUNCH_TIMEOUT_MS);
+    });
+    const launch = device.launchBrowser({ pkg: CHROME_PKG });
+    const context = await Promise.race([launch, stalled]).finally(() => clearTimeout(timer));
+    if (context) return context;
+    launch.then((c) => c.close()).catch(() => undefined); // a late launch is closed, never leaked
+    if (attempt >= 2) {
+      throw new Error(`Chrome did not start on the emulator within ${LAUNCH_TIMEOUT_MS / 1000} s, twice (is the host overloaded?)`);
+    }
+    adb(['shell', 'am', 'force-stop', CHROME_PKG], { allowFail: true });
   }
 }
 

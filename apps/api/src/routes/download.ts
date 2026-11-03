@@ -71,6 +71,9 @@ async function loadGrant(ctx: AppContext, raw: string): Promise<{ hash: string; 
 function servedFileName(build: ServedBuild, region: Region, deskCode: string): string {
   if (build.platform === 'android') return build.file;
   if (build.platform === 'linux') return linuxArchiveName(region, deskCode);
+  // apple-owned: begin
+  // Phase F section 17.2: the macOS served name (the per-download stored zip); the apple stream fills this block.
+  // apple-owned: end
   return agentFileName(region, deskCode);
 }
 
@@ -173,6 +176,10 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
       if (!build.archive) fail('link_expired', 'this build is no longer served');
       parts = linuxArchiveParts(g.region, g.deskCode, build.archive);
     }
+    // apple-owned: begin
+    // Phase F section 17.2: the macOS zip of this grant (bundle members cached at load, the signed sidecar per
+    // request); the apple stream fills this block.
+    // apple-owned: end
     const size = parts ? partsLength(parts) : build.size;
     const range = parseRange(req.headers['range'], size);
     if (range === 'bad') {

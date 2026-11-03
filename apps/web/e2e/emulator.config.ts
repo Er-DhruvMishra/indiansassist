@@ -9,8 +9,8 @@
  * stream (camera ./data/e2e-camera-emulator, the default; mobile ./data/e2e-mobile-emulator), reset by reset-data.mjs
  * with its ./data containment check. The desktop Assist is this config's Chromium; the phone is Chrome on the
  * emulator, which reaches both ports as `localhost` through `adb reverse`. `adb reverse` connects to 127.0.0.1, so the
- * web dev server listens there (`--host 127.0.0.1`; Vite's `localhost` is `::1` only on Windows) and the api on its
- * default 0.0.0.0.
+ * web server (a production build under `vite preview`) listens there (`--host 127.0.0.1`; Vite's `localhost` is `::1`
+ * only on Windows) and the api on its default 0.0.0.0.
  */
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'node:path';
@@ -21,6 +21,8 @@ const repoRoot = resolve(here, '../../..');
 const apiPort = process.env.E2E_API_PORT || '4310';
 const webPort = process.env.E2E_WEB_PORT || '5315';
 const dataDir = process.env.E2E_DATA_DIR || './data/e2e-camera-emulator';
+/** One build directory per web port, so the camera and mobile streams can build at once. */
+const outDir = `e2e/artifacts/dist-emulator-${webPort}`;
 const TAKEN = ['4000', '4100', '4105'];
 if (TAKEN.includes(apiPort) || TAKEN.includes(webPort)) {
   throw new Error('e2e:emulator never uses ports 4000, 4100 or 4105');
@@ -75,11 +77,14 @@ export default defineConfig({
           },
         },
         {
-          command: `pnpm --filter @indiansassist/web dev --host 127.0.0.1 --port ${webPort} --strictPort`,
+          // A production build served by `vite preview`, as in mobile.config.ts: the dev server's first-load dependency
+          // optimisation reloads the phone's page (aborting a navigation that carries a single-use camera code), and its
+          // hundreds of unbundled modules overload the software-rendered emulator.
+          command: `pnpm --filter @indiansassist/web exec vite build --outDir ${outDir} --emptyOutDir && pnpm --filter @indiansassist/web exec vite build -c vite.replayer.config.ts --outDir ${outDir} && pnpm --filter @indiansassist/web exec vite preview --outDir ${outDir} --host 127.0.0.1 --port ${webPort} --strictPort`,
           cwd: repoRoot,
           url: `http://127.0.0.1:${webPort}`,
           reuseExistingServer: false,
-          timeout: 120_000,
+          timeout: 300_000,
           stdout: 'ignore',
           stderr: 'pipe',
           env: { VITE_API_URL: apiUrl },

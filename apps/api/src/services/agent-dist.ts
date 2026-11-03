@@ -53,6 +53,10 @@ export class AgentDist {
           if (dirname(path) !== resolve(distDir) || !existsSync(path)) continue;
           const { file: _f, ...build } = b;
           void _f;
+          // apple-owned: begin
+          // Phase F section 17.2: the macOS build (the cached members of the signed IndiansAssist.app); the apple
+          // stream fills this block, and the coordinator alone edits around it.
+          // apple-owned: end
           if (build.platform === 'linux') {
             const elf = readFileSync(path);
             out.push({ ...build, size: elf.length, path, file, archive: linuxArchiveBody(elf) });
