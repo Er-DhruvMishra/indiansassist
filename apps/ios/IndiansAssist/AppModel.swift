@@ -75,7 +75,12 @@ final class AppModel: ObservableObject {
 
     /// The person accepted the consent screen: write the hand-off the extension starts from.
     func consent() -> Bool {
-        guard let code = parsedCode(), let handoffs else { return false }
+        guard let code = parsedCode() else { return false }
+        guard let handoffs else {
+            // The App Group container is missing (a build without the app-group entitlement): say so, never fail silently.
+            codeError = "This copy of IndiansAssist cannot hand the code to screen sharing. Please reinstall it from your organisation."
+            return false
+        }
         let handoff = JoinHandoff(code: code.value, tokenSource: tokenSource, apiOrigin: apiOrigin, consentedAt: Date())
         guard handoff.signalUrl != nil else {
             codeError = "The server address is not valid. Check it under Server."

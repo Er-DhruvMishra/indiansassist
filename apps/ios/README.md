@@ -20,8 +20,14 @@ apps/ios/
 cd apps/ios/IndiansAssistKit && swift test                     # the library tests (macOS)
 xcodebuild test -scheme IndiansAssistKit-Package -destination 'platform=iOS Simulator,name=iPhone 16'
 xcodebuild build -project apps/ios/IndiansAssist.xcodeproj -scheme IndiansAssist \
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
+  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=
 ```
+
+- **Simulator builds are signed ad hoc** (`CODE_SIGN_IDENTITY=-`, no team needed). Do not use `CODE_SIGNING_ALLOWED=NO`:
+  it drops the entitlements, so the App Group container is missing and Get help cannot hand the code over (the app
+  now says so instead of doing nothing). With ad hoc signing the whole Get help flow runs on the simulator up to the
+  system broadcast button: code entry and validation, the consent sentence, the hand-off file, and its deletion on
+  "Use another code".
 
 - **XcodeGen 2.46.0** is a build tool, never shipped. It is installed per user under `~/.local/xcodegen` (sha256 of
   `xcodegen.zip` checked against the GitHub release), with `~/.local/bin/xcodegen` a small wrapper: XcodeGen finds its
