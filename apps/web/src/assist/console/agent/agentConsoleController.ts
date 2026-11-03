@@ -119,6 +119,8 @@ export class AgentConsoleController extends AgentControllerCore {
   // ---------- ops ----------
 
   private op(op: AgentControlOp, args: Record<string, unknown>, id?: string) {
+    // Phase F section 15.6: an e2e spec may define `window.__iaOps` (an array) to read the ops the console sent.
+    (globalThis as { __iaOps?: { op: string; args: Record<string, unknown> }[] }).__iaOps?.push({ op, args });
     if (this.input && ['os.pointer', 'os.scroll', 'os.key', 'os.text', 'os.nav'].includes(op)) this.input.record(op, args);
     return this.ops.request(op, args, id);
   }
@@ -270,6 +272,12 @@ export class AgentConsoleController extends AgentControllerCore {
   nav(action: NavAction): void {
     if (!this.controlling || !hasFeature(this.snap, 'nav')) return;
     void this.op('os.nav', { action });
+  }
+
+  /** Phase F section 7.3: Ctrl+Alt+Del from the keys bar (`os.sas`, offered only when the Desk advertises `sas`). */
+  sas(): void {
+    if (!this.controlling) return;
+    void this.op('os.sas', {});
   }
 
   /** On overlay blur: `up` for every modifier, so nothing stays held on the Desk (section 5.2). */

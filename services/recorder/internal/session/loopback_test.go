@@ -75,7 +75,7 @@ type uploaded struct {
 }
 
 func uploadServer(t *testing.T) (*httptest.Server, chan uploaded) {
-	got := make(chan uploaded, 1)
+	got := make(chan uploaded, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		mr := multipart.NewReader(r.Body, params["boundary"])

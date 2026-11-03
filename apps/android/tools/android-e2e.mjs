@@ -11,14 +11,20 @@
 //      maps the api into the device with `adb reverse tcp:4300 tcp:4300`;
 //   3. signs up a p3 org, mints a one_time p3 token, opens an observing Assist ws and the console in Chromium;
 //   4. runs AssistE2ETest (am instrument) and drives the Assist half against its logcat progress lines;
-//   5. verifies the session audit chain, prints PASS / FAIL per assertion and stops everything it started.
+//   5. verifies the session audit chain, prints PASS / FAIL per assertion and stops everything it started;
+//   6. Phase F section 7.8: taps **Give help** on the start screen (and the region picker of a debug build) and checks
+//      that Chrome opened `<DEFAULT_API_ORIGIN>/app/` in a Custom Tab (Chrome's DevTools socket lists the tab's URL).
+//
+// Phase F section 1.5: the run holds `data/.emulator.lock` (the lock of apps/web/e2e/emulator-chrome.ts), so it never
+// shares the emulator with another stream's run; a second runner waits up to 30 minutes. `IA_E2E_ONLY=give-help` runs
+// only the build, the install and step 6 (no api, no web, no session).
 //
 // Env: IA_EMULATOR=1 (required), IA_AVD (Pixel7_API35), IA_API_PORT (4300), IA_METRICS_PORT (9480), IA_WEB_PORT
-// (5273), IA_SKIP_BUILD=1, IA_KEEP_EMULATOR=1, IA_HEADED=1, ANDROID_HOME / ANDROID_SDK_ROOT.
+// (5273), IA_SKIP_BUILD=1, IA_KEEP_EMULATOR=1, IA_HEADED=1, IA_E2E_ONLY=give-help, ANDROID_HOME / ANDROID_SDK_ROOT.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import net from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +57,10 @@ const runId = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 const outDir = join(repo, 'data', 'e2e-android');
 const runDir = join(outDir, `run-${runId}`);
 mkdirSync(runDir, { recursive: true });
+
+const ONLY_GIVE_HELP = env.IA_E2E_ONLY === 'give-help';
+const LOCK = join(repo, 'data', '.emulator.lock');
+let lockHeld = false;
 
 const t0 = Date.now();
 const results = [];
@@ -131,6 +141,148 @@ async function waitHttp(url, ms) {
     await sleep(500);
   }
   throw new Error(`${url} did not come up within ${ms} ms`);
+}
+
+// ---------- the emulator lock (Phase F section 1.5, same file and format as apps/web/e2e/emulator-chrome.ts) ----------
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
+async function acquireLock(waitMs = 30 * 60_000) {
+  mkdirSync(dirname(LOCK), { recursive: true });
+  const end = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const fd = openSync(LOCK, 'wx');
+      writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+      closeSync(fd);
+      lockHeld = true;
+      return true;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+    }
+    let owner = null;
+    try {
+      owner = Number(JSON.parse(readFileSync(LOCK, 'utf8')).pid) || null;
+    } catch {
+      owner = null;
+    }
+    if (owner !== null && !pidAlive(owner)) {
+      rmSync(LOCK, { force: true });
+      continue;
+    }
+    if (Date.now() >= end) return false;
+    await sleep(5_000);
+  }
+}
+
+function releaseLock() {
+  if (!lockHeld) return;
+  try {
+    if (Number(JSON.parse(readFileSync(LOCK, 'utf8')).pid) === process.pid) rmSync(LOCK, { force: true });
+  } catch {
+    /* gone */
+  }
+  lockHeld = false;
+}
+
+// ---------- Give help (Phase F section 7.8) ----------
+
+/** The on-screen nodes from `uiautomator dump`: text, class and the centre of the bounds. */
+async function uiNodes() {
+  // A dump can fail transiently ("null root node") while a window animates: try a few times. The previous dump is
+  // removed first, so a stale file is never read.
+  let xml = '';
+  for (let i = 0; i < 4 && !xml.includes('<node'); i++) {
+    adb(['shell', 'rm', '-f', '/sdcard/ia-ui.xml'], { allowFail: true });
+    adb(['shell', 'uiautomator', 'dump', '/sdcard/ia-ui.xml'], { allowFail: true, timeout: 30_000 });
+    xml = adb(['exec-out', 'cat', '/sdcard/ia-ui.xml'], { allowFail: true });
+    if (!xml.includes('<node')) await sleep(1000);
+  }
+  const nodes = [];
+  for (const m of xml.matchAll(/<node\b[^>]*>/g)) {
+    const a = (k) => new RegExp(`\\s${k}="([^"]*)"`).exec(m[0])?.[1] ?? '';
+    const b = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/.exec(a('bounds'));
+    if (!b) continue;
+    nodes.push({ text: a('text'), cls: a('class'), x: (Number(b[1]) + Number(b[3])) >> 1, y: (Number(b[2]) + Number(b[4])) >> 1 });
+  }
+  return nodes;
+}
+
+/** Taps the node showing `text` (a button preferred), scrolling down to find it; throws after `ms`. */
+async function tapText(text, ms, preferButton = true) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const all = await uiNodes();
+    // An "isn't responding" dialog from another app covers the screen: let it wait rather than kill anything.
+    const wait = all.find((n) => n.text === 'Wait') && all.some((n) => /isn.t responding/.test(n.text)) ? all.find((n) => n.text === 'Wait') : null;
+    if (wait) {
+      if (Date.now() > end) throw new Error(`an "isn't responding" dialog covers the screen; "${text}" not reached`);
+      adb(['shell', 'input', 'tap', String(wait.x), String(wait.y)]);
+      await sleep(1000);
+      continue;
+    }
+    const hits = all.filter((n) => n.text === text);
+    const hit = (preferButton && hits.find((n) => /Button/.test(n.cls))) || hits[0];
+    if (hit) {
+      adb(['shell', 'input', 'tap', String(hit.x), String(hit.y)]);
+      return hit;
+    }
+    if (Date.now() > end) throw new Error(`"${text}" is not on the screen`);
+    adb(['shell', 'input', 'swipe', '540', '1700', '540', '700', '300'], { allowFail: true });
+    await sleep(800);
+  }
+}
+
+/** The URLs of Chrome's open pages, through its DevTools socket (debuggable emulator images expose it). */
+async function chromePageUrls() {
+  const fwd = adb(['forward', 'tcp:0', 'localabstract:chrome_devtools_remote']);
+  const port = Number(fwd.trim());
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/json/list`);
+    const list = await r.json();
+    return list.map((p) => p.url);
+  } catch {
+    return [];
+  } finally {
+    adb(['forward', '--remove', `tcp:${port}`], { allowFail: true });
+  }
+}
+
+async function giveHelpStep() {
+  await assert('Give help opens the mobile console (<origin>/app/) in a Chrome Custom Tab', async () => {
+    if (!adb(['shell', 'pm', 'path', 'com.android.chrome'], { allowFail: true }).startsWith('package:')) throw new Error('Chrome is not installed on the device');
+    adb(['shell', 'am', 'force-stop', 'com.android.chrome'], { allowFail: true });
+    adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'], { allowFail: true });
+    adb(['shell', 'wm', 'dismiss-keyguard'], { allowFail: true });
+    adb(['shell', 'am', 'start', '-W', '-n', `${PKG}/.ui.MainActivity`]);
+    await sleep(1500);
+    await tapText('Give help', 30_000);
+    // A debug build compiles several origins, so the region picker opens: choose the default (the api of this run).
+    const label = new URL(API).host;
+    await sleep(1000);
+    if ((await uiNodes()).some((n) => n.text === label)) await tapText(label, 10_000, false);
+    const want = `${API}/app/`;
+    const end = Date.now() + 45_000;
+    let urls = [];
+    while (Date.now() < end) {
+      urls = await chromePageUrls();
+      if (urls.includes(want)) break;
+      await sleep(1500);
+    }
+    if (!urls.includes(want)) throw new Error(`Chrome pages: ${JSON.stringify(urls)} (wanted ${want})`);
+    const acts = adb(['shell', 'dumpsys', 'activity', 'activities'], { allowFail: true });
+    const resumed = acts.split('\n').filter((l) => /ResumedActivity/.test(l)).join(' | ');
+    if (!/customtabs/i.test(resumed)) throw new Error(`the resumed activity is not a Custom Tab: ${resumed.trim()}`);
+    adb(['shell', 'input', 'keyevent', 'KEYCODE_BACK'], { allowFail: true });
+    return `${want} open in Chrome; ${resumed.trim().replace(/\s+/g, ' ').slice(0, 160)}`;
+  });
 }
 
 // ---------- logcat progress from AssistE2ETest ----------
@@ -246,11 +398,16 @@ let instrumentOutput = '';
 // ---------- main ----------
 
 async function main() {
-  log(`android:e2e run ${runId} (api ${API}, web ${WEB}, artifacts ${runDir})`);
+  log(`android:e2e run ${runId} (api ${API}, web ${WEB}, artifacts ${runDir})${ONLY_GIVE_HELP ? ', Give help only' : ''}`);
   if (!existsSync(ADB)) throw new Error(`adb not found at ${ADB} (set ANDROID_HOME)`);
-  for (const p of [API_PORT, METRICS_PORT, WEB_PORT]) if (!(await portFree(p))) throw new Error(`port ${p} is busy; set IA_API_PORT / IA_METRICS_PORT / IA_WEB_PORT`);
+  for (const p of [API_PORT, WEB_PORT]) if ([4000, 4100, 4105].includes(p)) throw new Error(`port ${p} is never used by an e2e run (4000, 4100 and 4105 are taken)`);
+  if (!ONLY_GIVE_HELP)
+    for (const p of [API_PORT, METRICS_PORT, WEB_PORT]) if (p !== 0 && !(await portFree(p))) throw new Error(`port ${p} is busy; set IA_API_PORT / IA_METRICS_PORT / IA_WEB_PORT`);
+  log('waiting for the emulator lock (data/.emulator.lock)');
+  if (!(await acquireLock())) throw new Error('not run: emulator busy (data/.emulator.lock held for 30 minutes)');
 
   // 1. api + web
+  if (!ONLY_GIVE_HELP) {
   const regionOrigins = `in-mum=${WEB},eu-fra=${WEB},us-east=${WEB}`;
   const apiLog = join(repo, 'data', 'android-api.log');
   startChild('api', 'pnpm --filter @indiansassist/api exec tsx src/server.ts', {
@@ -266,6 +423,7 @@ async function main() {
     LOG_LEVEL: 'info',
   }, apiLog);
   startChild('web', `pnpm --filter @indiansassist/web exec vite --port ${WEB_PORT} --strictPort`, { VITE_API_URL: API, VITE_REGION_ORIGINS: regionOrigins }, join(runDir, 'web.log'));
+  }
 
   // 2. device (in parallel with the servers coming up)
   let devices = adb(['devices']).split('\n').slice(1).filter((l) => /\tdevice$/.test(l));
@@ -307,6 +465,7 @@ async function main() {
   adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'], { allowFail: true });
   log('APKs installed; notifications / microphone / camera granted, overlay allowed, Accessibility service enabled, api reversed');
 
+  if (ONLY_GIVE_HELP) return giveHelpStep();
   await waitHttp(`${API}/api/v1/health`, 120_000);
   await waitHttp(WEB, 120_000);
   log('api and web are up');
@@ -319,6 +478,8 @@ async function main() {
     await driver.screenshot(join(runDir, 'console-final.png'));
     await driver.close();
   }
+  // 6. Phase F section 7.8.
+  await giveHelpStep();
 }
 
 async function runFlow(driver) {
@@ -529,6 +690,7 @@ async function cleanup() {
     }
   }
   if (env.IA_KEEP_DATA !== '1') rmSync(join(runDir, 'pglite'), { recursive: true, force: true });
+  releaseLock();
 }
 
 let failed = false;

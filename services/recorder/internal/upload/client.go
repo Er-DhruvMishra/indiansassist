@@ -29,6 +29,17 @@ type Meta struct {
 	DurationMs int64  `json:"durationMs"`
 	Bytes      int64  `json:"bytes"`
 	SHA256     string `json:"sha256"`
+	// Source and CameraID are sent together, only for a camera recording (Phase F 6.5a).
+	Source   string `json:"source,omitempty"`
+	CameraID string `json:"cameraId,omitempty"`
+}
+
+// fileStem is the multipart file name stem: the cameraId of a camera recording, else the sessionId.
+func (m Meta) fileStem() string {
+	if m.CameraID != "" {
+		return m.CameraID
+	}
+	return m.SessionID
 }
 
 // HashFile returns the byte count and lower-case hex sha256 of a file.
@@ -152,7 +163,7 @@ func (c *Client) once(ctx context.Context, meta Meta, path string) (time.Duratio
 		return 0, err
 	}
 	h := textproto.MIMEHeader{}
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s.webm"`, meta.SessionID))
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s.webm"`, meta.fileStem()))
 	h.Set("Content-Type", "video/webm")
 	if _, err := mw.CreatePart(h); err != nil {
 		return 0, err

@@ -56,7 +56,8 @@ export async function sweepSummaries(ctx: AppContext, now: Date = new Date()): P
       org = await getOrg(ctx.db, row.orgId);
       orgs.set(row.orgId, org);
     }
-    if (!org) continue;
+    // Phase F section 5.3 step 2: an org whose erasure is executing (or done) is skipped.
+    if (!org || org.erasingAt !== null) continue;
     const region = org.dataRegion;
     if ((perRegion.get(region) ?? 0) >= LIMITS.summaryConcurrency) continue;
     const claimed = await claim(ctx, row, now);

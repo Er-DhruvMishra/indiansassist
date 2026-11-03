@@ -180,3 +180,36 @@ func TestResumeRebase(t *testing.T) {
 		t.Fatalf("rebased duration %d blocks %d", res.DurationMs, res.Blocks)
 	}
 }
+
+func TestCameraRecorderVideoOnly(t *testing.T) {
+	const camID = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b0a"
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Unix(1_800_000_000, 0)}
+	r := NewRecorder(Options{Dir: dir, SessionID: testSID, CameraID: camID, RecorderID: "rec-1", MaxDuration: time.Hour, Now: clk.now})
+	ts := uint32(1000)
+	for i := 0; i < 10; i++ {
+		if wrote, err := r.WriteVideo(CodecVP8, SyntheticVP8(i%5 == 0, 200), ts); !wrote || err != nil {
+			t.Fatalf("frame %d: %v %v", i, wrote, err)
+		}
+		if wrote, err := r.WriteAudio([]byte{0xfc, 1, 2, 3}, uint32(i)*3200); wrote || err != nil {
+			t.Fatalf("audio written into a camera recording: %v %v", wrote, err)
+		}
+		ts += 6000
+		clk.t = clk.t.Add(66 * time.Millisecond)
+	}
+	if _, err := os.Stat(store.MediaPath(dir, testSID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("camera recording written under the sessionId")
+	}
+	res := r.Close()
+	if res.Empty || res.Blocks != 10 || res.CameraID != camID || res.Path != store.MediaPath(dir, camID) || res.Mime != `video/webm;codecs="vp8"` {
+		t.Fatalf("result %+v", res)
+	}
+	sc, err := store.Read(dir, camID)
+	if err != nil || sc.State != store.StateFinalised || sc.Source != store.SourceCamera || sc.CameraID != camID || sc.SessionID != testSID || sc.Mime != res.Mime {
+		t.Fatalf("sidecar %+v %v", sc, err)
+	}
+	_, seg := parseWebM(t, res.Path)
+	if len(seg.Tracks.TrackEntry) != 1 || seg.Tracks.TrackEntry[0].CodecID != "V_VP8" {
+		t.Fatalf("tracks %+v", seg.Tracks)
+	}
+}

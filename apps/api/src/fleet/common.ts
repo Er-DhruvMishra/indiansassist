@@ -15,7 +15,16 @@ import {
   type UnattendedPolicy,
   type UnattendedPolicyPatch,
 } from '@indiansassist/shared';
-import { getDeviceGroupScoped, getOrg, type DeviceGroupRow, type DeviceRow, type OrgRow } from '@indiansassist/db';
+import {
+  device as deviceTable,
+  getDeviceGroupScoped,
+  getOrg,
+  type DeviceGroupRow,
+  type DeviceRow,
+  type Executor,
+  type OrgRow,
+} from '@indiansassist/db';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Actor } from '../lib/audit.js';
 import { isoOrNull } from '../lib/time.js';
@@ -65,26 +74,116 @@ export function deviceActor(deviceId: string): Actor {
   return { type: 'device', id: deviceId, label: deviceActorLabel(deviceId) };
 }
 
-// ---------- MAC at rest (rule 8.2c) ----------
+// ---------- MAC at rest (rule 8.2c; Phase F section 3.1d rotation) ----------
 
-function macKeys(ctx: AppContext): Map<string, Uint8Array> {
-  return new Map([[ctx.config.fleet.dataKeyId, new Uint8Array(ctx.config.fleet.dataKey)]]);
+/** What the MAC helpers need of the context: the fleet keys only (so `pnpm secrets:reseal` can call them). */
+export type FleetKeyCtx = { config: { fleet: Pick<AppContext['config']['fleet'], 'dataKey' | 'dataKeyId' | 'previousKeys'> } };
+
+/**
+ * Phase F section 3.1d: every key a stored MAC may be opened with, the current one and each of
+ * `FLEET_DATA_KEYS_PREVIOUS` (open-only; config refuses a previous entry that repeats the current key id).
+ */
+export function macKeys(ctx: FleetKeyCtx): Map<string, Uint8Array> {
+  const keys = new Map<string, Uint8Array>();
+  for (const p of ctx.config.fleet.previousKeys) keys.set(p.keyId, new Uint8Array(p.key));
+  keys.set(ctx.config.fleet.dataKeyId, new Uint8Array(ctx.config.fleet.dataKey));
+  return keys;
 }
 
-export function encryptMac(ctx: AppContext, deviceId: string, mac: string): { macEnc: string; macHash: string } {
+const macAad = (deviceId: string) => `ia-mac-v1/${deviceId}`;
+
+/** The key id a sealed MAC names (`<keyId>.<nonce>.<ct>`), or null when it is not of that form. */
+function macKeyId(macEnc: string): string | null {
+  const parts = macEnc.split('.');
+  return parts.length === 3 && parts[0] ? parts[0] : null;
+}
+
+/** True when a stored MAC was sealed under a key other than the current fleet key. */
+export function macNeedsReseal(ctx: FleetKeyCtx, macEnc: string): boolean {
+  return macKeyId(macEnc) !== ctx.config.fleet.dataKeyId;
+}
+
+export function encryptMac(ctx: FleetKeyCtx, deviceId: string, mac: string): { macEnc: string; macHash: string } {
   const sub = Buffer.from(hkdfSync('sha256', ctx.config.fleet.dataKey, Buffer.alloc(0), 'ia-mac-hash-v1', 32));
   return {
-    macEnc: sealAtRest(new Uint8Array(ctx.config.fleet.dataKey), ctx.config.fleet.dataKeyId, mac, `ia-mac-v1/${deviceId}`),
+    macEnc: sealAtRest(new Uint8Array(ctx.config.fleet.dataKey), ctx.config.fleet.dataKeyId, mac, macAad(deviceId)),
     macHash: createHmac('sha256', sub).update(mac).digest('hex'),
   };
 }
 
-export function decryptMac(ctx: AppContext, deviceId: string, macEnc: string): string | null {
+/** Opens a stored MAC under any known fleet key; null when it does not open (an unknown key, tampering). */
+export function openMac(ctx: FleetKeyCtx, deviceId: string, macEnc: string): string | null {
   try {
-    return openAtRest(macKeys(ctx), macEnc, `ia-mac-v1/${deviceId}`);
+    return openAtRest(macKeys(ctx), macEnc, macAad(deviceId));
   } catch {
     return null;
   }
+}
+
+/**
+ * Section 3.1d: re-seals one MAC under the current key and writes `mac_enc` and `mac_hash` (keyed by an HKDF of the
+ * fleet key, so it changes too) with a compare-and-set on the old `mac_enc`. False when the row no longer holds
+ * `oldEnc` (another request re-sealed or replaced it), which is not an error.
+ */
+export async function resealDeviceMac(ctx: FleetKeyCtx, exec: Executor, deviceId: string, oldEnc: string, mac: string): Promise<boolean> {
+  const next = encryptMac(ctx, deviceId, mac);
+  const rows = await exec
+    .update(deviceTable)
+    .set({ macEnc: next.macEnc, macHash: next.macHash })
+    .where(and(eq(deviceTable.id, deviceId), eq(deviceTable.macEnc, oldEnc)))
+    .returning({ id: deviceTable.id });
+  return rows.length === 1;
+}
+
+/** Lazy re-seals still running (`decryptMac` stays synchronous for its callers; tests and shutdown can wait). */
+const pendingReseals = new Set<Promise<void>>();
+
+/** Waits for every lazy MAC re-seal started so far. */
+export async function settleMacReseals(): Promise<void> {
+  while (pendingReseals.size > 0) await Promise.allSettled([...pendingReseals]);
+}
+
+/**
+ * Opens a stored MAC. Section 3.1d: a MAC that opened under a previous key is re-sealed under the current key in the
+ * background (compare-and-set; a failure is logged and the next read tries again). The plaintext is returned either way.
+ */
+export function decryptMac(ctx: AppContext, deviceId: string, macEnc: string): string | null {
+  const mac = openMac(ctx, deviceId, macEnc);
+  if (mac !== null && macNeedsReseal(ctx, macEnc)) {
+    const p: Promise<void> = resealDeviceMac(ctx, ctx.db, deviceId, macEnc, mac)
+      .then(() => undefined)
+      .catch((err: unknown) => ctx.log.warn({ err, deviceId }, 'device MAC re-seal failed'))
+      .finally(() => pendingReseals.delete(p));
+    pendingReseals.add(p);
+  }
+  return mac;
+}
+
+export type MacResealReport = { column: 'device.mac_enc'; scanned: number; resealed: number; lostRace: number; failed: number };
+
+/**
+ * Section 3.1e (`pnpm secrets:reseal`): re-seals every `device.mac_enc` not under the current fleet key with the same
+ * compare-and-set as the lazy path. A value that does not open is counted as failed and left untouched.
+ */
+export async function resealAllDeviceMacs(ctx: FleetKeyCtx, exec: Executor): Promise<MacResealReport> {
+  const r: MacResealReport = { column: 'device.mac_enc', scanned: 0, resealed: 0, lostRace: 0, failed: 0 };
+  const rows = await exec
+    .select({ id: deviceTable.id, macEnc: deviceTable.macEnc })
+    .from(deviceTable)
+    .where(isNotNull(deviceTable.macEnc));
+  for (const row of rows) {
+    r.scanned++;
+    const old = row.macEnc!;
+    if (!macNeedsReseal(ctx, old)) continue;
+    const mac = openMac(ctx, row.id, old);
+    if (mac === null) {
+      r.failed++;
+      continue;
+    }
+    if (await resealDeviceMac(ctx, exec, row.id, old, mac)) r.resealed++;
+    else r.lostRace++;
+  }
+  return r;
 }
 
 /** The MAC columns to write when the reported `wakeMac` differs from the stored one (null = unchanged). */

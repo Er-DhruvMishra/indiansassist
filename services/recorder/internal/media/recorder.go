@@ -27,8 +27,11 @@ const sizeMargin = 4 << 20
 
 // Options configures a Recorder.
 type Options struct {
-	Dir         string
-	SessionID   string
+	Dir       string
+	SessionID string
+	// CameraID makes this a camera recording (Phase F 6.5a): the files are OUT_DIR/<cameraId>.webm
+	// and .json, the WebM holds the video track only, and the sidecar carries source "camera".
+	CameraID    string
 	RecorderID  string
 	MaxBytes    int64
 	MaxDuration time.Duration
@@ -40,6 +43,7 @@ type Options struct {
 type Result struct {
 	Empty      bool // no block written: the files were deleted, nothing to upload
 	SessionID  string
+	CameraID   string // set for a camera recording
 	Path       string
 	Mime       string
 	DurationMs int64
@@ -108,6 +112,22 @@ func NewRecorder(o Options) *Recorder {
 		o.MaxDuration = 4 * time.Hour
 	}
 	return &Recorder{o: o, waitKey: true, vclock: trackClock{rate: 90}, aclock: trackClock{rate: 48}}
+}
+
+// stem is the file stem: the cameraId of a camera recording, else the sessionId.
+func (r *Recorder) stem() string {
+	if r.o.CameraID != "" {
+		return r.o.CameraID
+	}
+	return r.o.SessionID
+}
+
+// mime is the recording mime: a camera recording has no audio track.
+func (r *Recorder) mime() string {
+	if r.o.CameraID != "" {
+		return VideoMime(r.codec)
+	}
+	return Mime(r.codec)
 }
 
 // Codec returns the file's video codec ("" before the file is opened).
@@ -181,7 +201,7 @@ func (r *Recorder) WriteAudio(frame []byte, rtpTs uint32) (wrote bool, err error
 	if r.closed {
 		return false, ErrClosed
 	}
-	if r.file == nil || r.waitKey || len(frame) == 0 {
+	if r.file == nil || r.audio == nil || r.waitKey || len(frame) == 0 {
 		return false, nil
 	}
 	ms := r.aclock.ms(rtpTs, r.nowMs())
@@ -218,7 +238,7 @@ func (r *Recorder) open(codec string, keyframe []byte) error {
 	if err := os.MkdirAll(r.o.Dir, 0o750); err != nil {
 		return fmt.Errorf("%w: %v", ErrDisk, err)
 	}
-	f, err := os.OpenFile(store.MediaPath(r.o.Dir, r.o.SessionID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(store.MediaPath(r.o.Dir, r.stem()), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrDisk, err)
 	}
@@ -234,6 +254,9 @@ func (r *Recorder) open(codec string, keyframe []byte) error {
 		{Name: "Audio", TrackNumber: 2, TrackUID: 2, CodecID: "A_OPUS", TrackType: 2, CodecPrivate: OpusHead(),
 			SeekPreRoll: 80_000_000, Audio: &webm.Audio{SamplingFrequency: 48000, Channels: 2}},
 	}
+	if r.o.CameraID != "" {
+		tracks = tracks[:1] // the phone camera sends video only
+	}
 	log := r.o.Log
 	ws, err := webm.NewSimpleBlockWriter(cf, tracks,
 		mkvcore.WithMinMaxClusterDuration(1, 0, 30_000),
@@ -245,9 +268,16 @@ func (r *Recorder) open(codec string, keyframe []byte) error {
 		_ = f.Close()
 		return fmt.Errorf("%w: %v", ErrDisk, err)
 	}
-	r.file, r.video, r.audio, r.codec = cf, ws[0], ws[1], codec
+	r.file, r.video, r.codec = cf, ws[0], codec
+	if len(ws) > 1 {
+		r.audio = ws[1]
+	}
 	r.start = r.o.Now()
-	r.sidecar = store.NewSidecar(r.o.SessionID, r.o.RecorderID, Mime(codec), r.start)
+	if r.o.CameraID != "" {
+		r.sidecar = store.NewCameraSidecar(r.o.SessionID, r.o.CameraID, r.o.RecorderID, r.mime(), r.start)
+	} else {
+		r.sidecar = store.NewSidecar(r.o.SessionID, r.o.RecorderID, r.mime(), r.start)
+	}
 	if err := store.Write(r.o.Dir, r.sidecar); err != nil {
 		log.Error("sidecar write failed", "err", err)
 	}
@@ -280,19 +310,21 @@ func (r *Recorder) Close() Result {
 		return *r.result
 	}
 	r.closed = true
-	res := Result{SessionID: r.o.SessionID}
+	res := Result{SessionID: r.o.SessionID, CameraID: r.o.CameraID}
 	if r.file == nil {
 		res.Empty = true
 		r.result = &res
 		return res
 	}
 	_ = r.video.Close()
-	_ = r.audio.Close() // the last Close blocks until the writer goroutine has closed the file
-	res.Path = store.MediaPath(r.o.Dir, r.o.SessionID)
-	res.Mime, res.DurationMs, res.Blocks, res.Err = Mime(r.codec), r.durationMs, r.blocks, r.file.Err()
+	if r.audio != nil {
+		_ = r.audio.Close() // the last Close blocks until the writer goroutine has closed the file
+	}
+	res.Path = store.MediaPath(r.o.Dir, r.stem())
+	res.Mime, res.DurationMs, res.Blocks, res.Err = r.mime(), r.durationMs, r.blocks, r.file.Err()
 	if r.blocks == 0 {
 		res.Empty = true
-		if err := store.Remove(r.o.Dir, r.o.SessionID); err != nil {
+		if err := store.Remove(r.o.Dir, r.stem()); err != nil {
 			r.o.Log.Warn("removing empty recording failed", "err", err)
 		}
 	} else {

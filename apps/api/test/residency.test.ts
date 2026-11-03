@@ -62,7 +62,7 @@ type Report = Record<string, unknown> & {
   activity30d: { summaries: number; ticketPushes: number; ssoLogins: number };
   sso: { protocol: string | null; enabled: boolean; required: boolean; verifiedDomains: string[] };
   recorder: { enabled: boolean };
-  erasure: { available: boolean; note: string };
+  erasure: { available: boolean; state?: string; scheduledFor?: string | null; note: string };
   signature: { kid: string; sha256: string; pub: string; sig: string };
 };
 
@@ -176,13 +176,16 @@ describe('the report before any Phase E flow is configured', () => {
     expect(cat.fleet!.stores.map((s) => s.kind)).toEqual(['database', 'device']);
     expect(cat.summaries!.stores.map((s) => s.kind)).toEqual(['database']);
     expect(r.retention.recordings).toBe('until deleted by an org_admin');
+    // Phase F section 5.7: erasure is available, and the chain text says what destroying the pepper does.
     expect(r.retention.piiInChain).toBe(
-      'Personal data in the audit chain is stored only as hashes with a per-org pepper. Erasure by destroying the pepper is not implemented.',
+      'Personal data in the audit chain is stored only as hashes with a per-org pepper; erasure destroys the pepper, after which the hashes cannot be linked to anyone.',
     );
     expect(r.retention.auditEntries).toBe('append-only, never deleted');
     expect(r.erasure).toEqual({
-      available: false,
-      note: 'Destroying the per-org pepper to erase hashed personal data is not implemented. Personal data in the audit chain is stored only as peppered hashes.',
+      available: true,
+      state: 'none',
+      scheduledFor: null,
+      note: "Erasure destroys this organisation's personal data and the audit pepper after two administrators approve it and a 7-day cooling-off period (an organisation with a single administrator: a mailed confirmation and a 14-day cooling-off period). Technician display names and typed reasons stay in the audit chain.",
     });
     // No org flow yet; only what the operator configured on this node.
     expect(r.dataFlows.map((f) => f.kind)).toEqual(['mail', 'vault', 'ice', 'recorder']);

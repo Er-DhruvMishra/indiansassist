@@ -7,6 +7,7 @@
 import { listDueTicketPushes, type TicketPushRow } from '@indiansassist/db';
 import type { AppContext } from '../context.js';
 import { claimAttempt, runClaimedAttempt } from './push.js';
+import { erasingOrgIds } from '../erasure/guard.js';
 
 /** Due pushes per pass. */
 export const TICKET_SWEEP_BATCH = 20;
@@ -23,7 +24,9 @@ async function retryOne(ctx: AppContext, due: TicketPushRow, now: Date): Promise
 }
 
 export async function sweepTicketPushes(ctx: AppContext, now: Date = new Date()): Promise<void> {
-  const due = await listDueTicketPushes(ctx.db, now, TICKET_SWEEP_BATCH);
+  // Phase F section 5.3 step 2: an org whose erasure is executing (or done) is skipped.
+  const erasing = await erasingOrgIds(ctx.db);
+  const due = (await listDueTicketPushes(ctx.db, now, TICKET_SWEEP_BATCH)).filter((p) => !erasing.has(p.orgId));
   for (let i = 0; i < due.length; i += TICKET_SWEEP_PARALLEL)
     await Promise.all(due.slice(i, i + TICKET_SWEEP_PARALLEL).map((p) => retryOne(ctx, p, now)));
 }

@@ -18,6 +18,24 @@ type Job struct {
 	RecorderID string
 	Mime       string
 	DurationMs int64
+	Source     string // store.SourceCamera for a camera recording, else ""
+	CameraID   string // set exactly with Source camera
+}
+
+// valid reports whether Source and CameraID are both absent (Desk) or both set (camera).
+func (j Job) valid() bool {
+	if j.Source == store.SourceCamera {
+		return store.ValidCameraID(j.CameraID)
+	}
+	return j.Source == "" && j.CameraID == ""
+}
+
+// stem is the working-file stem of the job (store.Sidecar.Stem).
+func (j Job) stem() string {
+	if j.Source == store.SourceCamera {
+		return j.CameraID
+	}
+	return j.SessionID
 }
 
 // Uploader runs uploads in the background and updates the sidecars.
@@ -60,19 +78,28 @@ func (u *Uploader) Wait(ctx context.Context) error {
 // Run hashes and uploads one recording synchronously.
 func (u *Uploader) Run(ctx context.Context, j Job) error {
 	log := u.Log.With("sessionId", j.SessionID)
-	path := store.MediaPath(u.Dir, j.SessionID)
+	if j.Source != "" || j.CameraID != "" {
+		log = log.With("source", j.Source, "cameraId", j.CameraID)
+	}
+	if !j.valid() {
+		log.Error("invalid upload job: source camera and cameraId go together")
+		return errors.New("upload: invalid source / cameraId")
+	}
+	stem := j.stem()
+	path := store.MediaPath(u.Dir, stem)
 	n, sum, err := HashFile(path)
 	if err != nil {
 		log.Error("hashing recording failed", "err", err)
-		_ = store.SetState(u.Dir, j.SessionID, store.StateFailed, "hash: "+err.Error())
+		_ = store.SetState(u.Dir, stem, store.StateFailed, "hash: "+err.Error())
 		metrics.Uploads.WithLabelValues("failed").Inc()
 		return err
 	}
 	if n == 0 {
 		log.Info("empty recording removed")
-		return store.Remove(u.Dir, j.SessionID)
+		return store.Remove(u.Dir, stem)
 	}
-	meta := Meta{SessionID: j.SessionID, RecorderID: j.RecorderID, Mime: j.Mime, DurationMs: j.DurationMs, Bytes: n, SHA256: sum}
+	meta := Meta{SessionID: j.SessionID, RecorderID: j.RecorderID, Mime: j.Mime, DurationMs: j.DurationMs, Bytes: n, SHA256: sum,
+		Source: j.Source, CameraID: j.CameraID}
 	client := *u.Client
 	client.OnRetry = func(attempt int, err error) {
 		metrics.Uploads.WithLabelValues("retry").Inc()
@@ -86,13 +113,13 @@ func (u *Uploader) Run(ctx context.Context, j Job) error {
 		metrics.UploadSeconds.Observe(time.Since(started).Seconds())
 		log.Info("recording uploaded", "bytes", n, "sha256", sum, "durationMs", j.DurationMs)
 		if u.KeepFiles {
-			return store.SetState(u.Dir, j.SessionID, store.StateUploaded, "")
+			return store.SetState(u.Dir, stem, store.StateUploaded, "")
 		}
-		return store.Remove(u.Dir, j.SessionID)
+		return store.Remove(u.Dir, stem)
 	case errors.Is(err, ErrFinal):
 		metrics.Uploads.WithLabelValues("failed").Inc()
 		log.Error("recording upload rejected", "err", err)
-		_ = store.SetState(u.Dir, j.SessionID, store.StateFailed, err.Error())
+		_ = store.SetState(u.Dir, stem, store.StateFailed, err.Error())
 		return err
 	default:
 		// Retries exhausted (network / 429 / 5xx) or shutdown: the sidecar stays `finalised`, so the
@@ -104,7 +131,7 @@ func (u *Uploader) Run(ctx context.Context, j Job) error {
 }
 
 // Recover finalises and uploads the leftovers of a previous process: every sidecar in state
-// recording or finalised. It runs the uploads in the background.
+// recording or finalised, Desk and camera alike. It runs the uploads in the background.
 func (u *Uploader) Recover() int {
 	list, err := store.List(u.Dir)
 	if err != nil {
@@ -119,13 +146,17 @@ func (u *Uploader) Recover() int {
 			continue
 		}
 		log := u.Log.With("sessionId", sc.SessionID)
+		if sc.Source != "" {
+			log = log.With("source", sc.Source, "cameraId", sc.CameraID)
+		}
+		stem := sc.Stem()
 		if sc.State == store.StateRecording {
 			if sc.Blocks == 0 {
 				log.Info("recovered recording has no blocks; removed")
-				_ = store.Remove(u.Dir, sc.SessionID)
+				_ = store.Remove(u.Dir, stem)
 				continue
 			}
-			if f, err := os.OpenFile(store.MediaPath(u.Dir, sc.SessionID), os.O_RDWR, 0); err == nil {
+			if f, err := os.OpenFile(store.MediaPath(u.Dir, stem), os.O_RDWR, 0); err == nil {
 				_ = f.Sync()
 				_ = f.Close()
 			}
@@ -135,7 +166,8 @@ func (u *Uploader) Recover() int {
 			}
 		}
 		log.Info("recovering recording for upload", "durationMs", sc.DurationMs)
-		u.Submit(Job{SessionID: sc.SessionID, RecorderID: sc.RecorderID, Mime: sc.Mime, DurationMs: sc.DurationMs})
+		u.Submit(Job{SessionID: sc.SessionID, RecorderID: sc.RecorderID, Mime: sc.Mime, DurationMs: sc.DurationMs,
+			Source: sc.Source, CameraID: sc.CameraID})
 		count++
 	}
 	return count

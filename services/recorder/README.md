@@ -17,6 +17,19 @@ its sha256 to the api. The api writes the hash into the audit chain.
   errors, 429 and 5xx are retried with backoff (2 s to 32 s, ±20 %).
 - Restart recovery: at start, sidecars left in `recording` / `finalised` are uploaded.
 
+### Camera recordings (Phase F, `docs/specs/phase-f-contracts.md` 6.5a)
+
+`recorder.hello` advertises `features: ["camera"]`. For a joined session the server may send
+`recorder.camera { sessionId, cameraId }` once the phone camera is live. The recorder then opens a second,
+receive-only peer connection and offers it as `webrtc.offer { peer: "camera" }` (envelope id
+`camoffer:<sessionId>`). The server's `webrtc.answer` / `webrtc.ice` for it carry `peer: "camera"`; every other
+frame still goes to the Desk connection. The camera video goes to its own video-only file,
+`OUT_DIR/<cameraId>.webm`, with a sidecar `<cameraId>.json` (`source: "camera"`, `cameraId`). It is finalised and
+uploaded with meta `source: "camera"` and `cameraId` when its connection fails or closes, when it stays
+disconnected for 5 s, when its track ends or never arrives, or when the session finishes. A camera is never
+restarted and never sends `recorder.leave`. A different `cameraId` finalises the running camera first. Pause does
+not touch the camera.
+
 ## Environment
 
 | Var | Default | Meaning |
@@ -70,6 +83,8 @@ The tests need no network and no Docker. They cover:
 
 - an in-process pion-to-pion loopback: a synthetic VP8 + Opus Desk peer goes through the real session, WebM
   writer and uploader, then the test checks the file parses, has blocks, and that its sha256 matches the upload;
+- the same loopback with a synthetic phone peer (VP8 only) on the camera connection beside the Desk: a separate
+  `source: "camera"` upload of `<cameraId>.webm`, and a phone that leaves mid-session;
 - the upload client against `httptest` (headers, part order, retry on 503, no retry on 403, 409 with the same
   hash);
 - config parsing;

@@ -1,4 +1,7 @@
-/** /app/account (contracts section 6.5): change own password. */
+/**
+ * /app/account (contracts section 6.5): change own password.
+ * Phase F section 7.7: install the console (Android Chrome's prompt behind an Install button; iOS guidance).
+ */
 import { useState, type FormEvent } from 'react';
 import { LIMITS } from '@indiansassist/shared';
 import { useAuth } from '../auth/AuthContext';
@@ -7,6 +10,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { errorMessage, isApiError } from '../lib/api';
 import { authApi } from '../lib/endpoints';
 import { fmtRoleName, fmtTier, regionLabel } from '../lib/format';
+import { isIos, isStandalone, useInstallPrompt } from './touch/pwa';
 
 export function AccountPage() {
   usePageTitle('Account');
@@ -50,7 +54,44 @@ export function AccountPage() {
             <Button type="submit">Change password</Button>
           </form>
         </Card>
+        <InstallCard />
       </div>
     </>
+  );
+}
+
+/** Phase F section 7.7: the Install button (Android Chrome's `beforeinstallprompt`) or the iOS guidance. */
+function InstallCard() {
+  const prompt = useInstallPrompt();
+  const [result, setResult] = useState<string | null>(null);
+  const standalone = isStandalone();
+  return (
+    <Card title="Install the console">
+      <div className="flex flex-col gap-3 text-sm">
+        {standalone || prompt.installed ? (
+          <p role="status">The console is installed on this device. Open it from your home screen or app list.</p>
+        ) : prompt.available ? (
+          <>
+            <p>Install the console to open it like an app, full screen, from your home screen.</p>
+            <Button
+              onClick={() =>
+                void prompt.install().then((r) => setResult(r === 'accepted' ? 'Installing the console.' : r === 'dismissed' ? 'Not installed.' : 'Your browser did not offer an install.'))
+              }
+            >
+              Install
+            </Button>
+          </>
+        ) : isIos() ? (
+          <p>On iPhone or iPad: in Safari, tap Share, then Add to Home Screen. The installed console keeps its own sign-in, so you sign in once there.</p>
+        ) : (
+          <p>Your browser has not offered an install yet. In Chrome or Edge, use the menu&apos;s Install app (or Add to Home screen on Android).</p>
+        )}
+        {result && (
+          <p role="status" aria-live="polite">
+            {result}
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }

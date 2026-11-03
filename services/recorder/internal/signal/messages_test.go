@@ -6,7 +6,10 @@ import (
 	"testing"
 )
 
-const sid = "6f1c2b9e-1d2a-4c3b-9a8f-0e1d2c3b4a59"
+const (
+	sid   = "6f1c2b9e-1d2a-4c3b-9a8f-0e1d2c3b4a59"
+	camID = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b0a"
+)
 
 // Literal frames copied from the shapes of packages/shared/src/schemas/signal-recorder.ts and signal-messages.ts.
 var frames = map[string]string{
@@ -17,6 +20,7 @@ var frames = map[string]string{
 	TRecorderJoined:  `{"t":"recorder.joined","sessionId":"` + sid + `","resume":true}`,
 	TRecorderPause:   `{"t":"recorder.pause","sessionId":"` + sid + `","reason":"consent_pending"}`,
 	TRecorderLeave:   `{"t":"recorder.leave","sessionId":"` + sid + `","reason":"media_failed"}`,
+	TRecorderCamera:  `{"t":"recorder.camera","sessionId":"` + sid + `","cameraId":"` + camID + `"}`,
 	TWebRTCOffer:     `{"t":"webrtc.offer","sessionId":"` + sid + `","sdp":"v=0\r\n","restart":true,"peer":"recorder"}`,
 	TWebRTCAnswer:    `{"t":"webrtc.answer","sessionId":"` + sid + `","sdp":"v=0\r\n","peer":"recorder"}`,
 	TWebRTCIce:       `{"t":"webrtc.ice","sessionId":"` + sid + `","candidate":{"candidate":"candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host","sdpMid":"0","sdpMLineIndex":0,"usernameFragment":"abcd"},"peer":"recorder"}`,
@@ -35,6 +39,7 @@ func TestDecodeTypes(t *testing.T) {
 		TRecorderJoined:  &RecorderJoined{},
 		TRecorderPause:   &RecorderPause{},
 		TRecorderLeave:   &RecorderLeave{},
+		TRecorderCamera:  &RecorderCamera{},
 		TWebRTCOffer:     &WebRTCOffer{},
 		TWebRTCAnswer:    &WebRTCAnswer{},
 		TWebRTCIce:       &WebRTCIce{},
@@ -89,6 +94,14 @@ func TestDecodeFields(t *testing.T) {
 	if SessionOf(m) != sid {
 		t.Fatal("SessionOf")
 	}
+	m, _ = Decode([]byte(frames[TRecorderCamera]))
+	if c, ok := m.(*RecorderCamera); !ok || c.SessionID != sid || c.CameraID != camID || SessionOf(m) != sid {
+		t.Fatalf("recorder.camera %+v", m)
+	}
+	m, _ = Decode([]byte(`{"t":"webrtc.answer","sessionId":"` + sid + `","sdp":"x","peer":"camera"}`))
+	if a := m.(*WebRTCAnswer); a.Peer != PeerCamera {
+		t.Fatalf("camera answer %+v", a)
+	}
 }
 
 func TestMarshalOutgoing(t *testing.T) {
@@ -97,6 +110,10 @@ func TestMarshalOutgoing(t *testing.T) {
 		want string
 	}{
 		{RecorderHello{Envelope: NewEnvelope(TRecorderHello, ""), Token: "tok-123", RecorderID: "rec-1", Version: "0.1.0", Region: "in-mum", MaxSessions: 8}, frames[TRecorderHello]},
+		{RecorderHello{Envelope: NewEnvelope(TRecorderHello, ""), Token: "tok-123", RecorderID: "rec-1", Version: "0.1.0", Region: "in-mum", MaxSessions: 8, Features: []string{FeatureCamera}},
+			`{"t":"recorder.hello","token":"tok-123","recorderId":"rec-1","version":"0.1.0","region":"in-mum","maxSessions":8,"features":["camera"]}`},
+		{WebRTCOffer{Envelope: NewEnvelope(TWebRTCOffer, "camoffer:"+sid), SessionID: sid, SDP: "x", Peer: PeerCamera},
+			`{"t":"webrtc.offer","id":"camoffer:` + sid + `","sessionId":"` + sid + `","sdp":"x","peer":"camera"}`},
 		{RecorderJoin{Envelope: NewEnvelope(TRecorderJoin, "join:"+sid), SessionID: sid}, frames[TRecorderJoin]},
 		{RecorderLeave{Envelope: NewEnvelope(TRecorderLeave, ""), SessionID: sid, Reason: ReasonMediaFailed}, frames[TRecorderLeave]},
 		{WebRTCOffer{Envelope: NewEnvelope(TWebRTCOffer, ""), SessionID: sid, SDP: "v=0\r\n", Restart: true, Peer: PeerRecorder}, frames[TWebRTCOffer]},

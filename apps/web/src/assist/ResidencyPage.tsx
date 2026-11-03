@@ -28,38 +28,61 @@ import { fmtDateTime, regionLabel } from '../lib/format';
 import { ResidencyErasureSlot } from './console/PhaseFSlots';
 import { RESIDENCY_ERASURE_PRINT_CSS } from './erasure/ResidencyErasure';
 
-/** Section 6.4: one A4 page, 12 mm margins, 9 pt body, no navigation chrome. Mounted only while this page is. */
+/**
+ * Section 6.4: one A4 page, 12 mm margins, 9 pt body, no navigation chrome. Mounted only while this page is. Phase F
+ * section 3.2: the heaviest report (10 flows, a 200-character storage detail, SSO with 5 domains, the AI
+ * acknowledgement, the 12 mm erasure block, a 100-character org name) keeps at least 15 mm free, measured by
+ * `e2e/enterprise-residency.spec.ts`: tables are set at 8 pt with shortened headings, the flows table prints in two
+ * columns (each flow a small block that names its own fields), the storage detail wraps anywhere, and the long
+ * single-value lines (organisation, keys, hashes, single sign-on, the chain text) take the full width. No field is
+ * dropped and no state is shown by colour alone.
+ */
 export const RESIDENCY_PRINT_CSS = `
+.residency-report .rr-print-only { display: none; }
 @media print {
   @page { size: A4 portrait; margin: 12mm; }
   html, body { background: #fff !important; }
   main#main { max-width: none !important; padding: 0 !important; }
-  .residency-report, .residency-report * { font-size: 9pt !important; line-height: 1.15 !important; color: #000 !important; }
-  .residency-report, .residency-report > div { gap: 3pt !important; }
+  .residency-report, .residency-report * { font-size: 9pt !important; line-height: 1.1 !important; color: #000 !important; }
+  .residency-report, .residency-report > div { gap: 2pt !important; }
   .residency-report h1 { font-size: 13pt !important; margin: 0 !important; }
-  .residency-report h2 { font-size: 9.5pt !important; font-weight: 700 !important; margin: 0 0 1pt !important; }
+  .residency-report h2 { font-size: 9.5pt !important; font-weight: 700 !important; margin: 0 !important; }
   .residency-report section { border: 0 !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; background: none !important; break-inside: avoid; }
-  .residency-report section > div:first-child { margin-bottom: 1pt !important; }
+  .residency-report section > div:first-child { margin-bottom: 0.5pt !important; }
+  .residency-report .rr-print-only { display: inline !important; }
   .residency-report table { width: 100%; border-collapse: collapse; }
-  .residency-report th, .residency-report td { padding: 0.5pt 3pt !important; border-bottom: 0.5pt solid #999 !important; vertical-align: top; }
+  .residency-report table, .residency-report table * { font-size: 8pt !important; line-height: 1.07 !important; }
+  .residency-report th, .residency-report td { padding: 0.4pt 3pt !important; border-bottom: 0.5pt solid #999 !important; vertical-align: top; }
+  .residency-report thead th { text-transform: none !important; letter-spacing: 0 !important; }
   .residency-report dl > div { padding: 0 !important; border: 0 !important; }
   .residency-report .rr-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; column-gap: 8pt !important; row-gap: 0 !important; }
   .residency-report .rr-grid.rr-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .residency-report .rr-grid > div { display: block !important; }
+  .residency-report .rr-grid > div.rr-wide { grid-column: 1 / -1 !important; }
   .residency-report .rr-grid dt { display: inline !important; font-weight: 600 !important; }
   .residency-report .rr-grid dt::after { content: ': '; }
   .residency-report .rr-grid dd { display: inline !important; }
   .residency-report [data-tone] { padding: 0 2pt !important; border: 0.5pt solid #000; background: none !important; }
   .residency-report .rr-mono { font-size: 7.5pt !important; }
-  .residency-report .rr-statement { border: 0.5pt solid #000 !important; background: none !important; padding: 2pt 4pt !important; }
+  .residency-report .rr-statement { border: 0.5pt solid #000 !important; background: none !important; padding: 1.5pt 4pt !important; }
+  .residency-report .rr-statement * { padding: 0 !important; border: 0 !important; background: none !important; }
   .residency-report .rr-header > div:first-child { display: none !important; }
   .residency-report .rr-nowrap { white-space: nowrap !important; }
   .residency-report .rr-cats { table-layout: fixed; }
-  .residency-report .rr-cats col.c1 { width: 14%; } .residency-report .rr-cats col.c2 { width: 49%; }
-  .residency-report .rr-cats col.c3 { width: 30%; } .residency-report .rr-cats col.c4 { width: 7%; }
-  .residency-report .rr-flows { table-layout: fixed; }
-  .residency-report .rr-flows col.c1 { width: 25%; } .residency-report .rr-flows col.c2 { width: 17%; }
-  .residency-report .rr-flows col.c3 { width: 28%; } .residency-report .rr-flows col.c4 { width: 30%; }
+  .residency-report .rr-cats td { overflow-wrap: anywhere; }
+  .residency-report .rr-cats col.c1 { width: 13%; } .residency-report .rr-cats col.c2 { width: 54%; }
+  .residency-report .rr-cats col.c3 { width: 26%; } .residency-report .rr-cats col.c4 { width: 7%; }
+  .residency-report .rr-flows, .residency-report .rr-flows tbody { display: block !important; }
+  .residency-report .rr-flows colgroup, .residency-report .rr-flows thead { display: none !important; }
+  .residency-report .rr-flows tbody { column-count: 2; column-gap: 8pt; }
+  .residency-report .rr-flows tr { display: flex !important; flex-wrap: wrap; column-gap: 3pt; border-bottom: 0.5pt solid #999; padding: 0.6pt 0 !important; break-inside: avoid; }
+  .residency-report .rr-flows tr > th, .residency-report .rr-flows tr > td { display: block !important; border: 0 !important; padding: 0 !important; overflow-wrap: anywhere; }
+  .residency-report .rr-flows tr > th { order: 1; flex: 0 0 100%; }
+  .residency-report .rr-flows tr > th > div { display: inline !important; margin-left: 3pt; }
+  .residency-report .rr-flows tr > td:nth-child(2) { order: 2; flex: 0 0 auto; }
+  .residency-report .rr-flows tr > td:nth-child(4) { order: 3; flex: 1 1 0; min-width: 0; }
+  .residency-report .rr-flows tr > td:nth-child(3) { order: 4; flex: 0 0 100%; }
+  .residency-report .rr-flows tr > td:nth-child(4) > div { display: inline !important; margin-left: 3pt; }
   .residency-report .rr-screen-only, .residency-report .rr-grid > div.rr-screen-only { display: none !important; }
   .residency-print-hide { display: none !important; }
 }
@@ -158,7 +181,10 @@ function CategoriesTable({ rows }: { rows: DataCategoryEntry[] }) {
         <thead>
           <tr>
             <th scope="col" className={TH}>Category</th>
-            <th scope="col" className={TH}>Store and region</th>
+            <th scope="col" className={TH}>
+              <span className="rr-screen-only">Store and region</span>
+              <span className="rr-print-only">Store, region</span>
+            </th>
             <th scope="col" className={TH}>Retention</th>
             <th scope="col" className={cx(TH, 'text-right')}>Count</th>
           </tr>
@@ -224,7 +250,10 @@ function FlowsTable({ flows }: { flows: DataFlow[] }) {
               <td className={cx(TD, 'rr-nowrap')}>
                 <Badge tone={LEAVES_TONE[f.leavesRegion]}>{leavesRegionText(f.leavesRegion)}</Badge>
               </td>
-              <td className={TD}>{f.dataSent}</td>
+              <td className={TD}>
+                <span className="rr-print-only">Data sent: </span>
+                {f.dataSent}
+              </td>
               <td className={TD}>
                 {f.enabled ? 'Enabled' : 'Configured, disabled'}
                 {f.enabled && (f.since || f.enabledBy) && (
@@ -256,7 +285,7 @@ export function ResidencyReportView({ r }: { r: ResidencyReport }) {
     <div className="flex flex-col gap-3">
       <Card title="Report" className="rr-header">
         <Grid>
-          <Row label="Organisation">
+          <Row label="Organisation" className="rr-wide">
             {r.org.name} ({r.org.slug})
           </Row>
           <Row label="Data region">
@@ -281,7 +310,7 @@ export function ResidencyReportView({ r }: { r: ResidencyReport }) {
               <Row label="Public key">
                 <Mono>{sig.pub}</Mono>
               </Row>
-              <Row label="Report sha256">
+              <Row label="Report sha256" className="rr-wide">
                 <Mono>{sig.sha256}</Mono>
               </Row>
             </>
@@ -389,7 +418,7 @@ export function ResidencyReportView({ r }: { r: ResidencyReport }) {
           )}
           <Row label="Recording retention">{r.retention.recordings}</Row>
           {r.sso && (
-            <Row label="Single sign-on">
+            <Row label="Single sign-on" className="rr-wide">
               {r.sso.protocol ? `${r.sso.protocol.toUpperCase()}, ${r.sso.enabled ? 'enabled' : 'disabled'}` : 'Not configured'}
               {', '}
               {r.sso.required ? 'required for sign-in' : 'not required'}
@@ -416,7 +445,7 @@ export function ResidencyReportView({ r }: { r: ResidencyReport }) {
               'never'
             )}
           </Row>
-          <Row label="Tail">
+          <Row label="Tail" className="rr-wide">
             <Mono>{r.chain.tail ?? 'empty'}</Mono>
           </Row>
           <Row label="Last anchor">
@@ -428,7 +457,7 @@ export function ResidencyReportView({ r }: { r: ResidencyReport }) {
               'none yet'
             )}
           </Row>
-          <Row label="Personal data in the chain">{r.retention.piiInChain}</Row>
+          <Row label="Personal data in the chain" className="rr-wide">{r.retention.piiInChain}</Row>
           {/* Phase F sections 3.2b2, 5.7: the erasure line (stream erasure), 12 mm in print. */}
           <ResidencyErasureSlot erasure={r.erasure} />
         </Grid>

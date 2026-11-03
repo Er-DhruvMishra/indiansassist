@@ -52,6 +52,7 @@ import {
   token as tokenTable,
   user as userTable,
   type IntegrationRow,
+  getOpenErasure,
   type OrgRow,
 } from '@indiansassist/db';
 import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
@@ -61,13 +62,27 @@ import { thirdPartyIceHosts } from '../lib/ice.js';
 
 const DAY_MS = 86_400_000;
 
-/** Section 6.2e: the erasure note (W75). */
+/** Phase F section 5.7: the erasure note (erasure stream; the Phase E text said it was not implemented). */
 export const ERASURE_NOTE =
-  'Destroying the per-org pepper to erase hashed personal data is not implemented. Personal data in the audit chain is stored only as peppered hashes.';
+  "Erasure destroys this organisation's personal data and the audit pepper after two administrators approve it and a 7-day cooling-off period (an organisation with a single administrator: a mailed confirmation and a 14-day cooling-off period). Technician display names and typed reasons stay in the audit chain.";
 
-/** Section 6.2e: `retention.piiInChain`, widened from the A literal that promised an erasure mechanism. */
+/** Phase F section 5.7: `retention.piiInChain` (erasure stream). */
 export const PII_IN_CHAIN_TEXT =
-  'Personal data in the audit chain is stored only as hashes with a per-org pepper. Erasure by destroying the pepper is not implemented.';
+  'Personal data in the audit chain is stored only as hashes with a per-org pepper; erasure destroys the pepper, after which the hashes cannot be linked to anyone.';
+
+/**
+ * Phase F section 5.7: the erasure block: available, the open erasure's state (`none` when there is none) and, in
+ * cooling-off, the time it is scheduled for.
+ */
+async function erasureBlock(ctx: AppContext, org: OrgRow): Promise<NonNullable<ResidencyReport['erasure']>> {
+  const open = await getOpenErasure(ctx.db, org.id);
+  return {
+    available: true,
+    state: open?.state ?? 'none',
+    scheduledFor: open?.state === 'cooling_off' && open.coolingOffUntil ? open.coolingOffUntil.toISOString() : null,
+    note: ERASURE_NOTE,
+  };
+}
 
 /** Section 6.2e: `retention.recordings`, computed from `org.recording_retention_days`. */
 export function recordingRetentionText(days: number | null | undefined): string {
@@ -529,7 +544,7 @@ export async function buildResidencyReport(ctx: AppContext, org: OrgRow): Promis
       verifiedDomains,
     },
     recorder: { enabled: ctx.config.recorderToken !== '' },
-    erasure: { available: false, note: ERASURE_NOTE },
+    erasure: await erasureBlock(ctx, org),
   };
 }
 

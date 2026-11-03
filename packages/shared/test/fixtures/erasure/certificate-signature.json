@@ -1,0 +1,210 @@
+{
+  "key": {
+    "seedHex": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+    "kid": "1f5fe64ec2f8c901",
+    "pub": "QwRr_kCSs-lJlOraFdzCDYqqB7ZY_TlU644O-4vcpd4"
+  },
+  "retiredKey": {
+    "seedHex": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+    "kid": "3eae5f60059070e8",
+    "pub": "W4ZJwM_Nvnil_5Yu36SJFN_UWvIq_jWN4fTdfkVn1co"
+  },
+  "certificate": {
+    "v": 1,
+    "erasureId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
+    "orgId": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+    "region": "in-mum",
+    "requestedAt": "2026-11-02T10:00:00.000Z",
+    "approvedAt": "2026-11-03T09:30:00.000Z",
+    "executedAt": "2026-11-10T09:30:10.000Z",
+    "completedAt": "2026-11-10T10:05:20.000Z",
+    "chain": {
+      "entries": 42,
+      "tail": "fafe9b3536b1d05203b4462feac1d58f8580ac102c60745e77bf57e3b381cca3",
+      "verified": true,
+      "failure": null,
+      "finalEntry": {
+        "action": "org.erased",
+        "actor": {
+          "id": null,
+          "label": "system",
+          "type": "system"
+        },
+        "data": {
+          "erasureId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
+          "entriesBefore": 41,
+          "counts": {
+            "deleted:auth_session": 4,
+            "deleted:recordingObjects": 2,
+            "scrubbed:user": 3
+          }
+        },
+        "org_id": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+        "prev_hash": "a6f2baacbd5c3441fd52b31d9c9196d1406fa9d70d0042fcfaed63572e92d991",
+        "reason": null,
+        "region": "in-mum",
+        "seq": 42,
+        "session_id": null,
+        "ts": "2026-11-20T10:00:05.000Z",
+        "hash": "fafe9b3536b1d05203b4462feac1d58f8580ac102c60745e77bf57e3b381cca3"
+      }
+    },
+    "deleted": {
+      "auth_session": 4,
+      "login_attempt": 7,
+      "recordingObjects": 2,
+      "technician_seat": 3
+    },
+    "scrubbed": {
+      "device": 1,
+      "org": 1,
+      "session": 5,
+      "user": 3
+    },
+    "objectBytes": 2048,
+    "externalFlows": [
+      "mail",
+      "ticketing"
+    ],
+    "backups": "database backups are kept for 35 days (operator setting)"
+  },
+  "signingInputPrefixHex": "69612d657261737572652d76310a7b22",
+  "signingInputSha256": "26fefbb7e464aafd9ff20c7db21bddbaa6e5b5aa11c8c83af26d1578932a44ed",
+  "sig": "IRUVh9X8UZqX4Gc6akpSmdimaZJsne00hZnz-LnOxU6du28eXsforiX3XQcZ5GtNsJANOvi_PpS4wF4WexoSAw",
+  "signed": {
+    "v": 1,
+    "erasureId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
+    "orgId": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+    "region": "in-mum",
+    "requestedAt": "2026-11-02T10:00:00.000Z",
+    "approvedAt": "2026-11-03T09:30:00.000Z",
+    "executedAt": "2026-11-10T09:30:10.000Z",
+    "completedAt": "2026-11-10T10:05:20.000Z",
+    "chain": {
+      "entries": 42,
+      "tail": "fafe9b3536b1d05203b4462feac1d58f8580ac102c60745e77bf57e3b381cca3",
+      "verified": true,
+      "failure": null,
+      "finalEntry": {
+        "action": "org.erased",
+        "actor": {
+          "id": null,
+          "label": "system",
+          "type": "system"
+        },
+        "data": {
+          "erasureId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
+          "entriesBefore": 41,
+          "counts": {
+            "deleted:auth_session": 4,
+            "deleted:recordingObjects": 2,
+            "scrubbed:user": 3
+          }
+        },
+        "org_id": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+        "prev_hash": "a6f2baacbd5c3441fd52b31d9c9196d1406fa9d70d0042fcfaed63572e92d991",
+        "reason": null,
+        "region": "in-mum",
+        "seq": 42,
+        "session_id": null,
+        "ts": "2026-11-20T10:00:05.000Z",
+        "hash": "fafe9b3536b1d05203b4462feac1d58f8580ac102c60745e77bf57e3b381cca3"
+      }
+    },
+    "deleted": {
+      "auth_session": 4,
+      "login_attempt": 7,
+      "recordingObjects": 2,
+      "technician_seat": 3
+    },
+    "scrubbed": {
+      "device": 1,
+      "org": 1,
+      "session": 5,
+      "user": 3
+    },
+    "objectBytes": 2048,
+    "externalFlows": [
+      "mail",
+      "ticketing"
+    ],
+    "backups": "database backups are kept for 35 days (operator setting)",
+    "signature": {
+      "alg": "Ed25519",
+      "domain": "ia-erasure-v1",
+      "kid": "1f5fe64ec2f8c901",
+      "pub": "QwRr_kCSs-lJlOraFdzCDYqqB7ZY_TlU644O-4vcpd4",
+      "sig": "IRUVh9X8UZqX4Gc6akpSmdimaZJsne00hZnz-LnOxU6du28eXsforiX3XQcZ5GtNsJANOvi_PpS4wF4WexoSAw",
+      "sha256": "26fefbb7e464aafd9ff20c7db21bddbaa6e5b5aa11c8c83af26d1578932a44ed",
+      "signedAt": "2026-11-10T10:05:21.000Z"
+    }
+  },
+  "signedByRetired": {
+    "v": 1,
+    "erasureId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
+    "orgId": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+    "region": "in-mum",
+    "requestedAt": "2026-11-02T10:00:00.000Z",
+    "approvedAt": "2026-11-03T09:30:00.000Z",
+    "executedAt": "2026-11-10T09:30:10.000Z",
+    "completedAt": "2026-11-10T10:05:20.000Z",
+    "chain": {
+      "entries": 42,
+      "tail": "fafe9b3536b1d05203b4462feac1d58f8580ac102c60745e77bf57e3b381cca3",
+      "verified": true,
+      "failure": null,
+      "finalEntry": {
+        "action": "org.erased",
+        "actor": {
+          "id": null,
+          "label": "system",
+          "type": "system"
+        },
+        "data": {
+          "erasureId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
+          "entriesBefore": 41,
+          "counts": {
+            "deleted:auth_session": 4,
+            "deleted:recordingObjects": 2,
+            "scrubbed:user": 3
+          }
+        },
+        "org_id": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+        "prev_hash": "a6f2baacbd5c3441fd52b31d9c9196d1406fa9d70d0042fcfaed63572e92d991",
+        "reason": null,
+        "region": "in-mum",
+        "seq": 42,
+        "session_id": null,
+        "ts": "2026-11-20T10:00:05.000Z",
+        "hash": "fafe9b3536b1d05203b4462feac1d58f8580ac102c60745e77bf57e3b381cca3"
+      }
+    },
+    "deleted": {
+      "auth_session": 4,
+      "login_attempt": 7,
+      "recordingObjects": 2,
+      "technician_seat": 3
+    },
+    "scrubbed": {
+      "device": 1,
+      "org": 1,
+      "session": 5,
+      "user": 3
+    },
+    "objectBytes": 2048,
+    "externalFlows": [
+      "mail",
+      "ticketing"
+    ],
+    "backups": "database backups are kept for 35 days (operator setting)",
+    "signature": {
+      "alg": "Ed25519",
+      "domain": "ia-erasure-v1",
+      "kid": "3eae5f60059070e8",
+      "pub": "W4ZJwM_Nvnil_5Yu36SJFN_UWvIq_jWN4fTdfkVn1co",
+      "sig": "MMXlP0pbIwUKfix62m20EnKZNisVgvKPLBXBN4x6iXxg4Tx9Ux4hHqAn5gVFresEnyeA-oQ_oC2RuKV_MmOrAA",
+      "sha256": "26fefbb7e464aafd9ff20c7db21bddbaa6e5b5aa11c8c83af26d1578932a44ed",
+      "signedAt": "2026-11-10T10:05:21.000Z"
+    }
+  }
+}

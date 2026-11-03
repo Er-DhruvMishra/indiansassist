@@ -40,6 +40,7 @@ type Hello struct {
 	Version     string
 	Region      string
 	MaxSessions int
+	Features    []string // recorder.hello features (e.g. FeatureCamera)
 }
 
 // Client keeps one connection to one SIGNAL_URL alive (reconnect 1 s .. 30 s with jitter).
@@ -140,7 +141,7 @@ func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 	defer k.close()
 
 	hello := RecorderHello{Envelope: NewEnvelope(TRecorderHello, ""), Token: c.Hello.Token, RecorderID: c.Hello.RecorderID,
-		Version: c.Hello.Version, Region: c.Hello.Region, MaxSessions: c.Hello.MaxSessions}
+		Version: c.Hello.Version, Region: c.Hello.Region, MaxSessions: c.Hello.MaxSessions, Features: c.Hello.Features}
 	if err := k.Send(hello); err != nil {
 		return false, err
 	}

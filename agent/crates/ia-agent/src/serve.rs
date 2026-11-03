@@ -360,14 +360,22 @@ impl DeskUi {
     }
 
     /// Show the ended view and wait (off the runtime) until the user closes it or it times out.
-    async fn finish(self, lines: Vec<String>) {
+    /// Returns the Desk's Keep choice as the UI left it (Phase F §3.4: the ended view offers Keep
+    /// too, so it is read only once the view is gone).
+    async fn finish(self, lines: Vec<String>) -> ia_ui::model::KeepChoice {
         self.send(UiCommand::Ended { lines });
         #[cfg(feature = "gui")]
-        {
+        let choice = {
+            let keep = self.handle.keep_choice();
             let h = self.handle;
             let _ =
                 tokio::task::spawn_blocking(move || h.wait_closed(Duration::from_secs(30))).await;
-        }
+            let choice = keep.lock().map(|k| *k).unwrap_or_default();
+            choice
+        };
+        #[cfg(not(feature = "gui"))]
+        let choice = ia_ui::model::KeepChoice::default();
+        choice
     }
 
     /// The consent window was declined / closed: let the UI thread wind down.
@@ -2724,6 +2732,17 @@ async fn serve(
     });
     live.seal("ia.control", &monitors_event.to_string()).await;
     live.send_level_event().await;
+    // Phase F §3.4: the Keep control the Desk UI offers (none in a Phase D worker; "Remove ...
+    // after this session" in a kept copy, which reports itself kept once, rule 3.4d).
+    let running_kept = running_kept_copy();
+    live.ui(UiCommand::KeepMode {
+        available: !crate::svc::is_worker(),
+        running_kept,
+    });
+    if running_kept && !crate::svc::is_worker() {
+        live.seal("ia.control", &keep_event(true, now_ms()).to_string())
+            .await;
+    }
     // Phase E §7.4: a Wayland Desk says once, as the control channel opens, that it shares no
     // screen (no video track was offered).
     if crate::desk::current().is_some_and(|m| !m.shares_screen()) {
@@ -2987,6 +3006,11 @@ async fn serve(
                         }
                     }
                     Some(UiEvent::ChatSend(text)) => live.send_chat(text).await,
+                    // Rule 3.4b: the Desk's Keep choice, reported read-only to the console.
+                    Some(UiEvent::Keep { kept }) => {
+                        tracing::info!(kept, "keep: the Desk changed its choice");
+                        live.seal("ia.control", &keep_event(kept, now_ms()).to_string()).await;
+                    }
                     Some(UiEvent::Mic(on)) => {
                         if let Some(v) = voice.as_mut() {
                             let res = v.set_muted(!on);
@@ -3285,14 +3309,19 @@ async fn serve(
     }
 
     let lines = live.receipt_lines(&outcome, &sas);
-    if let Some(ui) = live.ui.take() {
-        ui.finish(lines).await;
-    }
+    let choice = match live.ui.take() {
+        Some(ui) => ui.finish(lines).await,
+        // No UI (headless): nobody chose Keep; a kept copy is still kept (rule 3.4d).
+        None => ia_ui::model::KeepChoice {
+            running_kept: running_kept_copy(),
+            ..Default::default()
+        },
+    };
 
-    // Self-delete decision (§10). The e2e passes --no-self-delete, so it is logged, not run.
-    // §10 D3: exactly one instance deletes — the one holding the session. A handed-over user
-    // instance must not, because the elevated child is running the same file.
-    let kept = cli.no_self_delete;
+    // The exit decision (§10, Phase F §3.4). The e2e passes --no-self-delete, which means no file
+    // change at exit at all (rule 3.4e): it is logged, not run. §10 D3: exactly one instance
+    // deletes — the one holding the session. A handed-over user instance must not, because the
+    // elevated child is running the same file.
     let role = if matches!(outcome, LiveOutcome::HandedOver) {
         ProcessRole::UserHandedOver
     } else if crate::hochild::is_child() {
@@ -3300,12 +3329,22 @@ async fn serve(
     } else {
         ProcessRole::UserStandalone
     };
-    tracing::info!(?role, "self-delete role");
-    if deletes_on_exit(role, kept) {
-        tracing::info!("self-delete decision: delete (spawning cleanup stub)");
-        perform_self_delete();
-    } else {
-        tracing::info!("self-delete decision: skip (keep binary; --no-self-delete)");
+    let action = exit_action(cli.no_self_delete, crate::svc::is_worker(), role, choice);
+    tracing::info!(?role, ?choice, ?action, "exit decision");
+    match action {
+        ExitAction::SelfDelete => {
+            tracing::info!("exit decision: self-delete (spawning cleanup stub)");
+            perform_self_delete();
+        }
+        ExitAction::Keep { first } => {
+            tracing::info!(first, "exit decision: keep (D5)");
+            perform_keep(first);
+        }
+        ExitAction::Nothing => {
+            tracing::info!(
+                "exit decision: no file change (--no-self-delete, worker or handed over)"
+            )
+        }
     }
     Ok(outcome)
 }

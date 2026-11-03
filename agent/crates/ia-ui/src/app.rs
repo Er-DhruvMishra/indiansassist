@@ -29,7 +29,8 @@ use ia_core::types::{AgentConsentLevel, ElevationLevel, MonitorInfo};
 use crate::bridge::{human_size, ConsentRequest, FilePrompt, UiCommand, UiEvent};
 use crate::guard::Guard;
 use crate::model::{
-    level_chip, mic_direction, mic_label, prompt_allowed, ConsentModel, PillModel, PromptDirection,
+    keep_click_physical, level_chip, mic_direction, mic_label, prompt_allowed, ConsentModel,
+    KeepChoice, PillModel, PromptDirection, KEEP_TEXT,
 };
 use crate::tray::{Tray, TrayAction, TrayState};
 
@@ -54,6 +55,9 @@ pub struct UiHandle {
     tx: Sender<UiCommand>,
     ctx: Arc<Mutex<Option<egui::Context>>>,
     thread: Option<JoinHandle<()>>,
+    /// Phase F §3.4: the Desk's Keep choice, written only by the UI thread on physical input and
+    /// read by the serve loop at exit (after the ended view, where it can still change).
+    keep: Arc<Mutex<KeepChoice>>,
 }
 
 impl UiHandle {
@@ -63,6 +67,11 @@ impl UiHandle {
         if let Some(c) = self.ctx.lock().ok().and_then(|g| g.clone()) {
             c.request_repaint();
         }
+    }
+
+    /// The shared Keep choice (clone it before [`UiHandle::wait_closed`] consumes the handle).
+    pub fn keep_choice(&self) -> Arc<Mutex<KeepChoice>> {
+        self.keep.clone()
     }
 
     /// Wait up to `timeout` for the UI thread to finish (after `Ended`). `true` if it did.
@@ -86,6 +95,8 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
     let (tx, rx) = channel();
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let slot = ctx_slot.clone();
+    let keep: Arc<Mutex<KeepChoice>> = Arc::new(Mutex::new(KeepChoice::default()));
+    let app_keep = keep.clone();
     let thread = std::thread::Builder::new()
         .name("ia-ui".into())
         .spawn(move || {
@@ -131,7 +142,7 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
                     if let Ok(mut g) = slot.lock() {
                         *g = Some(cc.egui_ctx.clone());
                     }
-                    Ok(Box::new(IaApp::new(req, rx, app_emit)))
+                    Ok(Box::new(IaApp::new(req, rx, app_emit, app_keep)))
                 }),
             );
             match result {
@@ -144,6 +155,7 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
         tx,
         ctx: ctx_slot,
         thread,
+        keep,
     }
 }
 
@@ -267,6 +279,8 @@ struct IaApp {
     ended_at: Option<Instant>,
     ended_lines: Vec<String>,
     beeped: bool,
+    /// Phase F §3.4: the Keep choice shared with the serve loop's [`UiHandle`].
+    keep: Arc<Mutex<KeepChoice>>,
     /// Dev builds only (`IA_DEV_UI_AUTOPILOT=1`): drive the windows without a mouse, for a
     /// locked or headless verification host. Never compiled into a release build.
     #[cfg(feature = "dev")]
@@ -274,7 +288,12 @@ struct IaApp {
 }
 
 impl IaApp {
-    fn new(req: ConsentRequest, rx: Receiver<UiCommand>, emit: Rc<Emit>) -> Self {
+    fn new(
+        req: ConsentRequest,
+        rx: Receiver<UiCommand>,
+        emit: Rc<Emit>,
+        keep: Arc<Mutex<KeepChoice>>,
+    ) -> Self {
         let consent = ConsentModel::new(&req.technician, &req.org, req.monitors.clone());
         Self {
             rx,
@@ -308,6 +327,7 @@ impl IaApp {
             ended_at: None,
             ended_lines: Vec::new(),
             beeped: false,
+            keep,
             #[cfg(feature = "dev")]
             autopilot: std::env::var_os("IA_DEV_UI_AUTOPILOT").is_some(),
         }
@@ -315,6 +335,47 @@ impl IaApp {
 
     fn emit(&self, e: UiEvent) {
         (self.emit)(e);
+    }
+
+    /// The current Keep choice (a poisoned lock reads as "not offered").
+    fn keep_now(&self) -> KeepChoice {
+        self.keep.lock().map(|k| *k).unwrap_or_default()
+    }
+
+    /// Rule 3.4a: the Keep checkbox was clicked. Applies the change only when the click is
+    /// physical (see [`keep_click_physical`]) and reports the new choice to the serve loop.
+    fn keep_clicked(&mut self, checked: bool, ended: bool) {
+        let physical = keep_click_physical(ended, self.physical_ok(), !self.input_gated());
+        let changed = self
+            .keep
+            .lock()
+            .ok()
+            .and_then(|mut k| k.set_checked(checked, physical));
+        match changed {
+            Some(kept) => {
+                tracing::info!(kept, "keep: the Desk changed its choice");
+                self.emit(UiEvent::Keep { kept });
+            }
+            None if !physical => {
+                tracing::warn!("keep: a click without a physical press was ignored");
+                self.live.refusal_hint = Some(Instant::now());
+            }
+            None => {}
+        }
+    }
+
+    /// The Keep checkbox and its text, drawn from the shared choice (so a refused click does
+    /// not stay ticked). Returns the box's new state when it was clicked.
+    fn keep_control(ui: &mut egui::Ui, k: KeepChoice) -> Option<bool> {
+        if !k.available {
+            return None;
+        }
+        let mut checked = k.checked();
+        let clicked = ui.checkbox(&mut checked, k.label()).changed();
+        if !k.running_kept {
+            ui.label(RichText::new(KEEP_TEXT).small());
+        }
+        clicked.then_some(checked)
     }
 
     /// Rule 7.3c (Linux): whether input is ignored right now because an agent surface was mapped
@@ -450,6 +511,15 @@ impl IaApp {
                     self.live.mic_muted = muted;
                 }
                 UiCommand::TechnicianVoice { muted } => self.live.technician_talking = !muted,
+                UiCommand::KeepMode {
+                    available,
+                    running_kept,
+                } => {
+                    if let Ok(mut k) = self.keep.lock() {
+                        k.available = available;
+                        k.running_kept = running_kept;
+                    }
+                }
                 UiCommand::Ended { lines } => self.enter_ended(ctx, lines),
             }
         }
@@ -496,7 +566,9 @@ impl IaApp {
         ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
         ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
         ctx.send_viewport_cmd(ViewportCommand::ContentProtected(false));
-        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(440.0, 320.0)));
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(440.0, 400.0)));
+        // Rule 7.3c: the ended view is a newly mapped surface too.
+        self.map_gate.mapped(Instant::now());
     }
 
     // ---- consent window ----------------------------------------------------------------------
@@ -874,6 +946,8 @@ impl IaApp {
             .inner_margin(10.0)
             .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(70, 80, 95)));
         let gated = self.input_gated();
+        let keep_now = self.keep_now();
+        let mut keep_click: Option<bool> = None;
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             if gated {
                 ui.disable();
@@ -973,6 +1047,11 @@ impl IaApp {
                     events.push(UiEvent::Clipboard(false));
                 }
             }
+            // Phase F rule 3.4a: Keep, in the pill menu (physical input only, both directions).
+            if keep_now.available {
+                ui.add_space(4.0);
+                keep_click = Self::keep_control(ui, keep_now);
+            }
             ui.separator();
             ui.label(RichText::new("Chat").strong());
             egui::ScrollArea::vertical().max_height(120.0).stick_to_bottom(true).show(ui, |ui| {
@@ -1006,6 +1085,9 @@ impl IaApp {
                 });
             });
         });
+        if let Some(checked) = keep_click {
+            self.keep_clicked(checked, false);
+        }
         if arm_exe && self.grant() {
             self.live.file_confirm_armed = true;
         }
@@ -1035,17 +1117,33 @@ impl IaApp {
 
     fn ended_ui(&mut self, ctx: &egui::Context) {
         let mut close = false;
+        let keep_now = self.keep_now();
+        let mut keep_click: Option<bool> = None;
+        let gated = self.input_gated();
         egui::CentralPanel::default().show(ctx, |ui| {
+            if gated {
+                ui.disable();
+            }
             ui.heading("Session ended");
             ui.add_space(6.0);
             for l in &self.ended_lines {
                 ui.label(l);
+            }
+            // Phase F rule 3.4a: Keep, in the ended view too (the choice is read at exit).
+            if keep_now.available {
+                ui.add_space(8.0);
+                keep_click = Self::keep_control(ui, keep_now);
             }
             ui.add_space(10.0);
             if ui.button("Close").clicked() {
                 close = true;
             }
         });
+        if let Some(checked) = keep_click {
+            // The view keeps its 20 s close timer: the serve loop reads the choice once the view
+            // is gone (it waits at most 30 s), so a later change could not count.
+            self.keep_clicked(checked, true);
+        }
         let timed_out = self
             .ended_at
             .is_some_and(|t| t.elapsed() > Duration::from_secs(20));

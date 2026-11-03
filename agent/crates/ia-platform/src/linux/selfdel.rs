@@ -51,27 +51,62 @@ pub fn archive_removable(facts: &ArchiveFacts, my_uid: u32) -> bool {
     facts.regular_file && facts.owner_uid == my_uid && facts.size <= ARCHIVE_MAX_BYTES
 }
 
-/// The plan for a clean exit. `kept` = the user chose Keep (D5): the binary is copied to
-/// `$XDG_DATA_HOME/indiansassist/IndiansAssist`, the handler stays (pointed at the copy) and
-/// nothing of the user's is unlinked; only the runtime dir goes. Received files are never in a
-/// plan (D1).
+/// Whether `exe` is the Keep location `$XDG_DATA_HOME/indiansassist/IndiansAssist` (Phase F
+/// rule 3.4d: a kept copy treats Keep as chosen and never deletes itself unless the Desk chose
+/// "Remove IndiansAssist from this computer after this session").
+pub fn is_kept_copy(env: &XdgEnv, exe: &Path) -> bool {
+    paths::kept_binary(env).is_some_and(|k| k == exe)
+}
+
+/// The plan for a clean exit. Received files are never in a plan (D1).
+///
+/// * `kept` (the user chose Keep, D5; Phase F rule 3.4c): the binary is copied to
+///   `$XDG_DATA_HOME/indiansassist/IndiansAssist`, the handler stays (pointed at the copy) and
+///   nothing of the user's is unlinked; the runtime dir and the log dir go. A kept copy running
+///   again (rule 3.4d) is not copied onto itself: it only removes its runtime and log dirs.
+/// * not `kept`, from the Keep location ("Remove ... after this session", rule 3.4d): the normal
+///   D1 self-delete of the kept copy, whose directory goes with it.
 pub fn plan(env: &XdgEnv, exe: &Path, kept: bool) -> SelfDeletePlan {
     let runtime = paths::runtime_dir(env);
-    if kept {
-        return SelfDeletePlan {
-            remove_dirs: runtime.into_iter().collect(),
-            remove_files: Vec::new(),
-            archive: None,
-            restore_mimeapps: false,
-            unlink_exe: None,
-            keep_copy: paths::kept_binary(env).map(|to| (exe.to_path_buf(), to)),
-        };
-    }
     let mut remove_dirs: Vec<PathBuf> = Vec::new();
     for d in [runtime, paths::state_dir(env)].into_iter().flatten() {
         if !remove_dirs.contains(&d) {
             remove_dirs.push(d);
         }
+    }
+    let kept_copy = is_kept_copy(env, exe);
+    if kept {
+        return SelfDeletePlan {
+            remove_dirs,
+            remove_files: Vec::new(),
+            archive: None,
+            restore_mimeapps: false,
+            unlink_exe: None,
+            keep_copy: if kept_copy {
+                None
+            } else {
+                paths::kept_binary(env).map(|to| (exe.to_path_buf(), to))
+            },
+        };
+    }
+    if kept_copy {
+        // The kept copy's own directory holds only the copy (and its sidecar): removing it is
+        // the unlink, so nothing is left behind.
+        if let Some(dir) = exe.parent() {
+            remove_dirs.push(dir.to_path_buf());
+        }
+        let mut remove_files = Vec::new();
+        if let Some(d) = paths::desktop_file(env) {
+            remove_files.push(d);
+        }
+        return SelfDeletePlan {
+            remove_dirs,
+            remove_files,
+            archive: None,
+            restore_mimeapps: true,
+            unlink_exe: None,
+            keep_copy: None,
+        };
     }
     let mut remove_files = Vec::new();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
@@ -175,6 +210,56 @@ mod tests {
         assert!(plan_is_contained(&p, Path::new(EXE)));
     }
 
+    const KEPT: &str = "/home/asha/.local/share/indiansassist/IndiansAssist";
+
+    #[test]
+    fn keep_also_clears_the_log_dir() {
+        let p = plan(&env(), Path::new(EXE), true);
+        assert_eq!(
+            p.remove_dirs,
+            vec![
+                PathBuf::from("/run/user/1000/indiansassist"),
+                PathBuf::from("/home/asha/.local/state/indiansassist"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kept_copy_running_again_is_not_copied_onto_itself() {
+        let e = env();
+        assert!(is_kept_copy(&e, Path::new(KEPT)));
+        assert!(!is_kept_copy(&e, Path::new(EXE)));
+        let p = plan(&e, Path::new(KEPT), true);
+        assert_eq!(p.keep_copy, None);
+        assert_eq!(p.unlink_exe, None);
+        assert!(
+            !p.restore_mimeapps,
+            "the handler stays, pointed at the copy"
+        );
+        assert!(p.remove_files.is_empty());
+        assert_eq!(p.remove_dirs.len(), 2, "only the runtime and log dirs");
+        assert!(plan_is_contained(&p, Path::new(KEPT)));
+    }
+
+    #[test]
+    fn remove_after_this_session_deletes_the_kept_copy() {
+        let e = env();
+        let p = plan(&e, Path::new(KEPT), false);
+        assert!(p
+            .remove_dirs
+            .contains(&PathBuf::from("/home/asha/.local/share/indiansassist")));
+        assert!(p.restore_mimeapps);
+        assert_eq!(
+            p.remove_files,
+            vec![PathBuf::from(
+                "/home/asha/.local/share/applications/indiansassist-handler.desktop"
+            )]
+        );
+        assert_eq!(p.archive, None);
+        assert_eq!(p.keep_copy, None);
+        assert!(plan_is_contained(&p, Path::new(KEPT)));
+    }
+
     #[test]
     fn the_archive_sibling_rule() {
         assert_eq!(
@@ -219,5 +304,95 @@ mod tests {
         let mut p = plan(&env(), Path::new(EXE), false);
         p.remove_files.push("/home/asha/.bashrc".into());
         assert!(!plan_is_contained(&p, Path::new(EXE)));
+    }
+}
+
+/// Phase F rule 3.4e: the Keep plans applied to files under a temporary XDG root (never the
+/// built binary, never the user's real directories).
+#[cfg(all(test, target_os = "linux", feature = "linux-os"))]
+mod applied {
+    use super::super::os::apply_self_delete;
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "ia-keep-{tag}-{}-{}",
+            std::process::id(),
+            ia_core::rnd::hex(4)
+        ));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn env_in(root: &Path) -> XdgEnv {
+        XdgEnv {
+            home: Some(root.join("home")),
+            data_home: Some(root.join("data")),
+            config_home: Some(root.join("config")),
+            state_home: Some(root.join("state")),
+            runtime_dir: Some(root.join("runtime")),
+        }
+    }
+
+    fn working_set(env: &XdgEnv) {
+        fs::create_dir_all(paths::runtime_dir(env).unwrap().join("run")).unwrap();
+        fs::create_dir_all(paths::state_dir(env).unwrap()).unwrap();
+        fs::write(paths::log_file(env).unwrap(), b"log").unwrap();
+    }
+
+    #[test]
+    fn keep_copies_the_binary_keeps_the_handler_and_clears_the_working_set() {
+        let root = temp_root("keep");
+        let env = env_in(&root);
+        let dl = root.join("home/Downloads");
+        fs::create_dir_all(&dl).unwrap();
+        let exe = dl.join("IndiansAssist-in-mum-4821-9365-7715");
+        fs::write(&exe, b"\x7fELF fake agent").unwrap();
+        working_set(&env);
+
+        let report = apply_self_delete(&plan(&env, &exe, true), &env, &exe).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        let kept = paths::kept_binary(&env).unwrap();
+        assert_eq!(report.kept_copy.as_deref(), Some(kept.as_path()));
+        assert_eq!(fs::read(&kept).unwrap(), b"\x7fELF fake agent");
+        assert_eq!(
+            fs::metadata(&kept).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert!(exe.exists(), "Keep unlinks nothing of the user's");
+        assert!(!paths::runtime_dir(&env).unwrap().exists());
+        assert!(!paths::state_dir(&env).unwrap().exists());
+        let desktop = fs::read_to_string(paths::desktop_file(&env).unwrap()).unwrap();
+        assert!(
+            desktop.contains(&*kept.to_string_lossy()),
+            "the handler points at the copy"
+        );
+
+        // The kept copy runs again (rule 3.4d): Keep is implied, nothing is copied onto itself,
+        // only its runtime and log dirs go.
+        working_set(&env);
+        assert!(is_kept_copy(&env, &kept));
+        let report = apply_self_delete(&plan(&env, &kept, true), &env, &kept).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert_eq!(report.kept_copy, None);
+        assert_eq!(fs::read(&kept).unwrap(), b"\x7fELF fake agent");
+        assert!(paths::desktop_file(&env).unwrap().exists());
+        assert!(!paths::state_dir(&env).unwrap().exists());
+
+        // "Remove IndiansAssist from this computer after this session": the kept copy goes.
+        working_set(&env);
+        let report = apply_self_delete(&plan(&env, &kept, false), &env, &kept).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert!(!kept.exists());
+        assert!(!kept.parent().unwrap().exists());
+        assert!(!paths::desktop_file(&env).unwrap().exists());
+        assert!(!paths::state_dir(&env).unwrap().exists());
+        assert!(
+            exe.exists(),
+            "the downloaded file is not the kept copy's to remove"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -1,22 +1,34 @@
 package com.indiansassist.desk.ui
 
 import android.Manifest
+import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.method.LinkMovementMethod
+import android.text.style.URLSpan
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.browser.customtabs.CustomTabsClient
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.indiansassist.desk.BuildConfig
+import com.indiansassist.desk.core.ChatLinks
 import com.indiansassist.desk.core.DeskPhase
+import com.indiansassist.desk.core.GiveHelp
 import com.indiansassist.desk.core.JoinCode
 import com.indiansassist.desk.core.JoinInput
 import com.indiansassist.desk.core.TokenSource
@@ -35,6 +47,9 @@ import kotlinx.coroutines.launch
  * Token entry (App Link / deep link, QR scan, manual paste; the clipboard is read only on a **Paste** tap), waiting,
  * the in-session screen (security code, Stop, View only, voice, chat, Send a file) and the ended receipt
  * (contracts section 12.3).
+ *
+ * Phase F: **Give help** on the start screen opens the mobile Assist console in a Custom Tab (section 7.8), and a
+ * phone-camera link in the chat is tappable (section 6.1).
  */
 class MainActivity : ComponentActivity() {
     private var screen = ""
@@ -131,7 +146,7 @@ class MainActivity : ComponentActivity() {
             kind == "live" -> "Securing the connection..."
             else -> ""
         }
-        chatView?.text = s.chat.takeLast(30).joinToString("\n") { "${it.from}: ${it.text}" }
+        chatView?.text = chatText(s.chat.takeLast(30).joinToString("\n") { "${it.from}: ${it.text}" })
         if (s.phase == DeskPhase.CONSENT_PENDING && !consentOpened) {
             consentOpened = true
             startActivity(Intent(this, ConsentActivity::class.java))
@@ -154,6 +169,43 @@ class MainActivity : ComponentActivity() {
         addView(Ui.button(this@MainActivity, "Scan QR code") { scan.launch(ScanOptions().setPrompt("Scan the QR code on your technician's screen").setBeepEnabled(false).setOrientationLocked(false)) })
         addView(Ui.button(this@MainActivity, "Join") { join(f.text.toString(), TokenSource.MANUAL) })
         error = Ui.body(this@MainActivity, "", 14f).apply { setTextColor(Color.parseColor(Ui.RED)) }.also { addView(it) }
+        // Phase F section 7.8: the same app gives help: the technician console in a Custom Tab.
+        addView(Ui.title(this@MainActivity, "Give help").apply { setPadding(0, Ui.dp(this@MainActivity, 28), 0, Ui.dp(this@MainActivity, 4)) })
+        addView(Ui.body(this@MainActivity, "Are you the technician? Open the IndiansAssist console to help someone."))
+        addView(Ui.button(this@MainActivity, "Give help", "#374151") { giveHelp() })
+    }
+
+    /** Section 7.8: one compiled origin opens at once; several show a picker. */
+    private fun giveHelp() {
+        val origins = GiveHelp.origins(BuildConfig.DEFAULT_API_ORIGIN, BuildConfig.REGION_ORIGINS)
+        if (origins.isEmpty()) return showError("No IndiansAssist server is configured in this app.")
+        if (!GiveHelp.needsPicker(origins)) return openConsole(origins.single())
+        AlertDialog.Builder(this)
+            .setTitle("Choose your region")
+            .setItems(origins.map { GiveHelp.label(it) }.toTypedArray()) { _, i -> openConsole(origins[i]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun openConsole(origin: String) {
+        val plan = GiveHelp.plan(origin, CustomTabsClient.getPackageName(this, null) != null)
+        val uri = Uri.parse(plan.url)
+        try {
+            if (plan.mode == GiveHelp.Mode.CUSTOM_TAB) CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(this, uri)
+            else startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (_: ActivityNotFoundException) {
+            showError("No browser is installed to open the console.")
+        }
+    }
+
+    /** Section 6.1: camera links to a served origin become tappable (they open the phone's browser). */
+    private fun chatText(text: String): CharSequence {
+        val origins = TokenResolver.regionOrigins() + "https://${BuildConfig.WEB_HOST}"
+        val links = ChatLinks.cameraLinks(text, origins)
+        if (links.isEmpty()) return text
+        val s = SpannableString(text)
+        for (r in links) s.setSpan(URLSpan(text.substring(r)), r.first, r.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return s
     }
 
     private fun waitingScreen(): LinearLayout = Ui.column(this).apply {
@@ -181,7 +233,8 @@ class MainActivity : ComponentActivity() {
             addView(Ui.button(this@MainActivity, "Turn on remote control in Settings", "#374151") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
         }
         addView(Ui.body(this@MainActivity, "Chat", 14f))
-        chatView = Ui.body(this@MainActivity, "", 15f).also { addView(it) }
+        // A camera link is tapped by the person only: an injected (technician) tap is swallowed by the guard.
+        chatView = Ui.guard(Ui.body(this@MainActivity, "", 15f)).apply { movementMethod = LinkMovementMethod.getInstance() }.also { addView(it) }
         val msg = EditText(this@MainActivity).apply { hint = "Message" }
         addView(msg)
         addView(Ui.guard(Ui.button(this@MainActivity, "Send") {

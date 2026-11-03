@@ -1,7 +1,323 @@
-//! §10 D1/D2 user-instance self-delete: in-process cleanup plus the detached cleanup stub.
+//! §10 D1/D2 user-instance self-delete: in-process cleanup plus the detached cleanup stub; and
+//! Phase F §3.4 Keep (C §10 D5): the exit decision, the Windows Keep applier (pure file work
+//! over an injected `%LOCALAPPDATA%`, so it is tested against a temporary directory), the Linux
+//! Keep through `ia_platform::linux::selfdel::plan(.., true)`, the `ctl.event keep` frame and the
+//! one-time `/join?kept=1` page.
 
 #[allow(unused_imports)]
 use super::*;
+
+use ia_core::teardown::ProcessRole;
+use std::path::{Path, PathBuf};
+
+/// What this process does to files at a clean exit (Phase F §3.4, C §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExitAction {
+    /// No file change at all: `--no-self-delete` (rule 3.4e), a Phase D worker (its files belong
+    /// to the installed package), or the handed-over user instance (D3: the child decides).
+    Nothing,
+    /// The D1/D2/D3 self-delete.
+    SelfDelete,
+    /// Keep (D5, rule 3.4c): copy to the Keep location, keep the handler, remove the logs and
+    /// the run directory. `first` = newly kept now (open `/join?kept=1` once); `false` = a kept
+    /// copy running again (rule 3.4d: logs and run directory only).
+    Keep { first: bool },
+}
+
+/// The exit decision (Phase F §3.4). Pure: `choice` is the Desk's Keep choice as the UI left it.
+pub(super) fn exit_action(
+    no_self_delete: bool,
+    worker: bool,
+    role: ProcessRole,
+    choice: ia_ui::model::KeepChoice,
+) -> ExitAction {
+    if no_self_delete || worker || !deletes_on_exit(role, false) {
+        return ExitAction::Nothing;
+    }
+    if choice.running_kept {
+        return if choice.remove_after {
+            ExitAction::SelfDelete
+        } else {
+            ExitAction::Keep { first: false }
+        };
+    }
+    if choice.keep {
+        ExitAction::Keep { first: true }
+    } else {
+        ExitAction::SelfDelete
+    }
+}
+
+/// Rule 3.4b: the `ctl.event keep` the agent sends each time the Desk's choice changes.
+pub(super) fn keep_event(kept: bool, ts: i64) -> Value {
+    json!({ "t": "ctl.event", "kind": "keep", "kept": kept, "ts": ts })
+}
+
+/// C L3: the page the agent opens once after Keep, `<origin>/join?kept=1`. The web app is served
+/// from the region's origin (the one the agent joined through); only an http(s) origin with no
+/// path, query or credentials is used.
+pub(super) fn kept_page_url(origin: &str) -> Option<String> {
+    let o = origin.trim_end_matches('/');
+    let rest = o
+        .strip_prefix("https://")
+        .or_else(|| o.strip_prefix("http://"))?;
+    let ok = !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+    ok.then(|| format!("{o}/join?kept=1"))
+}
+
+/// The Windows Keep location under `%LOCALAPPDATA%` (rule 3.4c).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) const WIN_KEPT_EXE: &str = "IndiansAssist.exe";
+
+/// What the Windows Keep applier does (rule 3.4c), derived from an injected `%LOCALAPPDATA%`.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct WinKeepPlan {
+    /// `%LOCALAPPDATA%\IndiansAssist`: the working directory (logs, `run\`) and the copy's home.
+    pub work_dir: PathBuf,
+    /// The running exe.
+    pub from: PathBuf,
+    /// `%LOCALAPPDATA%\IndiansAssist\IndiansAssist.exe`.
+    pub copy_to: PathBuf,
+}
+
+/// The Windows Keep plan for `exe` under `local_app_data`.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn win_keep_plan(local_app_data: &Path, exe: &Path) -> WinKeepPlan {
+    let work_dir = local_app_data.join("IndiansAssist");
+    WinKeepPlan {
+        copy_to: work_dir.join(WIN_KEPT_EXE),
+        work_dir,
+        from: exe.to_path_buf(),
+    }
+}
+
+/// Whether two Windows paths name the same file (case-insensitive, either separator).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn same_windows_path(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
+    norm(a) == norm(b)
+}
+
+/// Whether `exe` is the Windows Keep location (rule 3.4d).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn is_win_kept_copy(local_app_data: &Path, exe: &Path) -> bool {
+    same_windows_path(exe, &win_keep_plan(local_app_data, exe).copy_to)
+}
+
+/// What [`apply_win_keep`] did.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct WinKeepReport {
+    /// The copy was written (false: this process is the copy, rule 3.4d).
+    pub copied: bool,
+    /// An older kept copy was replaced (through a temporary file and a rename).
+    pub replaced: bool,
+    /// Working-set entries removed (logs, `run\`, stale temporaries).
+    pub removed: Vec<PathBuf>,
+    pub failures: Vec<String>,
+}
+
+/// Rule 3.4c on Windows: copy the running exe to the Keep location with `CREATE_NEW` semantics
+/// (an older kept copy is replaced only by writing a new temporary file and renaming it over the
+/// old one, so the location never holds a half-written exe), then remove everything else in the
+/// working directory (the logs and `run\`) but not the copy. A kept copy running again copies
+/// nothing and only clears the working set. Plain file work: tested against a temporary root.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn apply_win_keep(plan: &WinKeepPlan) -> std::io::Result<WinKeepReport> {
+    use std::io::Write;
+    let mut report = WinKeepReport::default();
+    std::fs::create_dir_all(&plan.work_dir)?;
+    let copy_name = plan
+        .copy_to
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !same_windows_path(&plan.from, &plan.copy_to) {
+        let bytes = std::fs::read(&plan.from)?;
+        let fresh = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&plan.copy_to);
+        match fresh {
+            Ok(mut f) => {
+                f.write_all(&bytes)?;
+                f.sync_all()?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let tmp = plan
+                    .work_dir
+                    .join(format!("{WIN_KEPT_EXE}.{:016x}.tmp", rand::random::<u64>()));
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&tmp)?;
+                f.write_all(&bytes)?;
+                f.sync_all()?;
+                drop(f);
+                if let Err(e) = std::fs::rename(&tmp, &plan.copy_to) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+                report.replaced = true;
+            }
+            Err(e) => return Err(e),
+        }
+        report.copied = true;
+    }
+    for entry in std::fs::read_dir(&plan.work_dir)? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().to_lowercase() == copy_name {
+            continue;
+        }
+        let res = if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match res {
+            Ok(()) => report.removed.push(path),
+            Err(e) => report.failures.push(format!("{}: {e}", path.display())),
+        }
+    }
+    Ok(report)
+}
+
+/// Whether this process runs from the Keep location (rule 3.4d).
+pub(super) fn running_kept_copy() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").is_some_and(|l| is_win_kept_copy(Path::new(&l), &exe))
+    }
+    #[cfg(all(target_os = "linux", feature = "linux-os"))]
+    {
+        let env = ia_platform::linux::XdgEnv::from_process();
+        ia_platform::linux::selfdel::is_kept_copy(&env, &exe)
+    }
+    #[cfg(not(any(windows, all(target_os = "linux", feature = "linux-os"))))]
+    {
+        let _ = exe;
+        false
+    }
+}
+
+/// Rule 3.4c (Windows): apply Keep to the real `%LOCALAPPDATA%`, point the HKCU handler at the
+/// copy, and open `/join?kept=1` once when newly kept. Never reached by an automated run
+/// (`--no-self-delete` means no file change at all, rule 3.4e).
+#[cfg(windows)]
+pub(super) fn perform_keep(first: bool) {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+        tracing::warn!("keep: no %LOCALAPPDATA%; nothing kept");
+        return;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let plan = win_keep_plan(Path::new(&local), &exe);
+    match apply_win_keep(&plan) {
+        Ok(r) => tracing::info!(
+            copied = r.copied,
+            replaced = r.replaced,
+            removed = r.removed.len(),
+            failures = ?r.failures,
+            "keep: done"
+        ),
+        Err(e) => {
+            tracing::warn!("keep: the copy could not be made ({e})");
+            return;
+        }
+    }
+    #[cfg(feature = "winapi")]
+    {
+        use ia_platform::traits::ProtocolHandler;
+        if let Err(e) =
+            ia_platform::win::WinProtocolHandler.register(&plan.copy_to.to_string_lossy())
+        {
+            tracing::warn!("keep: the link handler could not be pointed at the copy: {e}");
+        }
+    }
+    if first {
+        open_kept_page();
+    }
+}
+
+/// Rule 3.4c (Linux): `selfdel::plan(.., true)` (copy to `$XDG_DATA_HOME/indiansassist/
+/// IndiansAssist`, mode 0755, keep the handler), then open `/join?kept=1` once when newly kept.
+#[cfg(all(target_os = "linux", feature = "linux-os"))]
+pub(super) fn perform_keep(first: bool) {
+    use ia_platform::linux::{os, selfdel, XdgEnv};
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let env = XdgEnv::from_process();
+    let plan = selfdel::plan(&env, &exe, true);
+    match os::apply_self_delete(&plan, &env, &exe) {
+        Ok(r) => tracing::info!(kept = ?r.kept_copy, failures = ?r.failures, "keep: done"),
+        Err(e) => {
+            tracing::warn!("keep: not applied ({e})");
+            return;
+        }
+    }
+    if first {
+        open_kept_page();
+    }
+}
+
+#[cfg(not(any(windows, all(target_os = "linux", feature = "linux-os"))))]
+pub(super) fn perform_keep(_first: bool) {}
+
+/// C L3: open `<origin>/join?kept=1` once in the default browser (`ShellExecuteExW` / `xdg-open`).
+#[cfg(any(windows, all(target_os = "linux", feature = "linux-os")))]
+fn open_kept_page() {
+    let Some(url) = crate::session::joined().and_then(|j| kept_page_url(&j.api_origin)) else {
+        tracing::info!("keep: no web origin to open");
+        return;
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
+        let wide = |s: &str| -> Vec<u16> {
+            std::ffi::OsStr::new(s)
+                .encode_wide()
+                .chain(Some(0))
+                .collect()
+        };
+        let verb = wide("open");
+        let file = wide(&url);
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            lpVerb: PCWSTR(verb.as_ptr()),
+            lpFile: PCWSTR(file.as_ptr()),
+            nShow: 1, // SW_SHOWNORMAL
+            ..Default::default()
+        };
+        // SAFETY: both strings are NUL-terminated and outlive the call.
+        match unsafe { ShellExecuteExW(&mut info) } {
+            Ok(()) => tracing::info!("keep: opened the kept page"),
+            Err(e) => tracing::warn!("keep: the kept page could not be opened: {e}"),
+        }
+    }
+    #[cfg(all(target_os = "linux", feature = "linux-os"))]
+    match std::process::Command::new("xdg-open")
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => tracing::info!("keep: opened the kept page"),
+        Err(e) => tracing::warn!("keep: xdg-open failed: {e}"),
+    }
+}
 
 /// §10 D1/D2 user-instance self-delete: delete everything the agent can in-process (the
 /// working dir, the sidecar and the HKCU handler), then write the cleanup stub with `CREATE_NEW`
@@ -110,9 +426,19 @@ pub(super) fn perform_self_delete() {}
 pub(super) fn cleanup_working_set() {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         let dir = std::path::PathBuf::from(local).join("IndiansAssist");
-        if dir.exists() {
-            let _ = std::fs::remove_dir_all(&dir);
+        // Entry by entry, so one file that cannot go yet (the running kept copy, rule 3.4d,
+        // which the cleanup stub deletes after exit) does not stop the rest.
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                let _ = if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    std::fs::remove_dir_all(&p)
+                } else {
+                    std::fs::remove_file(&p)
+                };
+            }
         }
+        let _ = std::fs::remove_dir(&dir);
     }
     if let Ok(exe) = std::env::current_exe() {
         let sidecar = exe.with_extension("iaconfig");
@@ -146,4 +472,178 @@ pub(super) fn system32_dir() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
     root.join("System32")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ia_ui::model::KeepChoice;
+
+    fn choice(running_kept: bool, keep: bool, remove_after: bool) -> KeepChoice {
+        KeepChoice {
+            available: true,
+            running_kept,
+            keep,
+            remove_after,
+        }
+    }
+
+    #[test]
+    fn no_self_delete_means_no_file_change_at_all() {
+        for c in [
+            choice(false, false, false),
+            choice(false, true, false),
+            choice(true, false, false),
+            choice(true, false, true),
+        ] {
+            assert_eq!(
+                exit_action(true, false, ProcessRole::UserStandalone, c),
+                ExitAction::Nothing
+            );
+        }
+    }
+
+    #[test]
+    fn the_exit_decision() {
+        let u = ProcessRole::UserStandalone;
+        assert_eq!(
+            exit_action(false, false, u, choice(false, false, false)),
+            ExitAction::SelfDelete
+        );
+        assert_eq!(
+            exit_action(false, false, u, choice(false, true, false)),
+            ExitAction::Keep { first: true }
+        );
+        // A kept copy never deletes itself unless the Desk chose removal (rule 3.4d).
+        assert_eq!(
+            exit_action(false, false, u, choice(true, false, false)),
+            ExitAction::Keep { first: false }
+        );
+        assert_eq!(
+            exit_action(false, false, u, choice(true, false, true)),
+            ExitAction::SelfDelete
+        );
+        // D3: the handed-over user instance changes nothing; the elevated child decides.
+        assert_eq!(
+            exit_action(
+                false,
+                false,
+                ProcessRole::UserHandedOver,
+                choice(false, true, false)
+            ),
+            ExitAction::Nothing
+        );
+        assert_eq!(
+            exit_action(
+                false,
+                false,
+                ProcessRole::ElevatedChild,
+                choice(false, true, false)
+            ),
+            ExitAction::Keep { first: true }
+        );
+        // A Phase D worker's files belong to the installed package.
+        assert_eq!(
+            exit_action(false, true, u, choice(false, false, false)),
+            ExitAction::Nothing
+        );
+    }
+
+    #[test]
+    fn the_keep_event_and_the_kept_page() {
+        assert_eq!(
+            keep_event(true, 42),
+            json!({ "t": "ctl.event", "kind": "keep", "kept": true, "ts": 42 })
+        );
+        assert_eq!(
+            kept_page_url("https://in.indiansassist.com/").as_deref(),
+            Some("https://in.indiansassist.com/join?kept=1")
+        );
+        assert_eq!(
+            kept_page_url("http://localhost:4000").as_deref(),
+            Some("http://localhost:4000/join?kept=1")
+        );
+        assert_eq!(kept_page_url("file:///etc/passwd"), None);
+        assert_eq!(kept_page_url("https://a.example/x?y"), None);
+        assert_eq!(kept_page_url("https://user@a.example"), None);
+        assert_eq!(kept_page_url("https://"), None);
+    }
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "ia-keep-win-{tag}-{}-{:08x}",
+            std::process::id(),
+            rand::random::<u32>()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Rule 3.4e: the Windows applier against a temporary `%LOCALAPPDATA%` (never the built
+    /// binary): the copy is made, the logs and `run\` go, the copy stays; a kept copy running
+    /// again copies nothing; a newer download replaces an older copy through a rename.
+    #[test]
+    fn the_windows_keep_applier_against_a_temporary_root() {
+        let root = temp_root("apply");
+        let local = root.join("Local");
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let exe = downloads.join("IndiansAssist-in-mum-4821-9365-7715.exe");
+        std::fs::write(&exe, b"MZ fake agent v1").unwrap();
+        let work = local.join("IndiansAssist");
+        std::fs::create_dir_all(work.join("run")).unwrap();
+        std::fs::write(work.join("run").join("pb-1.ps1"), b"x").unwrap();
+        std::fs::write(work.join("agent.log"), b"log").unwrap();
+
+        let plan = win_keep_plan(&local, &exe);
+        assert_eq!(plan.copy_to, work.join("IndiansAssist.exe"));
+        assert!(!is_win_kept_copy(&local, &exe));
+        let r = apply_win_keep(&plan).unwrap();
+        assert!(r.copied && !r.replaced);
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        assert_eq!(std::fs::read(&plan.copy_to).unwrap(), b"MZ fake agent v1");
+        assert!(!work.join("run").exists());
+        assert!(!work.join("agent.log").exists());
+        assert!(exe.exists(), "the download itself is left as it was");
+
+        // The kept copy runs again (rule 3.4d): nothing is copied onto itself.
+        assert!(is_win_kept_copy(&local, &plan.copy_to));
+        std::fs::create_dir_all(work.join("run")).unwrap();
+        std::fs::write(work.join("agent.log"), b"log 2").unwrap();
+        let again = apply_win_keep(&win_keep_plan(&local, &plan.copy_to)).unwrap();
+        assert!(!again.copied);
+        assert_eq!(std::fs::read(&plan.copy_to).unwrap(), b"MZ fake agent v1");
+        assert!(!work.join("run").exists());
+        assert!(!work.join("agent.log").exists());
+
+        // A newer download kept later replaces the old copy through a temporary file.
+        std::fs::write(&exe, b"MZ fake agent v2").unwrap();
+        let r = apply_win_keep(&plan).unwrap();
+        assert!(r.copied && r.replaced);
+        assert_eq!(std::fs::read(&plan.copy_to).unwrap(), b"MZ fake agent v2");
+        let left: Vec<_> = std::fs::read_dir(&work)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            left,
+            vec!["IndiansAssist.exe".to_string()],
+            "no temporary left behind"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_kept_location_is_matched_case_insensitively() {
+        let local = Path::new(r"C:\Users\asha\AppData\Local");
+        assert!(is_win_kept_copy(
+            local,
+            Path::new(r"c:\users\ASHA\appdata\local\IndiansAssist\indiansassist.EXE")
+        ));
+        assert!(!is_win_kept_copy(
+            local,
+            Path::new(r"C:\Users\asha\Downloads\IndiansAssist-in-mum-1-2-3.exe")
+        ));
+    }
 }

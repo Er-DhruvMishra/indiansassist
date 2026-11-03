@@ -57,7 +57,7 @@ export async function flowSteps(run, ctx) {
       const report = JSON.parse(r.text);
       for (const k of [...BCD_FIELDS, ...E_FIELDS]) check(k in report, `report lacks ${k}`);
       eq(report.dataCategories.map((c) => c.category).join(','), CATEGORIES.join(','), 'categories in order');
-      eq(report.erasure.available, false, 'erasure.available');
+      eq(typeof report.erasure.available, 'boolean', 'erasure.available (true from Phase F, section 5.7)');
       check(!/erasure mechanism \(Phase E\)/.test(report.retention.piiInChain), 'piiInChain still promises an erasure mechanism');
       eq(report.retention.recordings, report.recordingRetentionDays ? `deleted ${report.recordingRetentionDays} days after recording (org setting)` : 'until deleted by an org_admin', 'retention.recordings');
       check(shared.residencyReportSchema.safeParse(report).success, 'report does not match residencyReportSchema');

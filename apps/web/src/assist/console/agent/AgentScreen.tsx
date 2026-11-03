@@ -6,7 +6,7 @@
 import { useCallback, useState, type RefObject } from 'react';
 import type { DcAnnot, MonitorInfo } from '@indiansassist/shared';
 import type { AnnotState, AnnotTool } from '../../../lib/annotation';
-import { RemoteView } from '../RemoteView';
+import { RemoteView, type RemoteTouch } from '../RemoteView';
 import { InputOverlay, type OverlayActions } from './InputOverlay';
 import { mosaicLayout } from './MonitorPicker';
 
@@ -35,7 +35,13 @@ export function AgentScreen({
   fullscreenRef,
   toolbar,
   emptyText,
+  touch,
+  tall,
 }: {
+  /** Phase F section 7.2: the touch gestures of each monitor's view (absent: touch ignored as before). */
+  touch?: (monitorId: number) => RemoteTouch;
+  /** Phase F section 7.4: the view may use the whole screen height. */
+  tall?: boolean;
   monitors: MonitorInfo[];
   viewed: number | 'all';
   streams: Record<string, MediaStream>;
@@ -77,6 +83,7 @@ export function AgentScreen({
                   onCanvas={noCanvas}
                   emptyText={`${m.name || `Monitor ${m.id}`}: paused`}
                   overlay={<InputOverlay monitorId={m.id} enabled={controlling} actions={actions} label={`Control monitor ${m.name || m.id}`} />}
+                  touch={touch?.(m.id)}
                 />
               </div>
             );
@@ -104,6 +111,8 @@ export function AgentScreen({
       toolbar={toolbar}
       emptyText={emptyText}
       overlay={<InputOverlay monitorId={id} enabled={controlling && stream !== null} actions={actions} label={`Control monitor ${m?.name || id}`} />}
+      touch={touch?.(id)}
+      tall={tall}
     />
   );
 }

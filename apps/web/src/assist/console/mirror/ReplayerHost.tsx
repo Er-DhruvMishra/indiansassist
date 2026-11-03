@@ -3,6 +3,8 @@
  * technician watermark (CSS overlay, `pointer-events: none`),
  * the placeholders ("Paused by the user", "Protected page", "Waiting for snapshot", "Too large to mirror",
  * "Reconnecting") and the embedded-frame hint. The frame stays mounted under a placeholder so its replayers survive.
+ * Phase F section 7.1: touch on the mirror (tap, long press, two-finger scroll, local pinch zoom) is recognised inside
+ * the frame (`src/replayer/main.ts`), which posts the same `rp.*` captures a mouse would.
  */
 import { useCallback, type RefObject } from 'react';
 import { useNow } from '../../../hooks/useAsync';
@@ -26,6 +28,7 @@ export function ReplayerHost({
   watermark,
   onFrame,
   fullscreenRef,
+  tall = false,
 }: {
   title: string;
   placeholder: string | null;
@@ -35,12 +38,14 @@ export function ReplayerHost({
   watermark: { name: string; userId: string; sessionId: string };
   onFrame: (frame: HTMLIFrameElement | null) => void;
   fullscreenRef?: RefObject<HTMLDivElement>;
+  /** Phase F section 7.4: the mirror may use the whole screen height (phone landscape). */
+  tall?: boolean;
 }) {
   const now = useNow(1000);
   const ref = useCallback((el: HTMLIFrameElement | null) => onFrame(el), [onFrame]);
   const text = watermarkText(watermark.name, watermark.userId, watermark.sessionId, new Date(now));
   return (
-    <div ref={fullscreenRef} className="relative h-[70vh] min-h-80 overflow-hidden rounded-md bg-slate-950">
+    <div ref={fullscreenRef} className={`relative ${tall ? 'h-[100dvh]' : 'h-[70vh]'} min-h-80 overflow-hidden rounded-md bg-slate-950`}>
       <iframe
         ref={ref}
         src={REPLAYER_SRC}

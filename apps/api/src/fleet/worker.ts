@@ -30,6 +30,7 @@ import type { SignalHub } from '../signal/hub.js';
 import { cancelGrace, startDeskGrace } from '../signal/lifecycle.js';
 import { deskIce, ensureLive, scheduleIceRefresh, sessionCreatedMsg } from '../signal/messages.js';
 import { onDeskHandedOver } from '../signal/recorder.js';
+import { refuseIfOrgErasing } from '../erasure/guard.js';
 import { featuresOf } from './common.js';
 import { ensureP4Device } from './session-hooks.js';
 
@@ -82,6 +83,8 @@ export async function workerHello(hub: SignalHub, conn: Conn, msg: SignalOf<'des
   const d = await getDevice(ctx.db, entry.deviceId);
   const org = d ? await getOrg(ctx.db, d.orgId) : null;
   if (!d || !org || d.status !== 'enrolled') return refuseWorker(conn, 'session_not_found', 'the device is not enrolled', msg.id);
+  // Phase F section 5.3 step 1: no worker of an org whose erasure is executing connects (`org_erasing`, 4403).
+  if (refuseIfOrgErasing(conn, org, msg.id)) return;
   const allowed = new Set(featuresOf(d));
   const asked = msg.client.capabilities?.features ?? [];
   if (!asked.every((f) => allowed.has(f))) return refuseWorker(conn, 'capability_mismatch', 'the worker advertises features the device did not report', msg.id);

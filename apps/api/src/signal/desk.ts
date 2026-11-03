@@ -9,6 +9,7 @@ import { ensureAgentManifest } from './agent-manifest.js';
 import { checkNativeGrant, pushAgentConsent } from './desk-p3.js';
 import { handoverHello } from './handover-hello.js';
 import { workerHello } from '../fleet/worker.js';
+import { refuseIfOrgErasing } from '../erasure/guard.js';
 import { p4ConsentEntries, p4ConsentRevokeReason, p4OnActive } from '../fleet/session-hooks.js';
 import {
   findOpenSessionByToken,
@@ -93,6 +94,8 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     conn.error(v.code as SignalErrorCode, v.message, msg.id, v.details);
     return conn.close(v.code === 'rate_limited' ? WS_CLOSE.rateLimited : WS_CLOSE.forbidden, v.code);
   }
+  // Phase F section 5.3 step 1: no Desk of an org whose erasure is executing connects (`org_erasing`, 4403).
+  if (refuseIfOrgErasing(conn, v.org, msg.id)) return;
   const tok = v.token;
   // Tier gate (Phase B 2.4): p1 needs a web client, p2 the extension; p3 / p4 / enrollment stay unsupported.
   // Phase D section 2.1: a p4_installed / enrollment token still answers join_unsupported (devices use /signal/device).

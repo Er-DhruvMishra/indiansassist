@@ -212,3 +212,76 @@ func TestRecoverUploadsLeftovers(t *testing.T) {
 		t.Fatal("block-less leftover not removed")
 	}
 }
+
+func TestCameraUploadMeta(t *testing.T) {
+	const camID = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b0a"
+	srv, got, _ := recorderAPI(t, []int{201}, `{}`)
+	dir := t.TempDir()
+	data := bytes.Repeat([]byte("camera-webm-"), 1000)
+	if err := os.WriteFile(store.MediaPath(dir, camID), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sc := store.NewCameraSidecar(sid, camID, "rec-1", `video/webm;codecs="vp8"`, time.Now())
+	sc.State = store.StateFinalised
+	if err := store.Write(dir, sc); err != nil {
+		t.Fatal(err)
+	}
+	u := NewUploader(context.Background(), NewClient(srv.URL, "tok", 1, ""), dir, false, slog.New(slog.DiscardHandler))
+	j := Job{SessionID: sid, RecorderID: "rec-1", Mime: `video/webm;codecs="vp8"`, DurationMs: 1500, Source: store.SourceCamera, CameraID: camID}
+	if err := u.Run(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	c := (*got)[0]
+	sum := sha256.Sum256(data)
+	if c.meta["source"] != "camera" || c.meta["cameraId"] != camID || c.meta["sessionId"] != sid ||
+		c.meta["sha256"] != hex.EncodeToString(sum[:]) || c.meta["bytes"] != float64(len(data)) || len(c.meta) != 8 {
+		t.Fatalf("camera meta %v", c.meta)
+	}
+	if c.fileName != camID+".webm" || !bytes.Equal(c.file, data) {
+		t.Fatalf("camera file part %q", c.fileName)
+	}
+	if _, err := os.Stat(store.MediaPath(dir, camID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("camera file not deleted after success")
+	}
+	// A half-set job is refused before any request.
+	if err := u.Run(context.Background(), Job{SessionID: sid, RecorderID: "rec-1", CameraID: camID}); err == nil || len(*got) != 1 {
+		t.Fatalf("cameraId without source: %v (%d requests)", err, len(*got))
+	}
+}
+
+func TestDeskMetaHasNoCameraKeys(t *testing.T) {
+	b, err := json.Marshal(Meta{SessionID: sid, RecorderID: "rec-1", Mime: "m", DurationMs: 1, Bytes: 2, SHA256: "ab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	if _, ok := m["source"]; ok {
+		t.Fatalf("desk meta has source: %s", b)
+	}
+	if _, ok := m["cameraId"]; ok {
+		t.Fatalf("desk meta has cameraId: %s", b)
+	}
+}
+
+func TestRecoverCameraLeftover(t *testing.T) {
+	const camID = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b0a"
+	srv, got, mu := recorderAPI(t, []int{201}, `{}`)
+	dir := t.TempDir()
+	_ = os.WriteFile(store.MediaPath(dir, camID), []byte("camera-bytes"), 0o600)
+	sc := store.NewCameraSidecar(sid, camID, "rec-1", `video/webm;codecs="vp8"`, time.Now())
+	sc.Blocks, sc.DurationMs = 12, 800 // left in state recording by a crash
+	if err := store.Write(dir, sc); err != nil {
+		t.Fatal(err)
+	}
+	u := NewUploader(context.Background(), NewClient(srv.URL, "tok", 1, ""), dir, false, slog.New(slog.DiscardHandler))
+	if n := u.Recover(); n != 1 {
+		t.Fatalf("recovered %d", n)
+	}
+	_ = u.Wait(context.Background())
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*got) != 1 || (*got)[0].meta["source"] != "camera" || (*got)[0].meta["cameraId"] != camID || (*got)[0].fileName != camID+".webm" {
+		t.Fatalf("recovered camera upload %+v", *got)
+	}
+}

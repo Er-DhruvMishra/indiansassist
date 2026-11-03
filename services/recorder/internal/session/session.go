@@ -1,6 +1,7 @@
 // Package session runs one goroutine per recorded session: join, negotiate with the Desk, write
 // the media, pause / resume, finalise and hand the file to the uploader
-// (docs/specs/phase-a2-recorder.md sections 6, 7, 9, 11).
+// (docs/specs/phase-a2-recorder.md sections 6, 7, 9, 11). A session may also record the phone
+// camera as a second, separate recording (docs/specs/phase-f-contracts.md 6.5a, camera.go).
 package session
 
 import (
@@ -68,17 +69,28 @@ const (
 	evEnded
 	evLost
 	evShutdown
+	// camera sub-recording (camera.go)
+	evCamera
+	evCamAnswer
+	evCamICE
+	evCamRefused
+	evCamPCState
+	evCamDisconnected
+	evCamTrack
+	evCamNoTrack
+	evCamMedia
 )
 
 type event struct {
-	kind    evKind
-	resume  bool
-	sdp     string
-	cand    *signal.ICECandidateInit
-	gen     int
-	pcState webrtc.PeerConnectionState
-	media   media.EventKind
-	code    string
+	kind     evKind
+	resume   bool
+	sdp      string
+	cand     *signal.ICECandidateInit
+	gen      int
+	pcState  webrtc.PeerConnectionState
+	media    media.EventKind
+	code     string
+	cameraID string
 }
 
 // Session is one recorded session. All state is owned by its goroutine.
@@ -104,6 +116,10 @@ type Session struct {
 	joinGen    int
 	joinTimer  *time.Timer
 	trackTimer *time.Timer
+
+	cam     *camera         // the running camera sub-recording, if any
+	camGen  int             // generation of the camera peer connections
+	camDone map[string]bool // cameraIds already recorded (finalised) in this session
 }
 
 func newSession(id string, d *Deps, send signal.Sender, log *slog.Logger, onDone func(*Session)) *Session {
@@ -111,7 +127,7 @@ func newSession(id string, d *Deps, send signal.Sender, log *slog.Logger, onDone
 	l := log.With("sessionId", id) // the root logger carries recorderId and the manager logger the signal host
 	return &Session{
 		id: id, deps: d, send: send, log: l, onDone: onDone, ctx: ctx, cancel: cancel,
-		events: make(chan event, 256), done: make(chan struct{}),
+		events: make(chan event, 256), done: make(chan struct{}), camDone: map[string]bool{},
 		rec: media.NewRecorder(media.Options{
 			Dir: d.Cfg.OutDir, SessionID: id, RecorderID: d.Cfg.RecorderID,
 			MaxBytes: config.RecordingMaxBytes, MaxDuration: d.Cfg.MaxDuration, Log: l,
@@ -148,6 +164,7 @@ func (s *Session) run() {
 			s.handle(ev)
 		case <-tick.C:
 			s.rec.Checkpoint()
+			s.checkpointCamera()
 			if s.rec.Elapsed() >= s.deps.Cfg.MaxDuration {
 				s.finish(signal.ReasonLimitReached)
 			}
@@ -216,6 +233,8 @@ func (s *Session) handle(ev event) {
 		s.finish("")
 	case evShutdown:
 		s.finish(signal.ReasonShutdown)
+	case evCamera, evCamAnswer, evCamICE, evCamRefused, evCamPCState, evCamDisconnected, evCamTrack, evCamNoTrack, evCamMedia:
+		s.handleCamera(ev)
 	}
 }
 
@@ -255,7 +274,8 @@ func (s *Session) sendJoin() {
 }
 
 // finish stops the session: optional recorder.leave, close the peer connection, finalise the file
-// and submit it for upload (an empty file is deleted by the recorder and not uploaded).
+// and submit it for upload (an empty file is deleted by the recorder and not uploaded). A running
+// camera sub-recording is finalised and uploaded too.
 func (s *Session) finish(leaveReason string) {
 	if s.state == stDone {
 		return
@@ -269,6 +289,7 @@ func (s *Session) finish(leaveReason string) {
 		}
 	}
 	stopTimer(s.joinTimer)
+	s.finishCamera("session finished")
 	s.closePC()
 	s.state = stDone
 	res := s.rec.Close()

@@ -2,6 +2,7 @@
  * /app/sessions/:id: decides between the live console (the caller is the accepting Assist), the knock
  * panel (still `knocked`), a read-only summary (someone else's live session, or a read-only role) and
  * the ended view. On reload the live console re-attaches with `assist.resume`.
+ * Phase F section 7.3: a P4 device whose service advertises `sas` gets Ctrl+Alt+Del on the console's keys bar.
  */
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -39,10 +40,13 @@ export function ConsolePage() {
   // `GET /devices/:id` (section 7.2) is only the fallback for a session opened before the snapshot was exposed.
   const deviceId = cached?.device?.id ?? d?.deviceId ?? null;
   const fleetRead = can(me?.user.role, 'fleet.read');
-  const devicePolicy = useAsync(
-    () => (deviceId && fleetRead ? devicesApi.get(deviceId).then((x) => x.policy) : Promise.resolve(null)),
-    [deviceId, fleetRead],
-  );
+  const deviceRecord = useAsync(() => (deviceId && fleetRead ? devicesApi.get(deviceId) : Promise.resolve(null)), [deviceId, fleetRead]);
+  const devicePolicy = { data: deviceRecord.data?.policy ?? null };
+  // Phase F section 7.3: the keys bar offers Ctrl+Alt+Del only when the device's service advertises `sas`.
+  const deskSas = (() => {
+    const f = (deviceRecord.data?.capabilities as { features?: unknown } | undefined)?.features;
+    return Array.isArray(f) && f.includes('sas');
+  })();
   const unattended = cached?.unattended ?? d?.unattended ?? null;
 
   // Rule 6.2a: the server forwards the worker's report that someone sat down at the device, and whether the session
@@ -82,7 +86,7 @@ export function ConsolePage() {
     // Phase B 10: a P2 (extension) session mounts the mirror console instead of the video console.
     // Phase C 13.4: a P3 (native agent) session mounts the agent console.
     // Phase D section 13.4: every native tier (`p3_portable`, `p4_installed`) mounts the agent console.
-    if (isNativeTier(cached.tier)) return <AgentConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} capabilities={d?.deskClient?.capabilities ?? null} device={device} />;
+    if (isNativeTier(cached.tier)) return <AgentConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} capabilities={d?.deskClient?.capabilities ?? null} device={device} deskSas={deskSas} />;
     if (cached.tier === 'p2_extension') return <MirrorLiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} />;
     return <LiveConsole sessionId={id} signal={signal.client} cached={cached} helloReady={signal.hello !== null} deskLabel={cached.desk.label} session={d} />;
   }
@@ -115,7 +119,7 @@ export function ConsolePage() {
 
   const isAssist = d.assist.id === me?.user.id;
   if (isAssist && signal?.client) {
-    if (isNativeTier(d.tier)) return <AgentConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} capabilities={d.deskClient?.capabilities ?? null} device={device} />;
+    if (isNativeTier(d.tier)) return <AgentConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} capabilities={d.deskClient?.capabilities ?? null} device={device} deskSas={deskSas} />;
     if (d.tier === 'p2_extension') return <MirrorLiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} />;
     return <LiveConsole sessionId={id} signal={signal.client} cached={undefined} helloReady={signal.hello !== null} deskLabel={d.deskLabel ?? 'Desk'} session={d} />;
   }

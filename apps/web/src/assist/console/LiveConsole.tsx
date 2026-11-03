@@ -1,5 +1,8 @@
-/** The live technician console for one session (contracts section 12 /app/sessions/:id). */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+/**
+ * The live technician console for one session (contracts section 12 /app/sessions/:id).
+ * Phase F section 7: touch annotation and pinch zoom on the view, and the phone and tablet layouts.
+ */
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { assistMayRecord, type PackageTier, type Session, type SessionCreated } from '@indiansassist/shared';
 import { useAuth } from '../../auth/AuthContext';
 import { ChatPanel } from '../../components/ChatPanel';
@@ -22,6 +25,8 @@ import { RemoteView } from './RemoteView';
 import { CONSOLE_RECORDING_DISABLED_TEXT, ServerRecordingBadge } from './ServerRecordingBadge';
 import { useEnterpriseLiveHooks } from './EnterpriseSlots';
 import { CameraSlot } from './PhaseFSlots';
+import { MobileConsoleLayout, type ConsoleSection, type ConsoleTab } from '../touch/MobileConsoleLayout';
+import { useViewport } from '../touch/useViewport';
 
 const PHASE_TEXT: Record<string, string> = {
   resuming: 'Reconnecting to the session...',
@@ -84,6 +89,9 @@ function ConsoleView({
   const [fit, setFit] = useState(true);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [latency, setLatency] = useState<number | null>(null);
+  // Phase F section 7.4: the phone and tablet layouts.
+  const vp = useViewport();
+  const [tab, setTab] = useState<ConsoleTab>('view');
   const onCanvas = useCallback((c: HTMLCanvasElement | null) => {
     canvasRef.current = c;
   }, []);
@@ -158,6 +166,172 @@ function ConsoleView({
     </Button>
   );
 
+  const viewNode = (toolbar: ReactNode) => (
+    <>
+      <RemoteView
+        stream={snap.remoteVideo}
+        annot={snap.annot}
+        tool={live ? tool : null}
+        color={color}
+        fit={fit}
+        watermark={{ name: me?.user.name ?? '', userId: me?.user.id ?? '', sessionId }}
+        description={describeRemote(snap.net, snap.remoteVideo !== null)}
+        onAnnot={(m) => ctrl.sendAnnot(m)}
+        onCanvas={onCanvas}
+        onFirstFrame={onFirstFrame}
+        fullscreenRef={fsRef}
+        emptyText={snap.phase === 'waiting_consent' ? 'Waiting for the Desk to share their screen.' : 'No video yet.'}
+        toolbar={toolbar}
+        // Phase F section 7.2: P1 is view and annotate; a tap is a laser ping, a drag draws, pinch zooms locally.
+        touch={{ desk: { kind: 'p1', control: false }, trackpad: false, scrollWhileZoomed: false, annotate: live && snap.remoteVideo !== null }}
+        tall={vp.layout === 'phone_landscape'}
+      />
+      <RemoteAudio stream={snap.remoteAudio} />
+    </>
+  );
+  const annotToolbar = (
+    <AnnotToolbar
+      tool={tool}
+      color={color}
+      fit={fit}
+      disabled={!live || !snap.remoteVideo}
+      onTool={setTool}
+      onColor={setColor}
+      onClear={() => ctrl.sendAnnot(makeClear())}
+      onFit={() => setFit((f) => !f)}
+      onFullscreen={fullscreen}
+    />
+  );
+  const recordingCard = snap.recording !== 'idle' && snap.recording !== 'recording' && (
+    <RecordingCard
+      recordingId={snap.recordingResult?.id ?? null}
+      phase={snap.recording}
+      failure={snap.recordingFailure}
+      progress={snap.uploadProgress}
+      result={snap.recordingResult}
+      onRetry={() => void ctrl.retryUpload()}
+    />
+  );
+  const networkCard = (
+    <Card>
+      <NetworkPanel net={snap.net} signalLatency={latency} ttffMs={snap.ttffMs} relayOnly={snap.relayOnly} onRelayOnly={(on) => ctrl.setRelayOnly(on)} />
+    </Card>
+  );
+  const voiceCard = (
+    <Card>
+      <VoiceControls on={snap.voiceOn} muted={snap.muted} peerMuted={snap.peerMuted} peerName={peerName} disabled={!live} onToggle={() => void ctrl.toggleVoice()} onMute={() => ctrl.toggleMute()} />
+    </Card>
+  );
+  const chatCard = (
+    <Card>
+      <ChatPanel items={snap.chat} peerName={peerName} peerTyping={snap.peerTyping} disabled={!live} onSend={(t) => ctrl.sendChat(t)} onTyping={(a) => ctrl.setTyping(a)} />
+    </Card>
+  );
+  /* Phase F section 6.6: the phone camera (stream camera; renders nothing until then). */
+  const cameraSlot = (
+    <CameraSlot
+      session={{ id: sessionId, live: snap.phase === 'live', consoleRecording: snap.recording === 'recording' }}
+      sendChat={(t) => ctrl.sendChat(t)}
+      tier={tier}
+    />
+  );
+  const filesCard = (
+    <Card>
+      <FilePanel
+        transfers={snap.transfers}
+        peerName={peerName}
+        canSend={snap.phase === 'live'}
+        onSend={(f) => ctrl.sendFile(f)}
+        onAccept={(k) => ctrl.acceptFile(k)}
+        onReject={(k) => ctrl.rejectFile(k)}
+        onCancel={(k) => ctrl.cancelFile(k)}
+      />
+    </Card>
+  );
+  const statusLine = (
+    <p className="text-sm" role="status" aria-live="polite">
+      {PHASE_TEXT[snap.phase]} {snap.notice && snap.notice !== PHASE_TEXT[snap.phase] ? snap.notice : ''}
+    </p>
+  );
+  const endDialog = (
+    <Dialog open={confirmEnd} title="End this session?" onClose={() => setConfirmEnd(false)}>
+      <p className="mb-4 text-sm">Screen sharing stops for the Desk immediately. A running recording is stopped and uploaded.</p>
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={() => setConfirmEnd(false)}>
+          Keep session
+        </Button>
+        <Button
+          variant="danger"
+          onClick={() => {
+            setConfirmEnd(false);
+            void ctrl.endSession();
+          }}
+        >
+          End session
+        </Button>
+      </div>
+    </Dialog>
+  );
+
+  if (vp.layout !== 'desktop') {
+    // Phase F section 7.4: the phone and tablet layouts (P1 has no keyboard input, so no Keys tab).
+    const sections: ConsoleSection[] = [
+      {
+        id: 'view',
+        label: 'View',
+        content: (
+          <>
+            {annotToolbar}
+            <div className="flex flex-wrap items-center gap-2">{recBtn}</div>
+          </>
+        ),
+      },
+      { id: 'chat', label: 'Chat', content: chatCard },
+      { id: 'files', label: 'Files', content: filesCard },
+      {
+        id: 'more',
+        label: 'More',
+        content: (
+          <>
+            {recordingCard}
+            {networkCard}
+            {voiceCard}
+            {cameraSlot}
+            <ShortcutHelp extra={CONSOLE_SHORTCUTS} />
+          </>
+        ),
+      },
+    ];
+    return (
+      <>
+        <MobileConsoleLayout
+          layout={vp.layout}
+          title={`Session with ${peerName}`}
+          badges={
+            <>
+              <Badge tone={snap.phase === 'live' ? 'green' : 'amber'}>{humanise(snap.phase)}</Badge>
+              {snap.recording === 'recording' && <Badge tone="red">Recording</Badge>}
+              {snap.recording === 'failed' && snap.recordingFailure === 'recorder' && <Badge tone="red">Recording failed</Badge>}
+              <ServerRecordingBadge state={snap.serverRecording} />
+            </>
+          }
+          onEnd={() => setConfirmEnd(true)}
+          status={
+            <>
+              {statusLine}
+              {snap.error && <Alert>{snap.error}</Alert>}
+            </>
+          }
+          view={viewNode(null)}
+          sections={sections}
+          active={tab}
+          onActive={setTab}
+        />
+        {endDialog}
+      </>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -174,97 +348,20 @@ function ConsoleView({
           </Button>
         </div>
       </div>
-      <p className="text-sm" role="status" aria-live="polite">
-        {PHASE_TEXT[snap.phase]} {snap.notice && snap.notice !== PHASE_TEXT[snap.phase] ? snap.notice : ''}
-      </p>
+      {statusLine}
       {snap.error && <Alert>{snap.error}</Alert>}
       <div className="grid gap-4 xl:grid-cols-[1fr_22rem]">
-        <Card>
-          <RemoteView
-            stream={snap.remoteVideo}
-            annot={snap.annot}
-            tool={live ? tool : null}
-            color={color}
-            fit={fit}
-            watermark={{ name: me?.user.name ?? '', userId: me?.user.id ?? '', sessionId }}
-            description={describeRemote(snap.net, snap.remoteVideo !== null)}
-            onAnnot={(m) => ctrl.sendAnnot(m)}
-            onCanvas={onCanvas}
-            onFirstFrame={onFirstFrame}
-            fullscreenRef={fsRef}
-            emptyText={snap.phase === 'waiting_consent' ? 'Waiting for the Desk to share their screen.' : 'No video yet.'}
-            toolbar={
-              <AnnotToolbar
-                tool={tool}
-                color={color}
-                fit={fit}
-                disabled={!live || !snap.remoteVideo}
-                onTool={setTool}
-                onColor={setColor}
-                onClear={() => ctrl.sendAnnot(makeClear())}
-                onFit={() => setFit((f) => !f)}
-                onFullscreen={fullscreen}
-              />
-            }
-          />
-          <RemoteAudio stream={snap.remoteAudio} />
-        </Card>
+        <Card>{viewNode(annotToolbar)}</Card>
         <div className="flex flex-col gap-4">
-          {snap.recording !== 'idle' && snap.recording !== 'recording' && (
-            <RecordingCard
-              recordingId={snap.recordingResult?.id ?? null}
-              phase={snap.recording}
-              failure={snap.recordingFailure}
-              progress={snap.uploadProgress}
-              result={snap.recordingResult}
-              onRetry={() => void ctrl.retryUpload()}
-            />
-          )}
-          <Card>
-            <NetworkPanel net={snap.net} signalLatency={latency} ttffMs={snap.ttffMs} relayOnly={snap.relayOnly} onRelayOnly={(on) => ctrl.setRelayOnly(on)} />
-          </Card>
-          <Card>
-            <VoiceControls on={snap.voiceOn} muted={snap.muted} peerMuted={snap.peerMuted} peerName={peerName} disabled={!live} onToggle={() => void ctrl.toggleVoice()} onMute={() => ctrl.toggleMute()} />
-          </Card>
-          <Card>
-            <ChatPanel items={snap.chat} peerName={peerName} peerTyping={snap.peerTyping} disabled={!live} onSend={(t) => ctrl.sendChat(t)} onTyping={(a) => ctrl.setTyping(a)} />
-          </Card>
-          {/* Phase F section 6.6: the phone camera (stream camera; renders nothing until then). */}
-          <CameraSlot
-            session={{ id: sessionId, live: snap.phase === 'live', consoleRecording: snap.recording === 'recording' }}
-            sendChat={(t) => ctrl.sendChat(t)}
-            tier={tier}
-          />
-          <Card>
-            <FilePanel
-              transfers={snap.transfers}
-              peerName={peerName}
-              canSend={snap.phase === 'live'}
-              onSend={(f) => ctrl.sendFile(f)}
-              onAccept={(k) => ctrl.acceptFile(k)}
-              onReject={(k) => ctrl.rejectFile(k)}
-              onCancel={(k) => ctrl.cancelFile(k)}
-            />
-          </Card>
+          {recordingCard}
+          {networkCard}
+          {voiceCard}
+          {chatCard}
+          {cameraSlot}
+          {filesCard}
         </div>
       </div>
-      <Dialog open={confirmEnd} title="End this session?" onClose={() => setConfirmEnd(false)}>
-        <p className="mb-4 text-sm">Screen sharing stops for the Desk immediately. A running recording is stopped and uploaded.</p>
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setConfirmEnd(false)}>
-            Keep session
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => {
-              setConfirmEnd(false);
-              void ctrl.endSession();
-            }}
-          >
-            End session
-          </Button>
-        </div>
-      </Dialog>
+      {endDialog}
     </div>
   );
 }

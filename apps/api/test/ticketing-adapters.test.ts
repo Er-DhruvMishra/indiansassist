@@ -5,7 +5,16 @@
  * the ServiceNow number lookup; and the honest failure values (status classes, Retry-After, hang, reset, refused).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { IntegrationConfigOf, IntegrationCredentialsOf, IntegrationType, TicketContent } from '@indiansassist/shared';
+import {
+  INTEGRATION_CONFIG_SCHEMAS,
+  INTEGRATION_VERIFICATION,
+  ZOHO_DATA_CENTERS,
+  type IntegrationConfigOf,
+  type IntegrationCredentialsOf,
+  type IntegrationType,
+  type TicketContent,
+} from '@indiansassist/shared';
+import type { EgressFetch } from '../src/lib/egress.js';
 import { createEgressFetch } from '../src/lib/egress.js';
 import type { AdapterCtx } from '../src/integrations/adapter.js';
 import { createFreshdeskAdapter } from '../src/integrations/adapters/freshdesk.js';
@@ -141,7 +150,7 @@ describe('servicenow', () => {
       status: 201,
       value: { externalId: 'INC0010001', externalUrl: `${f.url}/nav_to.do?uri=incident.do?sys_id=${SN_SYS_ID}` },
     });
-    expect(f.last().json).toEqual({ short_description: TICKET.title, description: TICKET.body, caller_id: 'a'.repeat(32), urgency: 1 });
+    expect(f.last().json).toEqual({ short_description: TICKET.title, description: TICKET.body, caller_id: 'a'.repeat(32), urgency: '1' });
     f.reset();
     servicenowRoutes(f);
     const appended = await sn.append(c(), 'INC0010001', TICKET);
@@ -163,7 +172,7 @@ describe('servicenow', () => {
 
   it('no priority falls back to the configured urgency; none at all sends none', async () => {
     await sn.create(c(), { ...TICKET, priority: null });
-    expect((f.last().json as Record<string, unknown>)['urgency']).toBe(3);
+    expect((f.last().json as Record<string, unknown>)['urgency']).toBe('3');
     await sn.create({ ...c(), config: { ...c().config, urgency: null, callerId: null } }, { ...TICKET, priority: null });
     expect(f.last().json).toEqual({ short_description: TICKET.title, description: TICKET.body });
   });
@@ -331,5 +340,63 @@ describe('failure values (section 4.1)', () => {
     const before = f.requests.length;
     expect(await jira.create(c({ fetch: STRICT }), TICKET)).toMatchObject({ ok: false, failure: { cause: 'egress_refused', sent: false, detail: 'egress refused: private_address' } });
     expect(f.requests.length).toBe(before);
+  });
+});
+
+describe('vendor verification record (Phase F section 3.3)', () => {
+  const VENDOR_DOCS = /^https:\/\/(developer\.atlassian\.com|support\.atlassian\.com|confluence\.atlassian\.com|docs\.atlassian\.com|www\.servicenow\.com|developers\.freshdesk\.com|desk\.zoho\.com|www\.zoho\.com)\//;
+
+  it('records vendor documentation sources with the date read, and verified only when nothing is unconfirmed', () => {
+    for (const [type, v] of Object.entries(INTEGRATION_VERIFICATION)) {
+      expect(v.sources.length, type).toBeGreaterThan(0);
+      for (const src of v.sources) {
+        expect(src.url, type).toMatch(VENDOR_DOCS);
+        expect(src.readOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      }
+      expect(v.verified, type).toBe(v.unconfirmed.length === 0);
+      for (const u of v.unconfirmed) expect(u.length).toBeLessThanOrEqual(160);
+    }
+  });
+
+  it('ships only the Zoho data centres whose desk and accounts hosts both appear in Zoho documentation (V6)', () => {
+    expect(ZOHO_DATA_CENTERS).toEqual([
+      { id: 'us', deskHost: 'desk.zoho.com', accountsHost: 'accounts.zoho.com', region: null },
+      { id: 'eu', deskHost: 'desk.zoho.eu', accountsHost: 'accounts.zoho.eu', region: null },
+      { id: 'in', deskHost: 'desk.zoho.in', accountsHost: 'accounts.zoho.in', region: 'in-mum' },
+      { id: 'au', deskHost: 'desk.zoho.com.au', accountsHost: 'accounts.zoho.com.au', region: null },
+      { id: 'jp', deskHost: 'desk.zoho.jp', accountsHost: 'accounts.zoho.jp', region: null },
+      { id: 'ca', deskHost: 'desk.zohocloud.ca', accountsHost: 'accounts.zohocloud.ca', region: null },
+      { id: 'sa', deskHost: 'desk.zoho.sa', accountsHost: 'accounts.zoho.sa', region: null },
+    ]);
+    const urls = INTEGRATION_VERIFICATION.zoho_desk.sources.map((x) => x.url);
+    expect(urls).toContain('https://desk.zoho.com/DeskAPIDocument');
+    expect(urls).toContain('https://www.zoho.com/accounts/protocol/oauth/multi-dc.html');
+    // No undocumented data centre (China, Singapore, the UAE, the UK) ships; a shipped row now validates.
+    for (const id of ['cn', 'sg', 'ae', 'uk']) expect(ZOHO_DATA_CENTERS.some((d) => d.id === id)).toBe(false);
+    const cfg = { orgId: '1', departmentId: '2', defaultContactEmail: 'desk@example.test', priority: null };
+    expect(INTEGRATION_CONFIG_SCHEMAS.zoho_desk.safeParse({ ...cfg, dataCenter: 'in' }).success).toBe(true);
+    expect(INTEGRATION_CONFIG_SCHEMAS.zoho_desk.safeParse({ ...cfg, dataCenter: 'cn' }).success).toBe(false);
+  });
+
+  it('the production Zoho adapter calls only the hosts of the named row, over https', async () => {
+    const seen: string[] = [];
+    const recording: EgressFetch = async (url) => {
+      seen.push(String(url));
+      const token = String(url).endsWith('/oauth/v2/token');
+      return new Response(JSON.stringify(token ? { access_token: 'tok', expires_in: 3600 } : { id: '3', name: 'Support' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const zoho = createZohoDeskAdapter({ dataCenters: ZOHO_DATA_CENTERS });
+    const r = await zoho.test(
+      ctxOf<'zoho_desk'>(
+        { dataCenter: 'in', orgId: '1', departmentId: '3', defaultContactEmail: 'desk@example.test', priority: null },
+        { clientId: 'cid', clientSecret: 'cs', refreshToken: 'rt' },
+        { fetch: recording },
+      ),
+    );
+    expect(r.ok).toBe(true);
+    expect(seen).toEqual(['https://accounts.zoho.in/oauth/v2/token', 'https://desk.zoho.in/api/v1/departments/3']);
   });
 });

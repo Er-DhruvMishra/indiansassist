@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -57,21 +58,26 @@ func (s *Session) startPC(restart bool) {
 
 // onTrack runs in pion's track goroutine and reads the track until it ends.
 func (s *Session) onTrack(ctx context.Context, gen int, pc *webrtc.PeerConnection, track *webrtc.TrackRemote) {
-	kind := track.Kind()
 	s.push(event{kind: evTrack, gen: gen})
-	s.log.Info("track received", "kind", kind.String(), "codec", track.Codec().MimeType)
+	s.log.Info("track received", "kind", track.Kind().String(), "codec", track.Codec().MimeType)
+	readTrack(ctx, pc, track, s.rec, s.log, func(k media.EventKind) { s.push(event{kind: evMedia, gen: gen, media: k}) })
+}
+
+// readTrack feeds one remote track into rec until it ends (video with PLI, audio as Opus).
+func readTrack(ctx context.Context, pc *webrtc.PeerConnection, track *webrtc.TrackRemote, rec *media.Recorder,
+	log *slog.Logger, onEvent func(media.EventKind)) {
 	o := media.TrackOptions{
-		Rec:      s.rec,
+		Rec:      rec,
 		Ctx:      ctx,
-		Log:      s.log,
+		Log:      log,
 		MimeType: track.Codec().MimeType,
-		OnEvent:  func(k media.EventKind) { s.push(event{kind: evMedia, gen: gen, media: k}) },
+		OnEvent:  onEvent,
 	}
 	read := func() (*rtp.Packet, error) {
 		p, _, err := track.ReadRTP()
 		return p, err
 	}
-	if kind == webrtc.RTPCodecTypeVideo {
+	if track.Kind() == webrtc.RTPCodecTypeVideo {
 		ssrc := uint32(track.SSRC())
 		o.SendPLI = func() error {
 			return pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})

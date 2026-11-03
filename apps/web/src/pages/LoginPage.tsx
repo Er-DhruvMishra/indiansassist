@@ -3,15 +3,16 @@
  * `sso_required` shows a single "Continue with <displayName>" link and a small "Administrator sign-in with password"
  * link; `sso_available` shows both; `password` shows today's form. `?sso_error=` is shown in plain words. The region
  * picker is unchanged (VITE_REGION_ORIGINS with more than one distinct origin; remembered in localStorage['ia.region']).
+ * Phase F rule 4.1c: "Forgot your password?" (to /reset) only when `GET /auth/options` says password reset is available.
  */
-import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
-import { REGION_LABELS, STORAGE_KEYS, isRegion, type Region, type SsoDiscovery } from '@indiansassist/shared';
+import { authOptionsSchema, REGION_LABELS, STORAGE_KEYS, isRegion, type AuthOptions, type Region, type SsoDiscovery } from '@indiansassist/shared';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Button, Field, Input, Select } from '../components/ui';
 import { REGION_ORIGINS } from '../config';
 import { usePageTitle } from '../hooks/usePageTitle';
-import { errorMessage, isApiError } from '../lib/api';
+import { api, errorMessage, isApiError } from '../lib/api';
 import { authApi } from '../lib/endpoints';
 import { allowedOrigins, navigateTo } from '../lib/region';
 import { readStore, writeStore } from '../lib/storage';
@@ -20,6 +21,31 @@ import { beginHref, ssoApi, ssoErrorText } from '../assist/sso/ssoApi';
 import { PublicLayout, TextLink } from './PublicLayout';
 
 type Step = 'email' | 'credentials';
+
+const OFF: AuthOptions = { passwordReset: false, inviteMail: false };
+
+/** `GET /auth/options` (public, from the server's config only). Any failure reads as "nothing available". */
+export async function fetchAuthOptions(signal?: AbortSignal): Promise<AuthOptions> {
+  try {
+    return await api.get<AuthOptions>('/auth/options', { schema: authOptionsSchema, ...(signal ? { signal } : {}) });
+  } catch {
+    return OFF;
+  }
+}
+
+/** The options, or null while they load. */
+export function useAuthOptions(): AuthOptions | null {
+  const [options, setOptions] = useState<AuthOptions | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void fetchAuthOptions(ctrl.signal).then((o) => {
+      if (!ctrl.signal.aborted) setOptions(o);
+    });
+    return () => ctrl.abort();
+  }, []);
+  return options;
+}
+
 
 function withReturnTo(beginUrl: string, from: string): string {
   if (!from.startsWith('/app') || from === '/app') return beginUrl;
@@ -42,6 +68,7 @@ export function LoginPage() {
   const [adminPassword, setAdminPassword] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
   const ssoError = ssoErrorText(params.get('sso_error'));
+  const options = useAuthOptions();
 
   const showPicker = allowedOrigins().length > 1;
   const currentRegion = useMemo<Region | ''>(() => {
@@ -197,6 +224,11 @@ export function LoginPage() {
             </>
           )}
         </form>
+        {options?.passwordReset && (
+          <p className="text-sm">
+            <TextLink to="/reset">Forgot your password?</TextLink>
+          </p>
+        )}
       </div>
     </PublicLayout>
   );

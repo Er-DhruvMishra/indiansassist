@@ -67,9 +67,19 @@ func (m *Manager) OnMessage(msg signal.Message) {
 		m.route(v.SessionID, event{kind: evJoined, resume: v.Resume})
 	case *signal.RecorderPause:
 		m.route(v.SessionID, event{kind: evPause})
+	case *signal.RecorderCamera:
+		m.route(v.SessionID, event{kind: evCamera, cameraID: v.CameraID})
 	case *signal.WebRTCAnswer:
+		if v.Peer == signal.PeerCamera {
+			m.route(v.SessionID, event{kind: evCamAnswer, sdp: v.SDP})
+			return
+		}
 		m.route(v.SessionID, event{kind: evAnswer, sdp: v.SDP})
 	case *signal.WebRTCIce:
+		if v.Peer == signal.PeerCamera {
+			m.route(v.SessionID, event{kind: evCamICE, cand: v.Candidate})
+			return
+		}
 		m.route(v.SessionID, event{kind: evICE, cand: v.Candidate})
 	case *signal.SessionEnded:
 		m.route(v.SessionID, event{kind: evEnded})
@@ -80,6 +90,9 @@ func (m *Manager) OnMessage(msg signal.Message) {
 			m.route(strings.TrimPrefix(v.Re, "join:"), event{kind: evJoinError, code: v.Code})
 		case strings.HasPrefix(v.Re, "offer:"):
 			m.log.Warn("server refused webrtc.offer", "sessionId", strings.TrimPrefix(v.Re, "offer:"), "code", v.Code)
+		case strings.HasPrefix(v.Re, "camoffer:"):
+			m.log.Warn("server refused the camera webrtc.offer", "sessionId", strings.TrimPrefix(v.Re, "camoffer:"), "code", v.Code)
+			m.route(strings.TrimPrefix(v.Re, "camoffer:"), event{kind: evCamRefused})
 		default:
 			m.log.Warn("signaling error", "code", v.Code, "message", v.Message, "re", v.Re)
 		}

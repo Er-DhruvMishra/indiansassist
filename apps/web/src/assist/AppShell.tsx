@@ -1,5 +1,9 @@
-/** /app layout: header (org, role, region badge, logout), navigation, knock toasts, one signaling socket. */
-import { useState } from 'react';
+/**
+ * /app layout: header (org, role, region badge, logout), navigation, knock toasts, one signaling socket.
+ * Phase F section 7.4: the phone and tablet layout (44 px touch targets, safe areas, the menu button below `sm`) and,
+ * once on iOS in a browser tab, the Add to Home Screen guidance (section 7.7).
+ */
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext';
 import { can, type Capability } from '../auth/permissions';
@@ -10,6 +14,8 @@ import { fmtRoleName, regionLabel } from '../lib/format';
 import { ErasureBannerSlot } from './console/PhaseFSlots';
 import { AssistSignalProvider, useAssistSignal } from './signal/AssistSignalProvider';
 import { KnockToasts } from './signal/KnockPanel';
+import { markIosHintShown, shouldShowIosHint } from './touch/pwa';
+import './touch/touch.css';
 
 const NAV: { to: string; label: string; cap?: Capability; end?: boolean }[] = [
   { to: '/app', label: 'Dashboard', end: true },
@@ -47,6 +53,10 @@ export function AppShell() {
   const { me, logout } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [iosHint, setIosHint] = useState(() => shouldShowIosHint());
+  useEffect(() => {
+    if (iosHint) markIosHintShown();
+  }, [iosHint]);
   if (!me) return null;
   const role = me.user.role;
   const items = NAV.filter((n) => !n.cap || can(role, n.cap));
@@ -58,6 +68,7 @@ export function AppShell() {
 
   return (
     <AssistSignalProvider enabled={can(role, 'ws.assist')}>
+      <div className="ia-app">
       <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-slate-900">
         Skip to content
       </a>
@@ -120,9 +131,18 @@ export function AppShell() {
       <main id="main" tabIndex={-1} className="mx-auto max-w-7xl px-4 py-6">
         {/* Phase F section 5.2d: the erasure notice for every signed-in user (stream erasure). */}
         <ErasureBannerSlot role={role} />
+        {iosHint && (
+          <div role="note" className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-teal-700 bg-teal-50 p-3 text-sm text-teal-950 dark:bg-teal-950 dark:text-teal-50">
+            <span className="flex-1">Install the console: in Safari, tap Share, then Add to Home Screen.</span>
+            <Button size="sm" variant="secondary" onClick={() => setIosHint(false)}>
+              Dismiss
+            </Button>
+          </div>
+        )}
         <Outlet />
       </main>
       <KnockToasts />
+      </div>
     </AssistSignalProvider>
   );
 }

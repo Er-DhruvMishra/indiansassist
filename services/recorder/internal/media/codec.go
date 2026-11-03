@@ -17,6 +17,14 @@ func Mime(videoCodec string) string {
 	return `video/webm;codecs="vp8,opus"`
 }
 
+// VideoMime returns the mime of a video-only recording (a camera recording, Phase F 6.5a).
+func VideoMime(videoCodec string) string {
+	if videoCodec == CodecVP9 {
+		return `video/webm;codecs="vp9"`
+	}
+	return `video/webm;codecs="vp8"`
+}
+
 // IsKeyframe reports whether a depacketised frame is a keyframe.
 func IsKeyframe(codec string, frame []byte) bool {
 	if codec == CodecVP9 {

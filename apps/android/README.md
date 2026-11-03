@@ -48,6 +48,7 @@ JVM (`src/test`), all against `packages/shared/test/fixtures/agent/sec-vectors.j
 | `InputRulesTest` | `os.text` insertion splicing (`hel` + `lo` = `hello`), Backspace / Delete by code point, the InputGuard state table, dispatch windows, token bucket |
 | `WireAndFilesTest` | kotlinx.serialization round-trip of `desk.hello.client`, re-encoding of `packages/shared/test/fixtures/agent` JSON when present, ICE server parsing, attestation outbox (4/s, burst 15, never drops, re-queue on `rate_limited`), `control.input` / `input.text_burst`, the file receiver (F4 rules, passive-risk `bad_name`, 2 GiB cap, hash mismatch) |
 | `BackoffTest` | reconnect backoff and terminal close codes |
+| `GiveHelpTest` | Phase F 7.8 **Give help**: the compiled origins (default first, the picker only for several), `<origin>/app/`, a Custom Tab when a provider exists and the browser otherwise; 6.1: only camera links to a served origin become tappable in the chat |
 
 Instrumented (`src/androidTest`):
 
@@ -61,6 +62,8 @@ Instrumented (`src/androidTest`):
 31 Oct 2026 ran `AssistE2ETest` only (`am instrument -e class`), not those two.
 
 ### Live e2e (`pnpm android:e2e`)
+
+Phase F: the run also taps **Give help** (and the debug build's region picker) and checks through Chrome's DevTools socket that `<DEFAULT_API_ORIGIN>/app/` opened in a Custom Tab; `IA_E2E_ONLY=give-help` runs only the build, the install and that step. The run holds `data/.emulator.lock` (shared with the web emulator specs) and refuses ports 4000, 4100 and 4105.
 
 `IA_EMULATOR=1 pnpm android:e2e` from the repo root (`tools/android-e2e.mjs`; without `IA_EMULATOR=1` it prints SKIP
 and exits 0). Needs the Android SDK, the repo's `node_modules`, a built `packages/shared/dist`, and apps/web's

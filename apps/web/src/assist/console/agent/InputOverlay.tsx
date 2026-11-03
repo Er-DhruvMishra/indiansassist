@@ -4,6 +4,7 @@
  * (`beforeinput` data, so IME and dead keys give composed text); copy / cut / paste drive `clipboard.set`.
  * `preventDefault` on everything except F11; holding Escape for 1 s releases the overlay. On blur every modifier is
  * released on the Desk.
+ * Phase F section 7.2: `touch-action: none`; touch pointers are recognised as gestures by the view, not here.
  */
 import { useRef, type KeyboardEvent, type PointerEvent, type WheelEvent } from 'react';
 import { routeKey, wheelNotches, type KeyLike } from './agentInput';
@@ -30,6 +31,8 @@ export function InputOverlay({ monitorId, enabled, actions, label }: { monitorId
   };
   const mods = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => ({ alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey });
   const onPointer = (kind: 'move' | 'down' | 'up') => (e: PointerEvent<HTMLDivElement>) => {
+    // Phase F section 7.2: touch is the gesture layer's (`useTouchSurface` in RemoteView); mouse and pen are unchanged.
+    if (e.pointerType === 'touch') return;
     e.preventDefault();
     if (kind === 'down') el.current?.focus();
     const p = pos(e);
@@ -68,7 +71,7 @@ export function InputOverlay({ monitorId, enabled, actions, label }: { monitorId
       tabIndex={0}
       role="application"
       aria-label={label}
-      className="absolute inset-0 cursor-crosshair outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+      className="absolute inset-0 cursor-crosshair touch-none outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       onPointerMove={onPointer('move')}
       onPointerDown={onPointer('down')}
       onPointerUp={onPointer('up')}

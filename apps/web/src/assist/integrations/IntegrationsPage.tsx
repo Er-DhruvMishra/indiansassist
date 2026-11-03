@@ -6,7 +6,7 @@
  * live region (section 11).
  */
 import { useId, useState, type FormEvent } from 'react';
-import { INTEGRATION_TYPES, ZOHO_DATA_CENTERS, type Integration, type IntegrationType } from '@indiansassist/shared';
+import { INTEGRATION_TYPES, INTEGRATION_VERIFICATION, ZOHO_DATA_CENTERS, type Integration, type IntegrationType } from '@indiansassist/shared';
 import { useAuth } from '../../auth/AuthContext';
 import { can } from '../../auth/permissions';
 import { CopyButton } from '../../components/CopyButton';
@@ -174,6 +174,39 @@ function StatusLine({ integration }: { integration: Integration | undefined }) {
   );
 }
 
+/** Whose documentation each vendor type was checked against (Phase F section 3.3 V5). */
+const VENDOR_NAMES: Record<Exclude<IntegrationType, 'webhook'>, string> = {
+  zoho_desk: 'Zoho',
+  servicenow: 'ServiceNow',
+  jira: 'Atlassian',
+  freshdesk: 'Freshdesk',
+};
+
+/**
+ * Phase F section 3.3 V5: a type whose request format is not fully verified against the vendor's documentation stays
+ * usable, and its card says so and lists the unconfirmed items. `Test` remains the operational gate.
+ */
+export function UnverifiedNote({ type }: { type: IntegrationType }) {
+  if (type === 'webhook') return null;
+  const v = INTEGRATION_VERIFICATION[type];
+  if (v.verified) return null;
+  const n = v.unconfirmed.length;
+  return (
+    <div role="note" className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+      <p>
+        This request format has not been fully verified against {VENDOR_NAMES[type]}&apos;s documentation ({n} {n === 1 ? 'item' : 'items'}). Use Test before relying on it.
+      </p>
+      {n > 0 && (
+        <ul className="mt-1 list-disc pl-5">
+          {v.unconfirmed.map((u) => (
+            <li key={u}>{u}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function IntegrationCard({ type, integration, canAdmin, onChanged }: { type: IntegrationType; integration: Integration | undefined; canAdmin: boolean; onChanged: () => void }) {
   const [values, setValues] = useState<Record<string, string>>(() => initialValues(type, integration));
   const [creds, setCreds] = useState<Record<string, string>>({});
@@ -289,6 +322,7 @@ function IntegrationCard({ type, integration, canAdmin, onChanged }: { type: Int
           </dd>
         </dl>
       )}
+      <UnverifiedNote type={type} />
       {zohoUnavailable && (
         <Alert tone="amber">Zoho Desk cannot be configured on this server yet: no Zoho data centre has been verified for it.</Alert>
       )}

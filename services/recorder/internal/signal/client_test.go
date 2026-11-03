@@ -2,6 +2,7 @@ package signal
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -67,7 +68,7 @@ func TestClientHelloPingPong(t *testing.T) {
 
 	h := &recHandler{ready: make(chan *RecorderHelloOK, 4), msgs: make(chan Message, 8), lost: make(chan error, 4)}
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/signal"
-	c := NewClient(url, Hello{Token: "tok", RecorderID: "rec-1", Version: "0.1.0", Region: "in-mum", MaxSessions: 8}, h, slog.New(slog.DiscardHandler))
+	c := NewClient(url, Hello{Token: "tok", RecorderID: "rec-1", Version: "0.1.0", Region: "in-mum", MaxSessions: 8, Features: []string{FeatureCamera}}, h, slog.New(slog.DiscardHandler))
 	c.MinBackoff = 20 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,7 +76,8 @@ func TestClientHelloPingPong(t *testing.T) {
 
 	res := <-results
 	if res.first["t"] != "recorder.hello" || res.first["token"] != "tok" || res.first["recorderId"] != "rec-1" ||
-		res.first["version"] != "0.1.0" || res.first["region"] != "in-mum" || res.first["maxSessions"] != float64(8) {
+		res.first["version"] != "0.1.0" || res.first["region"] != "in-mum" || res.first["maxSessions"] != float64(8) ||
+		fmt.Sprint(res.first["features"]) != "[camera]" {
 		t.Fatalf("first frame: %v", res.first)
 	}
 	if res.origin {

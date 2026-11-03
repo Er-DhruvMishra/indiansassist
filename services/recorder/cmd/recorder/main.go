@@ -55,7 +55,8 @@ func main() {
 		Cfg: cfg, ICE: ice.New(cfg.APIURL, cfg.Token, cfg.RecorderID), Uploader: uploader, Log: log,
 		Peer: peer.Options{UDPPortMin: cfg.UDPPortMin, UDPPortMax: cfg.UDPPortMax, NAT1To1IPs: cfg.NAT1To1IPs},
 	}
-	hello := sig.Hello{Token: cfg.Token, RecorderID: cfg.RecorderID, Version: config.Version, Region: cfg.Region, MaxSessions: cfg.MaxSessions}
+	hello := sig.Hello{Token: cfg.Token, RecorderID: cfg.RecorderID, Version: config.Version, Region: cfg.Region, MaxSessions: cfg.MaxSessions,
+		Features: []string{sig.FeatureCamera}}
 
 	signalCtx, cancelSignal := context.WithCancel(context.Background())
 	defer cancelSignal()

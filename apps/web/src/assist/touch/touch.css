@@ -1,0 +1,49 @@
+/*
+ * Phase F section 7.4: touch targets of at least 44 x 44 CSS px on the mobile layouts (and on any coarse pointer),
+ * text never below 14 px there, and the safe areas of a notched phone (index.html sets viewport-fit=cover).
+ * Inline text links keep their size (the WCAG inline exception).
+ */
+@media (pointer: coarse), (max-width: 1023.98px) {
+  .ia-app :is(button, select, summary, [role='button'], [role='tab'], [role='radio'], [role='switch']),
+  .ia-app nav a[href],
+  .ia-app label:has(> input[type='checkbox']),
+  .ia-app label:has(> input[type='radio']) {
+    min-height: 44px;
+  }
+  .ia-app :is(button, select, summary, [role='button'], [role='tab'], [role='radio'], [role='switch']),
+  .ia-app nav a[href],
+  .ia-app label:has(> input[type='radio']) {
+    min-width: 44px;
+  }
+  .ia-app nav a[href] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ia-app label:has(> input[type='checkbox']),
+  .ia-app label:has(> input[type='radio']) {
+    display: inline-flex;
+    align-items: center;
+  }
+  .ia-app :is(.text-xs, .text-\[11px\], .text-\[10px\]) {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+  .ia-app input,
+  .ia-app textarea,
+  .ia-app select {
+    /* iOS zooms into any field under 16 px when it is focused. */
+    font-size: max(16px, 1em);
+  }
+}
+
+.ia-app > header {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+@media (max-width: 599.98px) {
+  .ia-app > main {
+    padding: 0.75rem max(0.5rem, env(safe-area-inset-right)) 0.75rem max(0.5rem, env(safe-area-inset-left));
+  }
+}

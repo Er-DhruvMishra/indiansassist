@@ -2,7 +2,9 @@
  * `POST /api/v1/internal/recordings` (docs/specs/phase-a2-recorder.md section 9): the server recorder uploads a
  * finished WebM with its declared sha256 and byte count, authenticated by the service token (no cookie). The body is
  * streamed through sha256 into ObjectStorage; a mismatch with the declaration fails the row. One server recording per
- * session (`recorded_by = 'server'`); a failed or stale row is reused as in Phase A section 6.10.
+ * session (`recorded_by = 'server'`); a failed or stale row is reused as in Phase A section 6.10. Phase F section 6.5a:
+ * `meta.source = 'camera'` with `cameraId` is the recorder's separate recording of the session's phone camera, a row of
+ * its own (`source = 'camera'`) whose chain entries carry `cameraId` (camera/recording.ts).
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -32,6 +34,7 @@ import { toRecording } from '../lib/mappers.js';
 import { requireRecorder } from '../lib/recorder-auth.js';
 import { parseOr400 } from '../lib/validate.js';
 import { failRecording, finaliseRecording } from '../services/recording-service.js';
+import { failCameraRecording, finaliseCameraRecording, prepareCameraRecording } from '../camera/recording.js';
 
 const STALE_UPLOAD_MS = 60 * 60_000;
 /** Any uuid that is never a user id: server rows have no uploader, so no "per user" quota applies. */
@@ -121,7 +124,10 @@ export async function internalRecordingRoutes(app: FastifyInstance, ctx: AppCont
       if (stored) fail('validation_failed', 'one file per upload');
       const s = await uploadableSession(ctx, meta);
       const org = await getOrgOrThrow(ctx.db, s.orgId);
-      const rec = await prepareServerRecording(ctx, s, meta);
+      const cameraId = meta.source === 'camera' ? (meta.cameraId ?? null) : null;
+      const rec = cameraId
+        ? await prepareCameraRecording(ctx, s, cameraId, 'server', null, meta)
+        : await prepareServerRecording(ctx, s, meta);
       const actor = recorderActor(meta.recorderId);
       let result: { bytes: number; sha256: string };
       try {
@@ -133,22 +139,26 @@ export async function internalRecordingRoutes(app: FastifyInstance, ctx: AppCont
         await ctx.storage.delete(rec.storageKey).catch(() => undefined);
         const mismatch = err instanceof HttpError && err.code === 'validation_failed';
         const tooLarge = (err instanceof HttpError && err.code === 'payload_too_large') || part.file.truncated;
-        await failRecording(
-          ctx,
-          org,
-          rec,
-          mismatch ? 'sha256_mismatch' : tooLarge ? 'payload_too_large' : 'storage_error',
-          actor,
-        );
+        const error = mismatch ? 'sha256_mismatch' : tooLarge ? 'payload_too_large' : 'storage_error';
+        if (cameraId) await failCameraRecording(ctx, org, rec, error, actor);
+        else await failRecording(ctx, org, rec, error, actor);
         ctx.log.warn(
           { sessionId: s.id, recordingId: rec.id, recorderId: meta.recorderId, mismatch },
           'server recording upload failed',
         );
         throw err;
       }
-      stored = await finaliseRecording(ctx, org, rec, actor, result);
+      stored = cameraId
+        ? await finaliseCameraRecording(ctx, org, rec, actor, result)
+        : await finaliseRecording(ctx, org, rec, actor, result);
       ctx.log.info(
-        { sessionId: s.id, recordingId: rec.id, recorderId: meta.recorderId, bytes: result.bytes },
+        {
+          sessionId: s.id,
+          recordingId: rec.id,
+          recorderId: meta.recorderId,
+          bytes: result.bytes,
+          source: cameraId ? 'camera' : 'desk',
+        },
         'server recording stored',
       );
     }

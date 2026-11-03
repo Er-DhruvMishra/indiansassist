@@ -1,13 +1,13 @@
 /**
  * Phase E section 15.3 web: the integrations page (section 13.4). One card per type; write-only credentials (password
  * fields, blank keeps the saved value, never pre-filled); Test with its result announced; the webhook secret shown once
- * with the verification snippet; Delete behind a confirmation; Zoho unavailable while no data centre is verified;
- * auditors read-only.
+ * with the verification snippet; Delete behind a confirmation; auditors read-only. Phase F section 3.3 (fixes): Zoho
+ * offers exactly the verified data centres, and each vendor card carries the unverified note with its items.
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AuthResponse, Integration, UserRole } from '@indiansassist/shared';
+import { INTEGRATION_VERIFICATION, ZOHO_DATA_CENTERS, type AuthResponse, type Integration, type UserRole } from '@indiansassist/shared';
 import { MemoryRouter } from 'react-router';
 import { StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
 import { configOf, IntegrationsPage, WEBHOOK_VERIFY_SNIPPET } from '../src/assist/integrations/IntegrationsPage';
@@ -77,9 +77,34 @@ describe('IntegrationsPage', () => {
     expect(token.type).toBe('password');
     expect(token.value).toBe('');
     expect(within(jira).getByText(/Leave these blank to keep them/)).toBeTruthy();
-    // Zoho cannot be configured while no data centre is verified.
-    expect(within(card('Zoho Desk')).getByText(/no Zoho data centre has been verified/)).toBeTruthy();
-    expect(within(card('Zoho Desk')).queryByRole('button', { name: /Save/ })).toBeNull();
+    // Zoho offers exactly the verified data centres (Phase F section 3.3 V6).
+    const zoho = card('Zoho Desk');
+    expect(within(zoho).queryByText(/no Zoho data centre has been verified/)).toBeNull();
+    const dc = within(zoho).getByLabelText('Data centre') as HTMLSelectElement;
+    expect([...dc.options].map((o) => o.value)).toEqual(ZOHO_DATA_CENTERS.map((d) => d.id));
+    expect(within(zoho).getByRole('button', { name: 'Save Zoho Desk' })).toBeTruthy();
+  });
+
+  it('says on each vendor card when its request format is not fully verified, and lists the items (section 3.3 V5)', async () => {
+    stub(() => undefined);
+    renderPage();
+    await screen.findByRole('heading', { name: 'Jira' });
+    const vendors = { 'Zoho Desk': ['zoho_desk', 'Zoho'], ServiceNow: ['servicenow', 'ServiceNow'], Jira: ['jira', 'Atlassian'], Freshdesk: ['freshdesk', 'Freshdesk'] } as const;
+    for (const [title, [type, vendor]] of Object.entries(vendors)) {
+      const v = INTEGRATION_VERIFICATION[type];
+      const note = within(card(title)).queryByRole('note');
+      if (v.verified) {
+        expect(note, title).toBeNull();
+        continue;
+      }
+      const n = v.unconfirmed.length;
+      expect(note!.textContent).toContain(
+        `This request format has not been fully verified against ${vendor}'s documentation (${n} ${n === 1 ? 'item' : 'items'}). Use Test before relying on it.`,
+      );
+      expect(within(note!).getAllByRole('listitem').map((li) => li.textContent)).toEqual([...v.unconfirmed]);
+    }
+    // The webhook is ours: no vendor note.
+    expect(within(card('Webhook')).queryByRole('note')).toBeNull();
   });
 
   it('saves without credentials when they are left blank, and with them when typed', async () => {

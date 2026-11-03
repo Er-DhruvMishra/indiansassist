@@ -104,6 +104,12 @@ pub enum UiCommand {
     TechnicianVoice {
         muted: bool,
     },
+    /// Phase F §3.4: which Keep control the pill menu and the ended view show (`available`
+    /// false = none, a Phase D worker; `running_kept` = this is the kept copy, rule 3.4d).
+    KeepMode {
+        available: bool,
+        running_kept: bool,
+    },
     /// The session ended; show the receipt lines, then close.
     Ended {
         lines: Vec<String>,
@@ -135,6 +141,11 @@ pub enum UiEvent {
     /// The pill microphone button: `true` = unmute (grant direction, needs a physical press),
     /// `false` = mute (safe direction, never gated).
     Mic(bool),
+    /// Phase F §3.4b: the Desk changed its Keep choice by physical input; `kept` is whether the
+    /// agent will stay on this computer (reported to the console as `ctl.event keep`).
+    Keep {
+        kept: bool,
+    },
     /// The UI could not start (no display, window creation failed): treated as Decline.
     Failed(String),
     /// The UI window is gone.

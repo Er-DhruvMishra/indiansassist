@@ -17,6 +17,7 @@ const (
 	TRecorderJoined  = "recorder.joined"
 	TRecorderPause   = "recorder.pause"
 	TRecorderLeave   = "recorder.leave"
+	TRecorderCamera  = "recorder.camera"
 	TWebRTCOffer     = "webrtc.offer"
 	TWebRTCAnswer    = "webrtc.answer"
 	TWebRTCIce       = "webrtc.ice"
@@ -28,6 +29,13 @@ const (
 
 // PeerRecorder is the `peer` value of relayed webrtc.* frames to / from the recorder (N2).
 const PeerRecorder = "recorder"
+
+// PeerCamera is the `peer` value of the webrtc.* frames of a camera sub-recording (Phase F 6.5a): the
+// recorder's camera offer carries it and the server's answer / ICE for that connection carry it back.
+const PeerCamera = "camera"
+
+// FeatureCamera is the recorder.hello feature "can record a session's phone camera" (Phase F 6.5a).
+const FeatureCamera = "camera"
 
 // RecorderStopReason values (RECORDER_STOP_REASONS).
 const (
@@ -57,6 +65,8 @@ type RecorderHello struct {
 	Version     string `json:"version"`
 	Region      string `json:"region"`
 	MaxSessions int    `json:"maxSessions,omitempty"`
+	// Features is additive (Phase F 6.5a): "camera" = this recorder records phone cameras.
+	Features []string `json:"features,omitempty"`
 }
 
 // RecorderHelloOK is S->R (H2).
@@ -104,6 +114,14 @@ type RecorderLeave struct {
 	Envelope
 	SessionID string `json:"sessionId"`
 	Reason    string `json:"reason"`
+}
+
+// RecorderCamera is S->R (Phase F 6.5a): record the session's phone camera as a second, separate
+// recording. It is only sent for a session this recorder has joined.
+type RecorderCamera struct {
+	Envelope
+	SessionID string `json:"sessionId"`
+	CameraID  string `json:"cameraId"`
 }
 
 // WebRTCOffer is the A 7.3 offer plus optional `peer`.
@@ -212,6 +230,8 @@ func Decode(data []byte) (Message, error) {
 		m = &RecorderPause{}
 	case TRecorderLeave:
 		m = &RecorderLeave{}
+	case TRecorderCamera:
+		m = &RecorderCamera{}
 	case TWebRTCOffer:
 		m = &WebRTCOffer{}
 	case TWebRTCAnswer:
@@ -243,6 +263,8 @@ func SessionOf(m Message) string {
 	case *RecorderJoined:
 		return v.SessionID
 	case *RecorderPause:
+		return v.SessionID
+	case *RecorderCamera:
 		return v.SessionID
 	case *WebRTCAnswer:
 		return v.SessionID

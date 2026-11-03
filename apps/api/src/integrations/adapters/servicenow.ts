@@ -1,7 +1,8 @@
 /**
  * ServiceNow (docs/specs/phase-e-contracts.md section 4.6): incidents through the Table API with basic auth. Append
  * resolves an `INC...` number to its `sys_id` with one read (a 32-hex `sys_id` is used directly), then writes the body
- * as `work_notes`.
+ * as `work_notes`. `urgency` is sent as a string ('1' to '3'), the form the Table API reference shows
+ * (docs/specs/phase-f-contracts.md section 3.3; E section 4.6 said a JSON number).
  */
 import type { AdapterCtx, AdapterResult, TicketingAdapter, TicketRef } from '../adapter.js';
 import { basicAuth, fail, failure, oneLine, originOf, pick, SERVICENOW_URGENCY, upstream } from '../http.js';
@@ -49,7 +50,7 @@ export function createServicenowAdapter(): TicketingAdapter<'servicenow'> {
           description: t.body,
           ...(c.config.callerId ? { caller_id: c.config.callerId } : {}),
           ...(c.config.assignmentGroup ? { assignment_group: c.config.assignmentGroup } : {}),
-          ...(urgency ? { urgency } : {}),
+          ...(urgency ? { urgency: String(urgency) } : {}),
         },
       });
       if (!r.ok) return { ok: false, failure: r.failure };

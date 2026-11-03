@@ -248,6 +248,87 @@ pub struct Receipt {
     pub sas_by_gen: Vec<(u16, String)>,
 }
 
+/// Phase F rule 3.4a: the Keep checkbox's label (pill menu and ended view).
+pub const KEEP_LABEL: &str = "Keep IndiansAssist on this computer";
+/// Phase F rule 3.4a: the text under the Keep checkbox.
+pub const KEEP_TEXT: &str = "Keep IndiansAssist on this computer. It will not be deleted when the session ends. It does not install a service and does not start by itself.";
+/// Phase F rule 3.4d: what a kept copy offers instead of Keep.
+pub const REMOVE_KEPT_LABEL: &str = "Remove IndiansAssist from this computer after this session";
+
+/// The Desk's Keep choice (C §10 D5, Phase F §3.4). Only the Desk sets it, only by physical
+/// input; the console sees it (`ctl.event keep`) and never sets it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeepChoice {
+    /// Whether the control is offered at all (`false` for a Phase D worker, whose files belong
+    /// to the installed package).
+    pub available: bool,
+    /// This process runs from the Keep location (rule 3.4d): it is already kept, and the
+    /// control becomes "Remove ... after this session".
+    pub running_kept: bool,
+    /// The Keep checkbox (a copy that is not kept yet). Default off.
+    pub keep: bool,
+    /// The "Remove after this session" checkbox (a kept copy). Default off.
+    pub remove_after: bool,
+}
+
+impl KeepChoice {
+    /// Whether this process will stay on the computer after the session (the value
+    /// `ctl.event keep { kept }` reports): a kept copy stays unless removal was chosen.
+    pub fn kept(&self) -> bool {
+        if self.running_kept {
+            !self.remove_after
+        } else {
+            self.keep
+        }
+    }
+
+    /// The label of the one checkbox this process shows.
+    pub fn label(&self) -> &'static str {
+        if self.running_kept {
+            REMOVE_KEPT_LABEL
+        } else {
+            KEEP_LABEL
+        }
+    }
+
+    /// The checkbox's state.
+    pub fn checked(&self) -> bool {
+        if self.running_kept {
+            self.remove_after
+        } else {
+            self.keep
+        }
+    }
+
+    /// The Desk ticked or unticked the checkbox. Rule 3.4a: it acts only on **physical** input,
+    /// in both directions (the technician's injected input may neither keep the agent nor undo
+    /// the Desk's choice). Returns the new `kept()` value when the choice changed, else `None`
+    /// (refused, unavailable, or no change).
+    pub fn set_checked(&mut self, checked: bool, physical: bool) -> Option<bool> {
+        if !self.available || !physical || checked == self.checked() {
+            return None;
+        }
+        if self.running_kept {
+            self.remove_after = checked;
+        } else {
+            self.keep = checked;
+        }
+        Some(self.kept())
+    }
+}
+
+/// Whether a Keep click counts as physical. During the session it needs a recent physical press
+/// over an agent window (§3.5 guard, rule 7.3c on Linux). In the ended view the session's input
+/// path is already gone (teardown stops input first and closes the peer before the ended view
+/// opens), so every click there is the Desk's own; the post-map gate still applies.
+pub fn keep_click_physical(
+    ended: bool,
+    physical_press_recent: bool,
+    post_map_gate_open: bool,
+) -> bool {
+    post_map_gate_open && (ended || physical_press_recent)
+}
+
 /// Phase E rule 7.3c: every agent window, consent window and prompt ignores all pointer and key
 /// input for this long after it is mapped, longer than the injection path's latency, so an
 /// injected click racing a window that just appeared under the point cannot operate it.
@@ -414,6 +495,58 @@ mod tests {
             over_agent_window: false,
             physical_confirmed: false,
         }));
+    }
+
+    #[test]
+    fn keep_is_set_only_by_physical_input() {
+        let mut k = KeepChoice {
+            available: true,
+            ..Default::default()
+        };
+        assert!(!k.kept());
+        assert_eq!(k.label(), KEEP_LABEL);
+        // An injected (non-physical) tick is refused and changes nothing.
+        assert_eq!(k.set_checked(true, false), None);
+        assert!(!k.kept());
+        // A physical tick keeps; a repeat is no change; a non-physical untick is refused too.
+        assert_eq!(k.set_checked(true, true), Some(true));
+        assert_eq!(k.set_checked(true, true), None);
+        assert_eq!(k.set_checked(false, false), None);
+        assert!(k.kept());
+        assert_eq!(k.set_checked(false, true), Some(false));
+        // Not offered (a Phase D worker): nothing sets it.
+        let mut w = KeepChoice::default();
+        assert_eq!(w.set_checked(true, true), None);
+        assert!(!w.kept());
+    }
+
+    #[test]
+    fn a_kept_copy_offers_removal_instead() {
+        let mut k = KeepChoice {
+            available: true,
+            running_kept: true,
+            ..Default::default()
+        };
+        assert!(k.kept(), "a kept copy stays by default");
+        assert_eq!(k.label(), REMOVE_KEPT_LABEL);
+        assert!(!k.checked());
+        assert_eq!(k.set_checked(true, false), None);
+        assert_eq!(k.set_checked(true, true), Some(false));
+        assert!(!k.kept());
+        assert_eq!(k.set_checked(false, true), Some(true));
+    }
+
+    #[test]
+    fn keep_clicks_are_physical_only_during_the_session() {
+        assert!(!keep_click_physical(false, false, true));
+        assert!(keep_click_physical(false, true, true));
+        // After teardown the input path is gone: the ended view's clicks are the Desk's own.
+        assert!(keep_click_physical(true, false, true));
+        // The post-map gate still holds a freshly mapped surface.
+        assert!(!keep_click_physical(true, true, false));
+        assert!(!keep_click_physical(false, true, false));
+        assert!(KEEP_TEXT.starts_with(KEEP_LABEL));
+        assert!(KEEP_TEXT.contains("does not install a service"));
     }
 
     #[test]

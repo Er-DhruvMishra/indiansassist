@@ -1,0 +1,389 @@
+{
+  "about": "Phase F section 7.2 gesture fixtures: touch samples [t ms, kind, pointerId, x px, y px] on a 1000 x 1000 px view, replayed through createGestureRecognizer (DEFAULT_GESTURE_CONFIG merged with `config`), ticked at `end`, each gesture point divided by the view size, then mapped by mapGestureToOps(gesture, desk, mode). `expect` is the flat list of outputs (numbers compared to 6 decimals). Replayed by packages/shared/test/touch-gestures.test.ts.",
+  "view": { "w": 1000, "h": 1000 },
+  "cases": [
+    {
+      "name": "tap: native Desk with control clicks button 0 after the double-tap window",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 500, 500], [100, "up", 1, 502, 501]],
+      "end": 500,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.5, "ny": 0.5, "button": 0 } }]
+    },
+    {
+      "name": "tap: Android Desk with control clicks like a native Desk",
+      "desk": { "kind": "android", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 200, 800], [60, "up", 1, 200, 800]],
+      "end": 500,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.2, "ny": 0.8, "button": 0 } }]
+    },
+    {
+      "name": "tap: zoomed native Desk still clicks at the normalised point",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 3, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 125, 875], [60, "up", 1, 125, 875]],
+      "end": 500,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.125, "ny": 0.875, "button": 0 } }]
+    },
+    {
+      "name": "tap: P1 is a laser ping at once (no double tap there)",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 250, 750], [80, "up", 1, 250, 750]],
+      "end": 80,
+      "expect": [{ "kind": "annotate", "action": "laser", "x": 0.25, "y": 0.75 }]
+    },
+    {
+      "name": "tap: a Desk without control gets nothing",
+      "desk": { "kind": "native", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 500, 500], [80, "up", 1, 500, 500]],
+      "end": 600,
+      "expect": []
+    },
+    {
+      "name": "tap: moving more than 8 px is not a tap",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": true, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 500, 500], [40, "move", 1, 509, 500], [80, "up", 1, 509, 500]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.5, "ny": 0.5, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.509, "ny": 0.5, "button": 0 } }
+      ]
+    },
+    {
+      "name": "double tap: native Desk gets one dblclick and no click",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 500, 500], [80, "up", 1, 500, 500], [200, "down", 1, 510, 505], [260, "up", 1, 510, 505]],
+      "end": 900,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "dblclick", "nx": 0.5, "ny": 0.5, "button": 0 } }]
+    },
+    {
+      "name": "double tap: P1 means nothing (two laser pings)",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 500, 500], [80, "up", 1, 500, 500], [200, "down", 1, 510, 505], [260, "up", 1, 510, 505]],
+      "end": 900,
+      "expect": [{ "kind": "annotate", "action": "laser", "x": 0.5, "y": 0.5 }, { "kind": "annotate", "action": "laser", "x": 0.51, "y": 0.505 }]
+    },
+    {
+      "name": "double tap: a second tap farther than 24 px is two clicks",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "up", 1, 100, 100], [150, "down", 1, 600, 600], [200, "up", 1, 600, 600]],
+      "end": 900,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.1, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.6, "ny": 0.6, "button": 0 } }
+      ]
+    },
+    {
+      "name": "double tap: a gap over 300 ms is two clicks",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 300, 300], [50, "up", 1, 300, 300], [400, "down", 1, 300, 300], [450, "up", 1, 300, 300]],
+      "end": 900,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.3, "ny": 0.3, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.3, "ny": 0.3, "button": 0 } }
+      ]
+    },
+    {
+      "name": "long press: native Desk right-clicks (button 2) with a haptic tick",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 300, 400], [200, "move", 1, 304, 403], [700, "up", 1, 304, 403]],
+      "end": 900,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.3, "ny": 0.4, "button": 2 } }, { "kind": "haptic" }]
+    },
+    {
+      "name": "long press: Android Desk right-clicks (its 600 ms long press)",
+      "desk": { "kind": "android", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 300, 400]],
+      "end": 520,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.3, "ny": 0.4, "button": 2 } }, { "kind": "haptic" }]
+    },
+    {
+      "name": "long press: P1 means nothing",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 300, 400], [700, "up", 1, 300, 400]],
+      "end": 900,
+      "expect": []
+    },
+    {
+      "name": "long press: a first tap followed by a held second press is a click, then a right click",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 500, 500], [50, "up", 1, 500, 500], [150, "down", 1, 500, 500]],
+      "end": 700,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.5, "ny": 0.5, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.5, "ny": 0.5, "button": 2 } },
+        { "kind": "haptic" }
+      ]
+    },
+    {
+      "name": "one-finger drag: native Desk gets down, moves at most every 16 ms, up",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 120, 100], [60, "move", 1, 130, 100], [80, "move", 1, 150, 100], [100, "up", 1, 160, 100]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "down", "nx": 0.1, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.12, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.15, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "up", "nx": 0.16, "ny": 0.1, "button": 0 } }
+      ]
+    },
+    {
+      "name": "one-finger drag: a zoomed native Desk with control still drags (no pan)",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 2, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 120, 100], [100, "up", 1, 120, 100]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "down", "nx": 0.1, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.12, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "up", "nx": 0.12, "ny": 0.1, "button": 0 } }
+      ]
+    },
+    {
+      "name": "one-finger drag: Trackpad mode only moves the cursor",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": true, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 120, 100], [60, "move", 1, 130, 100], [80, "move", 1, 150, 100], [100, "up", 1, 160, 100]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.1, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.12, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.15, "ny": 0.1, "button": 0 } }
+      ]
+    },
+    {
+      "name": "tap: Trackpad mode clicks (at the cursor the caller substitutes)",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": true, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 400, 400], [60, "up", 1, 400, 400]],
+      "end": 500,
+      "expect": [{ "kind": "op", "op": "os.pointer", "args": { "kind": "click", "nx": 0.4, "ny": 0.4, "button": 0 } }]
+    },
+    {
+      "name": "one-finger drag: P1 draws with the selected tool",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 120, 100], [80, "move", 1, 150, 100], [100, "up", 1, 160, 100]],
+      "end": 600,
+      "expect": [
+        { "kind": "annotate", "action": "draw", "phase": "start", "x": 0.1, "y": 0.1 },
+        { "kind": "annotate", "action": "draw", "phase": "move", "x": 0.12, "y": 0.1 },
+        { "kind": "annotate", "action": "draw", "phase": "move", "x": 0.15, "y": 0.1 },
+        { "kind": "annotate", "action": "draw", "phase": "end", "x": 0.16, "y": 0.1 }
+      ]
+    },
+    {
+      "name": "one-finger drag: no control at zoom 1 sends nothing",
+      "desk": { "kind": "native", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 120, 100], [80, "move", 1, 150, 100], [100, "up", 1, 160, 100]],
+      "end": 600,
+      "expect": []
+    },
+    {
+      "name": "one-finger drag: no control while zoomed pans the view",
+      "desk": { "kind": "native", "control": false },
+      "mode": { "zoom": 2, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 120, 100], [80, "move", 1, 150, 100], [100, "up", 1, 160, 100]],
+      "end": 600,
+      "expect": [
+        { "kind": "view", "action": "pan", "dx": 20, "dy": 0 },
+        { "kind": "view", "action": "pan", "dx": 30, "dy": 0 },
+        { "kind": "view", "action": "pan", "dx": 10, "dy": 0 }
+      ]
+    },
+    {
+      "name": "one-finger drag: a second finger joining a drag is ignored",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 130, 100], [60, "down", 2, 500, 500], [70, "move", 2, 600, 600], [80, "move", 1, 160, 100], [90, "up", 2, 600, 600], [100, "up", 1, 160, 100]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "down", "nx": 0.1, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.13, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.16, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "up", "nx": 0.16, "ny": 0.1, "button": 0 } }
+      ]
+    },
+    {
+      "name": "one-finger drag: a cancelled drag still releases the button",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 130, 100], [60, "cancel", 1, 0, 0]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "down", "nx": 0.1, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "move", "nx": 0.13, "ny": 0.1, "button": 0 } },
+        { "kind": "op", "op": "os.pointer", "args": { "kind": "up", "nx": 0.13, "ny": 0.1, "button": 0 } }
+      ]
+    },
+    {
+      "name": "two-finger drag: native Desk at zoom 1 scrolls one notch per 40 px, inverted like a trackpad",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 400, 500], [20, "down", 2, 600, 500], [40, "move", 1, 400, 450], [40, "move", 2, 600, 450], [60, "move", 1, 400, 400], [60, "move", 2, 600, 400], [100, "up", 1, 400, 400], [100, "up", 2, 600, 400]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.scroll", "args": { "nx": 0.5, "ny": 0.45, "dx": 0, "dy": 1 } },
+        { "kind": "op", "op": "os.scroll", "args": { "nx": 0.5, "ny": 0.4, "dx": 0, "dy": 1 } }
+      ]
+    },
+    {
+      "name": "two-finger drag: a zoomed native Desk pans and sends nothing",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 2, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 400, 500], [20, "down", 2, 600, 500], [40, "move", 1, 400, 450], [40, "move", 2, 600, 450], [60, "move", 1, 400, 400], [60, "move", 2, 600, 400], [100, "up", 1, 400, 400], [100, "up", 2, 600, 400]],
+      "end": 600,
+      "expect": [
+        { "kind": "view", "action": "pan", "dx": 0, "dy": -25 },
+        { "kind": "view", "action": "pan", "dx": 0, "dy": -25 },
+        { "kind": "view", "action": "pan", "dx": 0, "dy": -25 },
+        { "kind": "view", "action": "pan", "dx": 0, "dy": -25 }
+      ]
+    },
+    {
+      "name": "two-finger drag: a zoomed native Desk with the Scroll toggle scrolls",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 2, "trackpad": false, "scrollWhileZoomed": true },
+      "samples": [[0, "down", 1, 400, 500], [20, "down", 2, 600, 500], [40, "move", 1, 400, 450], [40, "move", 2, 600, 450], [60, "move", 1, 400, 400], [60, "move", 2, 600, 400], [100, "up", 1, 400, 400], [100, "up", 2, 600, 400]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "os.scroll", "args": { "nx": 0.5, "ny": 0.45, "dx": 0, "dy": 1 } },
+        { "kind": "op", "op": "os.scroll", "args": { "nx": 0.5, "ny": 0.4, "dx": 0, "dy": 1 } }
+      ]
+    },
+    {
+      "name": "two-finger drag: P1 at zoom 1 sends nothing",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 400, 500], [20, "down", 2, 600, 500], [40, "move", 1, 400, 450], [40, "move", 2, 600, 450], [100, "up", 1, 400, 450], [100, "up", 2, 600, 450]],
+      "end": 600,
+      "expect": []
+    },
+    {
+      "name": "two-finger drag: P1 while zoomed pans",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1.5, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 400, 500], [20, "down", 2, 600, 500], [40, "move", 1, 400, 450], [40, "move", 2, 600, 450], [100, "up", 1, 400, 450], [100, "up", 2, 600, 450]],
+      "end": 600,
+      "expect": [{ "kind": "view", "action": "pan", "dx": 0, "dy": -25 }, { "kind": "view", "action": "pan", "dx": 0, "dy": -25 }]
+    },
+    {
+      "name": "pinch: zooms about the midpoint, sends no input, and never turns into a scroll",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 400, 500], [10, "down", 2, 600, 500], [30, "move", 2, 700, 500], [40, "move", 1, 300, 500], [50, "move", 1, 350, 500], [60, "move", 2, 750, 500], [100, "up", 1, 350, 500], [110, "up", 2, 750, 500]],
+      "end": 600,
+      "expect": [
+        { "kind": "view", "action": "zoom", "scale": 1.5, "cx": 550, "cy": 500 },
+        { "kind": "view", "action": "zoom", "scale": 1.333333, "cx": 500, "cy": 500 },
+        { "kind": "view", "action": "zoom", "scale": 0.875, "cx": 525, "cy": 500 },
+        { "kind": "view", "action": "zoom", "scale": 1.142857, "cx": 550, "cy": 500 }
+      ]
+    },
+    {
+      "name": "pinch: P1 zooms the same way",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 400, 500], [10, "down", 2, 600, 500], [30, "move", 2, 700, 500], [100, "up", 1, 400, 500], [110, "up", 2, 700, 500]],
+      "end": 600,
+      "expect": [{ "kind": "view", "action": "zoom", "scale": 1.5, "cx": 550, "cy": 500 }]
+    },
+    {
+      "name": "pinch: a Desk without control zooms the same way",
+      "desk": { "kind": "none", "control": false },
+      "mode": { "zoom": 2, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 300, 500], [10, "down", 2, 700, 500], [30, "move", 2, 500, 500], [100, "up", 1, 300, 500], [110, "up", 2, 500, 500]],
+      "end": 600,
+      "expect": [{ "kind": "view", "action": "zoom", "scale": 0.5, "cx": 400, "cy": 500 }]
+    },
+    {
+      "name": "three-finger tap: toggles the on-screen keyboard on a native Desk",
+      "desk": { "kind": "native", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 300, 500], [10, "down", 2, 500, 500], [20, "down", 3, 700, 500], [100, "up", 1, 300, 500], [110, "up", 2, 500, 500], [120, "up", 3, 700, 500]],
+      "end": 600,
+      "expect": [{ "kind": "keyboard", "action": "toggle" }]
+    },
+    {
+      "name": "three-finger tap: nothing on P1",
+      "desk": { "kind": "p1", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "config": { "doubleTapGapMs": 0 },
+      "samples": [[0, "down", 1, 300, 500], [10, "down", 2, 500, 500], [20, "down", 3, 700, 500], [100, "up", 1, 300, 500], [110, "up", 2, 500, 500], [120, "up", 3, 700, 500]],
+      "end": 600,
+      "expect": []
+    },
+    {
+      "name": "P2 with control: a tap clicks through the replayer capture",
+      "desk": { "kind": "p2", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 250, 250], [60, "up", 1, 250, 250]],
+      "end": 500,
+      "expect": [{ "kind": "op", "op": "rp.pointer", "args": { "kind": "click", "x": 0.25, "y": 0.25, "button": 0 } }]
+    },
+    {
+      "name": "P2 with control: a long press is a context-menu pointer event",
+      "desk": { "kind": "p2", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 250, 250], [700, "up", 1, 250, 250]],
+      "end": 900,
+      "expect": [{ "kind": "op", "op": "rp.pointer", "args": { "kind": "contextmenu", "x": 0.25, "y": 0.25, "button": 2 } }, { "kind": "haptic" }]
+    },
+    {
+      "name": "P2 with control: a double tap is a dblclick capture",
+      "desk": { "kind": "p2", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 500, 500], [80, "up", 1, 500, 500], [200, "down", 1, 505, 505], [260, "up", 1, 505, 505]],
+      "end": 900,
+      "expect": [{ "kind": "op", "op": "rp.pointer", "args": { "kind": "dblclick", "x": 0.5, "y": 0.5, "button": 0 } }]
+    },
+    {
+      "name": "P2 with control: a two-finger drag is wheel deltas in CSS px",
+      "desk": { "kind": "p2", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 400, 500], [20, "down", 2, 600, 500], [40, "move", 1, 400, 450], [40, "move", 2, 600, 450], [100, "up", 1, 400, 450], [100, "up", 2, 600, 450]],
+      "end": 600,
+      "expect": [
+        { "kind": "op", "op": "rp.wheel", "args": { "x": 0.5, "y": 0.475, "deltaX": 0, "deltaY": 25 } },
+        { "kind": "op", "op": "rp.wheel", "args": { "x": 0.5, "y": 0.45, "deltaX": 0, "deltaY": 25 } }
+      ]
+    },
+    {
+      "name": "P2 with control: a one-finger drag at zoom 1 sends nothing",
+      "desk": { "kind": "p2", "control": true },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 100, 100], [50, "move", 1, 140, 100], [100, "up", 1, 140, 100]],
+      "end": 600,
+      "expect": []
+    },
+    {
+      "name": "P2 without control (view or tab mode): a tap sends nothing",
+      "desk": { "kind": "p2", "control": false },
+      "mode": { "zoom": 1, "trackpad": false, "scrollWhileZoomed": false },
+      "samples": [[0, "down", 1, 250, 250], [60, "up", 1, 250, 250]],
+      "end": 500,
+      "expect": []
+    }
+  ]
+}

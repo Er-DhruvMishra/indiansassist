@@ -29,11 +29,23 @@ export const WEBHOOK_SIGNATURE_TOLERANCE_SEC = 300;
 export type ZohoDataCenter = { id: string; deskHost: string; accountsHost: string; region: Region | null };
 
 /**
- * Section 4.2: none of the candidate hosts is verified by the contract, so the foundation ships the table empty;
- * the tickets stream adds each row only after checking it against Zoho Desk's API documentation. With no row, no
- * `zoho_desk` configuration validates (honestly unavailable rather than guessed).
+ * Section 4.2 and Phase F section 3.3 V6: a row ships only when Zoho's own documentation shows both its Desk API host
+ * ("API Endpoints by Data Center", https://desk.zoho.com/DeskAPIDocument) and its accounts host
+ * (https://www.zoho.com/accounts/protocol/oauth/multi-dc.html), both read 2026-11-02. China, Singapore and the UAE
+ * have a documented Desk host but no documented accounts host, and the UK the reverse, so they are left out. `region`
+ * is set only where Zoho documents the data centre's location (https://www.zoho.com/know-your-datacenter.html) and it
+ * is one of our regions: India (Mumbai, with Chennai as secondary) is `in-mum`; the US data centre (Quincy, Dallas)
+ * is not US East and the EU one (Amsterdam, Dublin) is not Frankfurt, so both are `null`.
  */
-export const ZOHO_DATA_CENTERS: readonly ZohoDataCenter[] = [];
+export const ZOHO_DATA_CENTERS: readonly ZohoDataCenter[] = [
+  { id: 'us', deskHost: 'desk.zoho.com', accountsHost: 'accounts.zoho.com', region: null },
+  { id: 'eu', deskHost: 'desk.zoho.eu', accountsHost: 'accounts.zoho.eu', region: null },
+  { id: 'in', deskHost: 'desk.zoho.in', accountsHost: 'accounts.zoho.in', region: 'in-mum' },
+  { id: 'au', deskHost: 'desk.zoho.com.au', accountsHost: 'accounts.zoho.com.au', region: null },
+  { id: 'jp', deskHost: 'desk.zoho.jp', accountsHost: 'accounts.zoho.jp', region: null },
+  { id: 'ca', deskHost: 'desk.zohocloud.ca', accountsHost: 'accounts.zohocloud.ca', region: null },
+  { id: 'sa', deskHost: 'desk.zoho.sa', accountsHost: 'accounts.zoho.sa', region: null },
+];
 
 /**
  * Phase F section 3.3 V4: the vendor-documentation verification record per ticketing type. `verified` is true only
@@ -46,10 +58,52 @@ export type IntegrationVerification = {
   unconfirmed: readonly string[];
 };
 export const INTEGRATION_VERIFICATION: Readonly<Record<Exclude<IntegrationType, 'webhook'>, IntegrationVerification>> = {
-  zoho_desk: { verified: false, sources: [], unconfirmed: [] },
-  servicenow: { verified: false, sources: [], unconfirmed: [] },
-  jira: { verified: false, sources: [], unconfirmed: [] },
-  freshdesk: { verified: false, sources: [], unconfirmed: [] },
+  zoho_desk: {
+    verified: false,
+    sources: [
+      { url: 'https://desk.zoho.com/DeskAPIDocument', readOn: '2026-11-02' },
+      { url: 'https://www.zoho.com/accounts/protocol/oauth/multi-dc.html', readOn: '2026-11-02' },
+      { url: 'https://www.zoho.com/accounts/protocol/oauth/web-apps/access-token-expiry.html', readOn: '2026-11-02' },
+      { url: 'https://www.zoho.com/know-your-datacenter.html', readOn: '2026-11-02' },
+    ],
+    unconfirmed: [
+      'Create: the priority "Urgent". Zoho documents Low, Medium and High; other values exist only where a portal defines them.',
+      'Create: the description as HTML. The reference gives description as a string without naming a format.',
+      'Token: a refused refresh token answered as HTTP 200 with an "error" field. Zoho names the error but not the status or body.',
+    ],
+  },
+  servicenow: {
+    verified: false,
+    sources: [
+      { url: 'https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html', readOn: '2026-11-02' },
+      { url: 'https://www.servicenow.com/docs/bundle/zurich-it-service-management/page/product/incident-management/task/create-an-incident.html', readOn: '2026-11-02' },
+    ],
+    unconfirmed: [
+      'Create: caller_id given as a sys_id. The field is documented, but no example sets it.',
+      'Create: the urgency values 1, 2 and 3 meaning high, medium and low. The Table API reference does not list them.',
+      'Add a note: writing work_notes with PATCH. The documented PATCH example writes comments.',
+      'Create: the incident link <instance>/nav_to.do?uri=incident.do?sys_id=<sys_id>. The Table API reference does not define it.',
+    ],
+  },
+  jira: {
+    verified: false,
+    sources: [
+      { url: 'https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/', readOn: '2026-11-02' },
+      { url: 'https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json', readOn: '2026-11-02' },
+      { url: 'https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/paragraph/', readOn: '2026-11-02' },
+      { url: 'https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/text/', readOn: '2026-11-02' },
+      { url: 'https://support.atlassian.com/jira/kb/how-to-split-lines-when-sending-data-with-the-jira-rest-api/', readOn: '2026-11-02' },
+      { url: 'https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples/', readOn: '2026-11-02' },
+      { url: 'https://docs.atlassian.com/software/jira/docs/api/REST/9.12.0/', readOn: '2026-11-02' },
+      { url: 'https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html', readOn: '2026-11-02' },
+    ],
+    unconfirmed: ['Create: the issue link <site>/browse/<key>. No Atlassian reference page defines it.'],
+  },
+  freshdesk: {
+    verified: false,
+    sources: [{ url: 'https://developers.freshdesk.com/api/', readOn: '2026-11-02' }],
+    unconfirmed: ['Create: the ticket link https://<domain>.freshdesk.com/a/tickets/<id>. The API reference does not define it.'],
+  },
 };
 
 /** An http(s) origin with no path, query or userinfo (`https:` enforced by the egress guard, section 2.2 G1). */
