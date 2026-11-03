@@ -1,0 +1,14 @@
+---
+# A minimal playbook that exercises the indiansassist_agent role, used by the §8.12 package checks
+# (`ansible-playbook --syntax-check` and `ansible-lint --profile production`). It is never run against
+# a real host by automation.
+- name: Install the IndiansAssist agent
+  hosts: all
+  become: true
+  roles:
+    - role: indiansassist_agent
+      vars:
+        indiansassist_agent_state: present
+        indiansassist_agent_package_src: ./IndiansAssist-Agent-0.0.0-linux-x64.deb
+        indiansassist_agent_package_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+        indiansassist_agent_enroll_config: "placeholder"

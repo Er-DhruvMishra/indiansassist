@@ -1,5 +1,6 @@
 /** Regression tests: live socket authority (SEC-02) and token expiry on held knocks (SEC-03 / correctness-F5). */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { WS_CLOSE } from '@indiansassist/shared';
 import { listOpenSessionsByToken, revokeAuthSession } from '@indiansassist/db';
 import { addMember, call, cookieOf, createToken, listen, makeApp, PASSWORD, signup, type TestApp } from './helpers.js';
 import { Kit, sleep } from './signal-kit.js';
@@ -124,5 +125,50 @@ describe('SEC-03 / F5 expired tokens never produce a knock', () => {
     expect((await desk.next('error')).details).toEqual({ status: 'expired' });
     expect(await desk.closed()).toBe(4403);
     await sleep(10);
+  });
+});
+
+describe('F coordinator item 2: a Desk that died without a close frame is superseded by a re-hello', () => {
+  it('the Assist sees and can accept the new Desk knock', async () => {
+    const admin = await signup(t.app);
+    const { compact, token } = await createToken(t.app, admin);
+    const assist = await kit.assistOnline(admin);
+    const desk1 = await kit.deskOnline(compact);
+    const knock1 = await desk1.request({ t: 'desk.knock' }, 'knock.ok');
+    const sid1 = knock1.sessionId as string;
+    await assist.next('assist.knock', (m) => m.sessionId === sid1);
+    await assist.request({ t: 'assist.accept', sessionId: sid1 }, 'session.created');
+    await desk1.next('session.created');
+    // The Desk process dies without a WS close frame: pause its socket so it stops answering pings
+    // while TCP stays up, exactly as a crashed native agent looks until its heartbeat window lapses.
+    desk1.ws.pause();
+    // A new Desk process re-hellos with the same token at once. Before the fix this was `token_busy`
+    // for ~10 s; now the dead incumbent is superseded and the fresh hello succeeds.
+    const desk2 = await kit.deskOnline(compact);
+    const knock2 = await desk2.request({ t: 'desk.knock' }, 'knock.ok');
+    const sid2 = knock2.sessionId as string;
+    expect(sid2).not.toBe(sid1);
+    // The stale session is gone; a fresh knock reaches the Assist, which accepts it and consent runs.
+    await assist.next('assist.knock', (m) => m.sessionId === sid2);
+    await assist.request({ t: 'assist.accept', sessionId: sid2 }, 'session.created');
+    await desk2.next('session.created');
+    const open = await listOpenSessionsByToken(t.db, token.id);
+    expect(open.map((s) => s.id)).toEqual([sid2]);
+  });
+
+  it('a live Desk is never superseded; the second hello stays token_busy', async () => {
+    const admin = await signup(t.app);
+    const { compact } = await createToken(t.app, admin);
+    await kit.assistOnline(admin);
+    const desk1 = await kit.deskOnline(compact);
+    await desk1.request({ t: 'desk.knock' }, 'knock.ok'); // desk1 stays live and answers pings
+    const desk2 = await kit.open();
+    desk2.send({ t: 'desk.hello', token: compact, deskLabel: 'Second', id: 'h2' });
+    const err = await desk2.next('error', (m) => m.re === 'h2');
+    expect(err.code).toBe('token_busy');
+    expect(await desk2.closed()).toBe(WS_CLOSE.tokenBusy);
+    // desk1 keeps its live session.
+    const poll = await desk1.request({ t: 'desk.poll' }, 'poll.status');
+    expect(poll.sessionState).toBe('knocked');
   });
 });

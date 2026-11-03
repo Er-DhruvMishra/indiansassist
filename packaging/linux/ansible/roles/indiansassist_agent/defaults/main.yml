@@ -1,0 +1,17 @@
+---
+# Desired state: "present" installs and enrolls, "absent" deregisters and removes.
+# NB (contract correction, F §8.10): the role variables carry the `indiansassist_agent_` role prefix
+# that `ansible-lint --profile production` (var-naming[no-role-prefix]) requires; §8.10 wrote them with
+# the bare `indiansassist_` prefix, which fails that gate.
+indiansassist_agent_state: present
+
+# Exactly one of these points at the package to install (a URL to fetch, or a local path to copy).
+indiansassist_agent_package_url: ""
+indiansassist_agent_package_src: ""
+
+# Required when installing: the sha256 of the package (the console publishes it; the package is unsigned, W111).
+indiansassist_agent_package_sha256: ""
+
+# The signed enroll.iaconfig text (D section 12.3). Placed only when the device is not already enrolled.
+# Every task that touches it sets no_log: true.
+indiansassist_agent_enroll_config: ""

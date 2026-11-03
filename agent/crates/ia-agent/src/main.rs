@@ -503,6 +503,9 @@ fn run_handover_child(cli: &ia_agent::cli::Cli, suffix: &str) {
         cli,
         Duration::from_secs(24 * 3600),
     ));
+    // Phase F coordinator item 1: never let the session runtime drop implicitly (it races the
+    // time driver against tasks that outlived the session and panics). Drain it explicitly.
+    ia_agent::rtshutdown::shutdown_session_runtime(rt);
     match outcome {
         Ok(o) => tracing::info!(outcome = ?o, "the elevated instance finished"),
         Err(e) => {
@@ -608,6 +611,9 @@ fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
     let outcome = rt.block_on(ia_agent::session::run_signaling(
         cli, &r.token, r.source, budget,
     ));
+    // Phase F coordinator item 1: drain the runtime before it drops, so a straggler webrtc or
+    // pump task cancelling a timer never meets an already-shut-down time driver.
+    ia_agent::rtshutdown::shutdown_session_runtime(rt);
     match outcome {
         Ok(o) => println!("signaling outcome: {o:?}"),
         Err(e) => {

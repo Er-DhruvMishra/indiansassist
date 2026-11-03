@@ -25,7 +25,7 @@ import {
 import { deskActor, systemActor, writeAudit } from '../lib/audit.js';
 import { refOf, userRefs } from '../lib/lookup.js';
 import { brandingPublic, effectiveStatus } from '../lib/mappers.js';
-import { endSessionFlow } from '../services/session-end.js';
+import { endSessionFlow, endSessionQuietly } from '../services/session-end.js';
 import { verifyTokenInput, type TokenVerifyOk } from '../services/token-verify.js';
 import type { Conn } from './conn.js';
 import type { SignalHub } from './hub.js';
@@ -68,6 +68,40 @@ export function versionBelow(a: string, b: string): boolean {
   const y = parse(b);
   for (let i = 0; i < 3; i++) if ((x.n[i] ?? 0) !== (y.n[i] ?? 0)) return (x.n[i] ?? 0) < (y.n[i] ?? 0);
   return x.pre && !y.pre;
+}
+
+/**
+ * How long a second Desk hello waits for the incumbent to answer a liveness probe before it is
+ * treated as gone (Phase F coordinator item 2). Short enough to supersede a dead Desk within the
+ * contract's 1 s re-hello window; a live Desk answers (or any inbound frame arrives) far sooner, so
+ * the common `token_busy` path returns in tens of milliseconds, not the whole bound.
+ */
+const DESK_SUPERSEDE_PROBE_MS = 1000;
+
+/**
+ * Whether the incumbent Desk of `live` still holds the token, i.e. the second hello must answer
+ * `token_busy` rather than supersede. Only a socket that is still registered here and appears open
+ * but fails an active liveness probe is superseded (returns false) — that is the "died without a
+ * close frame" case. A Desk that detached cleanly (`deskConnId` null, resume grace running) or whose
+ * socket has already gone is left alone, so it can still resume with its key; a Desk held by another
+ * node is never superseded from here. A probe answer (a pong, or any inbound frame) keeps the token.
+ */
+async function incumbentHoldsToken(hub: SignalHub, live: { deskConnId: string | null }): Promise<boolean> {
+  const id = live.deskConnId;
+  if (!id) return true; // detached cleanly (resume grace): keep token_busy so the real Desk resumes
+  const c = hub.conn(id);
+  if (!c) return true; // the socket has gone (resume grace): keep token_busy
+  if (!hub.localConn(id)) return true; // held by another node: do not supersede across nodes
+  if (c.closed || !c.transport.isOpen()) return true; // closing: leave the resume path alone
+  const before = c.lastInbound;
+  c.send({ t: 'ping' });
+  const deadline = Date.now() + DESK_SUPERSEDE_PROBE_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+    if (c.closed || !c.transport.isOpen()) return true;
+    if (c.lastInbound > before) return true; // a pong (or any frame) arrived: the Desk is alive
+  }
+  return false; // registered and open, but no answer within the bound: superseded
 }
 
 export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<'desk.hello'>): Promise<void> {
@@ -133,11 +167,24 @@ export async function handleDeskHello(hub: SignalHub, conn: Conn, msg: SignalOf<
     if (await hub.bridge.forwardDeskResume(conn, v, msg.id)) return;
     return deskResume(hub, conn, v, msg.id);
   }
-  if (await findOpenSessionByToken(ctx.db, tok.id)) {
-    conn.side = null;
-    conn.desk = null;
-    conn.error('token_busy', 'another Desk is live on this token', msg.id);
-    return conn.close(WS_CLOSE.tokenBusy, 'token busy');
+  const open = await findOpenSessionByToken(ctx.db, tok.id);
+  if (open) {
+    // Phase F coordinator item 2: a native Desk that died without a close frame still looks live
+    // until its heartbeat window elapses (~idleTimeout, about 10 s), so a fresh process re-helloing
+    // with the same token hit `token_busy` for that whole window, and the Assist kept the first,
+    // already accepted knock. Instead, probe the incumbent Desk at once; if it misses the liveness
+    // window the new connection supersedes it — the stale session ends (its knock is withdrawn from
+    // the Assist's view) and this Desk knocks afresh, so consent is asked again. A Desk that answers
+    // the probe keeps the token and the second hello still answers `token_busy`.
+    const live = hub.live.get(open.id);
+    if (live && live.state !== 'ended' && !(await incumbentHoldsToken(hub, live))) {
+      await endSessionQuietly(ctx, open.id, { reason: 'desk_left', actor: systemActor });
+    } else {
+      conn.side = null;
+      conn.desk = null;
+      conn.error('token_busy', 'another Desk is live on this token', msg.id);
+      return conn.close(WS_CLOSE.tokenBusy, 'token busy');
+    }
   }
   const creator = v.via === 'compact' ? refOf(await userRefs(ctx.db, [tok.createdBy]), tok.createdBy) : null;
   conn.send({

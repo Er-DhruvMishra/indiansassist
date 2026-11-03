@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  role_name: indiansassist_agent
+  namespace: indiansassist
+  author: IndiansAssist
+  description: Install, enroll and manage the IndiansAssist unattended Linux agent (systemd system service).
+  company: IndiansAssist
+  license: proprietary
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+    - name: Debian
+      versions:
+        - bookworm
+    - name: EL
+      versions:
+        - "9"
+    - name: Fedora
+      versions:
+        - all
+  galaxy_tags:
+    - indiansassist
+    - remote
+    - support
+    - systemd
+dependencies: []

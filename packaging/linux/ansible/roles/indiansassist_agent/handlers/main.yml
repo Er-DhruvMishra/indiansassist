@@ -1,0 +1,6 @@
+---
+- name: Restart indiansassist-agent
+  ansible.builtin.systemd_service:
+    name: indiansassist-agent
+    state: restarted
+  when: ansible_facts.service_mgr == "systemd"

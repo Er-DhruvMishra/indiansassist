@@ -29,6 +29,8 @@ pub mod pump;
 #[cfg(feature = "media")]
 pub mod recorder;
 #[cfg(feature = "media")]
+pub mod rtshutdown;
+#[cfg(feature = "media")]
 pub mod serve;
 #[cfg(feature = "media")]
 pub mod session;

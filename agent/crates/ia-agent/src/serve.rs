@@ -3322,9 +3322,15 @@ async fn serve(
     tracing::info!(order = ?teardown_order(), "teardown order");
     live.control.consent.lower_level(AgentConsentLevel::View); // stop honouring input
     stop.notify_waiters();
+    // Phase F coordinator item 1: abort *and join* the pumps so their timer-holding futures are
+    // dropped here, while the runtime's time driver is still alive, rather than during the
+    // runtime teardown that follows (where dropping a `Sleep`/`Interval` would panic). A bounded
+    // wait keeps teardown prompt even if a task ignores the first cancellation point.
     remb_handle.abort();
+    let _ = tokio::time::timeout(Duration::from_secs(2), remb_handle).await;
     if let Some(h) = video_handle {
         h.abort();
+        let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
     }
     if let Some(r) = live.running.take() {
         r.handle.cancel(); // the job object kills the tree

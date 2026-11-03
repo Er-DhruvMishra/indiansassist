@@ -1,0 +1,107 @@
+---
+- name: Validate the requested state
+  ansible.builtin.assert:
+    that:
+      - indiansassist_agent_state in ["present", "absent"]
+    fail_msg: "indiansassist_agent_state must be 'present' or 'absent'"
+    quiet: true
+
+- name: Install and enroll the agent
+  when: indiansassist_agent_state == "present"
+  block:
+    - name: Validate the install inputs
+      ansible.builtin.assert:
+        that:
+          - (indiansassist_agent_package_url | length > 0) or (indiansassist_agent_package_src | length > 0)
+          - not ((indiansassist_agent_package_url | length > 0) and (indiansassist_agent_package_src | length > 0))
+          - indiansassist_agent_package_sha256 | length == 64
+        fail_msg: >-
+          Set exactly one of indiansassist_agent_package_url / indiansassist_agent_package_src and a
+          64-character indiansassist_agent_package_sha256.
+        quiet: true
+
+    - name: Decide the package format from the file name
+      ansible.builtin.set_fact:
+        indiansassist_agent_package_format: >-
+          {{ 'deb' if (indiansassist_agent_package_url | default(indiansassist_agent_package_src)) is search('[.]deb$')
+             else 'rpm' }}
+
+    - name: Fetch the package to a temporary path
+      ansible.builtin.get_url:
+        url: "{{ indiansassist_agent_package_url }}"
+        dest: "/tmp/indiansassist-agent.{{ indiansassist_agent_package_format }}"
+        checksum: "sha256:{{ indiansassist_agent_package_sha256 }}"
+        mode: "0644"
+      when: indiansassist_agent_package_url | length > 0
+      register: indiansassist_agent_fetched
+
+    - name: Copy the local package to a temporary path
+      ansible.builtin.copy:
+        src: "{{ indiansassist_agent_package_src }}"
+        dest: "/tmp/indiansassist-agent.{{ indiansassist_agent_package_format }}"
+        checksum: "{{ indiansassist_agent_package_sha256 }}"
+        mode: "0644"
+      when: indiansassist_agent_package_src | length > 0
+      register: indiansassist_agent_copied
+
+    - name: Install the .deb package
+      ansible.builtin.apt:
+        deb: "/tmp/indiansassist-agent.deb"
+      when: indiansassist_agent_package_format == "deb"
+      notify: Restart indiansassist-agent
+
+    - name: Install the .rpm package
+      ansible.builtin.dnf:
+        name: "/tmp/indiansassist-agent.rpm"
+        state: present
+        disable_gpg_check: true  # the package is unsigned in Phase F (W111)
+      when: indiansassist_agent_package_format == "rpm"
+      notify: Restart indiansassist-agent
+
+    - name: Check whether the device is already enrolled
+      ansible.builtin.stat:
+        path: /var/lib/indiansassist/device.key
+      register: indiansassist_agent_device_key
+
+    - name: Place the enrollment config (only when not already enrolled)
+      ansible.builtin.copy:
+        content: "{{ indiansassist_agent_enroll_config }}"
+        dest: /etc/indiansassist/enroll.iaconfig
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when:
+        - not indiansassist_agent_device_key.stat.exists
+        - indiansassist_agent_enroll_config | length > 0
+
+    - name: Ensure the service is enabled and started
+      ansible.builtin.systemd_service:
+        name: indiansassist-agent
+        enabled: true
+        state: started
+      when: ansible_facts.service_mgr == "systemd"
+
+- name: Deregister and remove the agent
+  when: indiansassist_agent_state == "absent"
+  block:
+    - name: Deregister the device (bounded, failure ignored offline)
+      ansible.builtin.command:
+        cmd: /usr/lib/indiansassist/ia-service --deregister
+      register: indiansassist_agent_deregister
+      changed_when: indiansassist_agent_deregister.rc == 0
+      failed_when: false
+      timeout: 10
+
+    - name: Remove the .deb package
+      ansible.builtin.apt:
+        name: indiansassist-agent
+        state: absent
+        purge: true
+      when: ansible_facts.pkg_mgr in ["apt", "apt-get"]
+
+    - name: Remove the .rpm package
+      ansible.builtin.dnf:
+        name: indiansassist-agent
+        state: absent
+      when: ansible_facts.pkg_mgr in ["dnf", "dnf5", "yum"]

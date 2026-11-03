@@ -1,0 +1,26 @@
+[Unit]
+Description=IndiansAssist Agent
+Documentation=https://<deployment>/docs
+After=network-online.target systemd-logind.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/indiansassist/ia-service
+Restart=on-failure
+RestartSec=5
+WatchdogSec=60
+TimeoutStopSec=20
+KillMode=mixed
+UMask=0077
+StateDirectory=indiansassist
+StateDirectoryMode=0700
+ConfigurationDirectory=indiansassist
+ConfigurationDirectoryMode=0750
+RuntimeDirectory=indiansassist
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

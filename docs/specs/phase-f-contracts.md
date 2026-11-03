@@ -681,7 +681,7 @@ The service sends `READY=1` after enrollment state is loaded and `WATCHDOG=1` ev
 | Path | Content |
 |---|---|
 | `meta/main.yml` | role metadata; `min_ansible_version: "2.16"`; platforms Ubuntu (jammy, noble), Debian (bookworm), EL (9), Fedora |
-| `defaults/main.yml` | `indiansassist_state: present` (or `absent`), `indiansassist_package_url: ""` and `indiansassist_package_src: ""` (one of the two), `indiansassist_package_sha256: ""` (**required** when installing), `indiansassist_enroll_config: ""` (the iaconfig text; the role sets `no_log: true` on every task that touches it) |
+| `defaults/main.yml` | `indiansassist_agent_state: present` (or `absent`), `indiansassist_agent_package_url: ""` and `indiansassist_agent_package_src: ""` (one of the two), `indiansassist_agent_package_sha256: ""` (**required** when installing), `indiansassist_agent_enroll_config: ""` (the iaconfig text; the role sets `no_log: true` on every task that touches it). Revision 3 (linux-p4): every variable carries the role-name prefix `indiansassist_agent_`, because `ansible-lint --profile production` (`var-naming[no-role-prefix]`) fails the bare names; the §8.11 Ansible snippet uses the same names |
 | `tasks/main.yml` | assert the inputs; fetch with `ansible.builtin.get_url` and `checksum: sha256:<...>` or copy the local file; install with `ansible.builtin.apt` (`deb:`) or `ansible.builtin.dnf` (local path, `disable_gpg_check: true` because the package is unsigned, W111); place `/etc/indiansassist/enroll.iaconfig` (0600) **only when** `/var/lib/indiansassist/device.key` does not exist; ensure `indiansassist-agent` enabled and started; for `absent`: run `ia-service --deregister`, remove the package |
 | `handlers/main.yml` | restart on package change |
 
