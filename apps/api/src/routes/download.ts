@@ -72,7 +72,8 @@ function servedFileName(build: ServedBuild, region: Region, deskCode: string): s
   if (build.platform === 'android') return build.file;
   if (build.platform === 'linux') return linuxArchiveName(region, deskCode);
   // apple-owned: begin
-  // Phase F section 17.2: the macOS served name (the per-download stored zip); the apple stream fills this block.
+  // Phase F section 17.2: the macOS served name, the per-download stored zip `IndiansAssist-<region>-<dddd>-<dddd>-<dddd>.zip`.
+  if (build.platform === 'macos') return agentFileName(region, deskCode).replace(/\.exe$/, '.zip');
   // apple-owned: end
   return agentFileName(region, deskCode);
 }
@@ -177,8 +178,20 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
       parts = linuxArchiveParts(g.region, g.deskCode, build.archive);
     }
     // apple-owned: begin
-    // Phase F section 17.2: the macOS zip of this grant (bundle members cached at load, the signed sidecar per
-    // request); the apple stream fills this block.
+    // Phase F section 17.2: the macOS zip of this grant: the bundle's stored members (cut from the dist zip on the
+    // first download of the build and cached) and the signed sidecar `IndiansAssist.iaconfig` carrying this grant's
+    // desk code. Ed25519 is deterministic, so the bytes are a pure function of the grant (Range and HEAD hold).
+    if (build.platform === 'macos') {
+      const { macZipBodyFor, macZipParts } = await import('../services/macos-archive.js');
+      const { signIaconfig } = await import('@indiansassist/shared');
+      const body = macZipBodyFor(build);
+      if (!body) fail('link_expired', 'this build is no longer served');
+      const sidecar = await signIaconfig(
+        { v: 1, apiOrigin: ctx.config.apiOrigin, region: g.region, code: g.deskCode, kid: ctx.keys.kid },
+        ctx.keys.seedHex,
+      );
+      parts = macZipParts(body, sidecar);
+    }
     // apple-owned: end
     const size = parts ? partsLength(parts) : build.size;
     const range = parseRange(req.headers['range'], size);

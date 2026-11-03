@@ -22,7 +22,7 @@ pub struct Display {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    /// `CGDisplayPixelsWide`: the backing pixels across, which gives the scale.
+    /// The backing pixels across (the display mode's pixel width), which gives the scale.
     pub pixels_wide: u32,
     /// `CGDisplayIsMain`.
     pub main: bool,

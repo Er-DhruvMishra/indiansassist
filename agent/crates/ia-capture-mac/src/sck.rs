@@ -32,8 +32,8 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
 use objc2_core_graphics::{
-    CGDirectDisplayID, CGDisplayBounds, CGDisplayPixelsWide, CGGetActiveDisplayList,
-    CGMainDisplayID,
+    CGDirectDisplayID, CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode,
+    CGDisplayPixelsWide, CGGetActiveDisplayList, CGMainDisplayID,
 };
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_core_video::{
@@ -322,6 +322,19 @@ fn copy_frame(f: &Frame) -> Frame {
     }
 }
 
+/// The panel pixels across a display. `CGDisplayPixelsWide` reports the mode's width in points
+/// for a scaled (HiDPI) mode, 960 for a 1920-pixel panel at 2x, so the mode's pixel width is
+/// asked first.
+fn backing_pixels_wide(id: CGDirectDisplayID) -> u32 {
+    let mode_pixels =
+        CGDisplayCopyDisplayMode(id).map_or(0, |m| CGDisplayMode::pixel_width(Some(&m)));
+    if mode_pixels > 0 {
+        mode_pixels as u32
+    } else {
+        CGDisplayPixelsWide(id) as u32
+    }
+}
+
 /// `CGGetActiveDisplayList` with each display's bounds, pixel width and main flag.
 pub fn active_displays() -> Vec<Display> {
     let mut ids = [0 as CGDirectDisplayID; 16];
@@ -342,7 +355,7 @@ pub fn active_displays() -> Vec<Display> {
                 y: b.origin.y,
                 width: b.size.width,
                 height: b.size.height,
-                pixels_wide: CGDisplayPixelsWide(id) as u32,
+                pixels_wide: backing_pixels_wide(id),
                 main: id == main_id,
             }
         })

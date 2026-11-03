@@ -140,7 +140,8 @@ test('macOS agent (synthetic capture): the section 17.6 session end to end', asy
     await test.step('Stop from the agent ends the session; the self-delete decision is logged', async () => {
       a.interrupt();
       await expect(assist.getByText(/^Session ended/).first()).toBeVisible({ timeout: 30_000 });
-      await a.waitForLine(/self-delete.*(skip|decision|keep)/i, 20_000);
+      // Phase F 3.4: the exit decision (with --no-self-delete, action Nothing); the older wording is accepted too.
+      await a.waitForLine(/exit decision|self-delete.*(skip|decision|keep)/i, 20_000);
     });
     await test.step('the audit chain verifies', async () => {
       await assist.goto('/app/audit');

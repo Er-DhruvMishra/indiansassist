@@ -55,7 +55,9 @@ export class AgentDist {
           void _f;
           // apple-owned: begin
           // Phase F section 17.2: the macOS build (the cached members of the signed IndiansAssist.app); the apple
-          // stream fills this block, and the coordinator alone edits around it.
+          // stream fills this block, and the coordinator alone edits around it. A macOS build is served like the
+          // Windows one below (its dist zip and size); `services/macos-archive.ts` cuts the bundle's stored members
+          // from it on the first download and caches them, and `routes/download.ts` adds the signed sidecar per grant.
           // apple-owned: end
           if (build.platform === 'linux') {
             const elf = readFileSync(path);
