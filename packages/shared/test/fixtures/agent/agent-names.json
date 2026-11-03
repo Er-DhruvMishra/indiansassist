@@ -221,7 +221,8 @@
     "wayland_unsupported",
     "x11_lost",
     "portal_denied",
-    "portal_closed"
+    "portal_closed",
+    "sck_stopped"
   ],
   "linuxFileNames": [
     {

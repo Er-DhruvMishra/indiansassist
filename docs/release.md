@@ -191,6 +191,21 @@ Each release:
   a production node refuses to boot without them, and `AUTH_PROVIDER=oidc` (never functional) now refuses to boot too (W86).
   To rotate `ORG_SECRETS_KEY`, move the old value into `ORG_SECRETS_KEYS_PREVIOUS`, set a new key id, deploy, run
   `pnpm secrets:reseal` (or let values re-seal lazily) and drop the old key only once the re-seal reports none left under it.
+- **Fleet data key rotation** (`docs/specs/phase-f-contracts.md` rule 3.1f; `FLEET_DATA_KEY` seals each enrolled device's
+  `device.mac_enc` and keys its `mac_hash`):
+  1. Generate a new 64-hex key (`openssl rand -hex 32`) and choose a new key id (1-16 characters of `A-Za-z0-9_-`).
+  2. In `infra/.env`, move the current value into `FLEET_DATA_KEYS_PREVIOUS` as `<oldKeyId>:<old 64 hex>` (a comma list,
+     open-only). A key set without a prefix has the id `k1`, so it moves as `k1:<old 64 hex>`.
+  3. Set `FLEET_DATA_KEY=<newKeyId>:<new 64 hex>`. With any previous key the current one must name its id, and no
+     previous entry may repeat it; the api refuses to boot otherwise (`config.ts`).
+  4. Restart (deploy) every api node of the region. A MAC sealed under the old key still opens and is re-sealed under
+     the new one the next time it is read.
+  5. Run `pnpm secrets:reseal` with the same environment (`FLEET_DATA_KEY=<new> FLEET_DATA_KEYS_PREVIOUS=<old>`; a PGlite
+     directory needs the api stopped first). It re-seals every `device.mac_enc` still under the old key, rewrites its
+     `mac_hash`, prints one line per column and exits 1 if any value failed to open.
+  6. Only when the `device.mac_enc` line reports `failed 0` and a second run re-seals nothing, remove the old entry
+     from `FLEET_DATA_KEYS_PREVIOUS` and restart again. Removing it earlier leaves those devices' MACs unreadable
+     (Wake-on-LAN stops for them until they check in again).
 - **Token-signing key rotation keeps the retired public key** (`docs/specs/phase-e-contracts.md` rule 6.3d): the region's
   `TOKEN_SIGNING_KEY` also signs the data residency reports, which customers keep and verify offline with
   `node scripts/verify-residency.mjs <report.json> --keys <well-known.json>` (or `--fetch <origin>`). At a rotation, move the

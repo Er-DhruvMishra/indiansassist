@@ -110,6 +110,21 @@ export function stopCameraWatcher(hub: SignalHub): void {
   if (rt) rt.timer = null;
 }
 
+/**
+ * `onConnClosed` (lifecycle.ts) for a phone socket: the 60 s resume window starts at the close itself rather than at
+ * the watcher's next tick. The watcher stays: it also applies the session's end, the recorder taking the camera, the
+ * phone's "Recording" bar and the end of the resume window, none of which is a socket close.
+ */
+export function onCameraConnClosed(hub: SignalHub, conn: Conn): void {
+  const live = liveOfConn(hub, conn);
+  const cam = live?.camera;
+  if (!live || !cam) return;
+  cam.connId = null;
+  const x = runtime(hub).extra.get(live.id);
+  if (x && x.cameraId === cam.cameraId && x.resumeUntil === null) x.resumeUntil = Date.now() + cameraTiming.resumeMs;
+  ensureWatcher(hub);
+}
+
 function liveOfConn(hub: SignalHub, conn: Conn): Live | null {
   for (const live of hub.live.values()) if (live.camera && live.camera.connId === conn.id) return live;
   return null;
@@ -125,8 +140,7 @@ export function serverRecordingInForce(live: Live): boolean {
 /** The joined (or assigned) recorder socket of a session, and whether it advertised `features: ['camera']`. */
 export function sessionRecorder(hub: SignalHub, live: Live): { conn: Conn | null; camera: boolean } {
   const c = hub.conn(live.recorder.connId ?? live.recorder.assignedConnId);
-  const features = (c?.recorder as { features?: readonly string[] } | null | undefined)?.features;
-  return { conn: c, camera: Array.isArray(features) && features.includes('camera') };
+  return { conn: c, camera: c?.recorder?.features.includes('camera') ?? false };
 }
 
 /** Section 6.5a: a server-recorded session whose recorder cannot take the camera refuses the link. */
@@ -248,7 +262,8 @@ function refuseLink(conn: Conn, re: string | undefined): void {
 /** `camera.hello { code } | { resumeKey }` (section 6.4). */
 export async function handleCameraHello(hub: SignalHub, conn: Conn, msg: SignalOf<'camera.hello'>): Promise<void> {
   const { ctx } = hub;
-  const lim = await ctx.limiter.hit(`camera-hello:${conn.ip}`, 20, 60_000);
+  // A bridged hello (bridge.ts `camera-hello`) was counted on the phone's node already.
+  const lim = conn.remote ? { allowed: true, retryAfterSec: 0 } : await ctx.limiter.hit(`camera-hello:${conn.ip}`, 20, 60_000);
   if (!lim.allowed) {
     ctx.metrics.rateLimited.inc();
     conn.error('rate_limited', 'too many camera connections; wait a minute', msg.id, {
@@ -260,12 +275,14 @@ export async function handleCameraHello(hub: SignalHub, conn: Conn, msg: SignalO
   const code = normaliseCameraCode(msg.code ?? '');
   if (!code) return refuseLink(conn, msg.id);
   const codeHash = cameraCodeHash(code);
-  // Peek first: a session owned by another node must not burn the single-use code here.
+  // Peek first: a session owned by another node must not burn the single-use code here. Its owner takes the hello
+  // through the bridge (bridge.ts `camera-hello`), and the phone's later frames are piped there as a Desk's are.
   const peek = await peekCameraLink(ctx.presence, codeHash);
   if (!peek) return refuseLink(conn, msg.id);
   if (!hub.live.has(peek.sessionId) && hub.bridge.on) {
     const s = await getSession(ctx.db, peek.sessionId);
     if (s && s.nodeId !== ctx.config.nodeId && (await ctx.presence.isNodeAlive(s.nodeId))) {
+      if (await hub.bridge.forwardCameraHello(conn, s, msg)) return;
       ctx.log.warn({ sessionId: peek.sessionId }, 'camera hello reached a node that does not own the session');
       conn.error('bad_state', 'the camera could not reach this support session; open the link again', msg.id);
       return conn.close(WS_CLOSE.forbidden, 'not the session owner');

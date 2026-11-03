@@ -150,8 +150,9 @@ export const agentControlRequestSchema = z.discriminatedUnion(
 
 /**
  * `ctl.event capture.cause` (section 5.1); `wayland_unsupported` and `x11_lost` are the Linux causes of Phase E
- * section 7.4; `portal_denied` and `portal_closed` the portal causes of Phase F section 9.3. Mirrored by
- * `ia_core::capture_decision::CaptureCause`.
+ * section 7.4; `portal_denied` and `portal_closed` the portal causes of Phase F section 9.3; `sck_stopped` the macOS
+ * ScreenCaptureKit stream stopping (Phase F section 17.2, revision 3). Mirrored by
+ * `ia_core::capture_decision::CaptureCause` (same order, `ALL`).
  */
 export const CAPTURE_CAUSES = [
   'start',
@@ -162,6 +163,7 @@ export const CAPTURE_CAUSES = [
   'x11_lost',
   'portal_denied',
   'portal_closed',
+  'sck_stopped',
 ] as const;
 export type CaptureCause = (typeof CAPTURE_CAUSES)[number];
 

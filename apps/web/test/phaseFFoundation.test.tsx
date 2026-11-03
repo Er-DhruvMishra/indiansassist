@@ -1,15 +1,17 @@
 /**
  * Phase F foundation in the console (docs/specs/phase-f-contracts.md sections 1.4, 2.1, 3.2b2, 13.4): the section 2.1
- * capability names, the console slots that render today's output until their stream supplies a component, the
- * chat accessory hook, the placeholder pages behind the new routes, and the `ctl.event keep` plumbing.
+ * capability names, the console slots (each renders the component its stream built in wave 1), the
+ * chat accessory hook, the pages behind the new routes, and the `ctl.event keep` plumbing.
  */
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserRole } from '@indiansassist/shared';
 import { ErasurePage } from '../src/assist/erasure/ErasurePage';
 import { RESIDENCY_ERASURE_PRINT_CSS } from '../src/assist/erasure/ResidencyErasure';
 import { AGENT_INITIAL } from '../src/assist/console/agent/agentState';
+import { KEEP_STATE_TEXT } from '../src/assist/console/agent/KeepState';
+import { StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
 import { CameraLinkAccessory, CameraSlot, DeskKeepSlot, ErasureBannerSlot, ResidencyErasureSlot } from '../src/assist/console/PhaseFSlots';
 import { RESIDENCY_PRINT_CSS } from '../src/assist/ResidencyPage';
 import { can, type Capability } from '../src/auth/permissions';
@@ -17,6 +19,7 @@ import { CameraJoinPage } from '../src/camera/CameraJoinPage';
 import { ChatPanel } from '../src/components/ChatPanel';
 import type { ChatItem } from '../src/lib/link';
 import { PasswordResetPage } from '../src/pages/PasswordResetPage';
+import { IDS, ISO, jsonResponse } from './fakes';
 
 const ROLES: UserRole[] = ['technician', 'senior_technician', 'org_admin', 'auditor', 'observer'];
 const who = (cap: Capability) => ROLES.filter((r) => can(r, cap));
@@ -30,17 +33,35 @@ describe('section 2.1 capabilities', () => {
   });
 });
 
+// The built slots and pages read the api; no request leaves the test (an unknown route answers 404).
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => jsonResponse(404, { error: { code: 'not_found', message: 'not found' } })),
+  );
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('console slots', () => {
-  it('render nothing until their stream supplies a component', () => {
+  it('render the component their stream built (wave 1)', () => {
     render(
-      <div data-testid="slots">
+      <div data-testid="camera">
         <CameraSlot session={{ id: '6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b', live: true, consoleRecording: false }} sendChat={() => undefined} tier="p1_browser" />
-        <DeskKeepSlot kept={true} />
+      </div>,
+    );
+    expect(screen.getByTestId('camera').textContent).toContain('Phone camera');
+    render(<DeskKeepSlot kept={true} />);
+    expect(screen.getByTestId('desk-keep-state').textContent).toBe(KEEP_STATE_TEXT);
+    render(
+      <div data-testid="quiet">
         <ErasureBannerSlot role="org_admin" />
         <CameraLinkAccessory message={{ msgId: 'm1', from: 'assist', text: 'hello', ts: 1, mine: true }} />
       </div>,
     );
-    expect(screen.getByTestId('slots').innerHTML).toBe('');
+    // No open erasure is known and the message carries no camera link: both render nothing.
+    expect(screen.getByTestId('quiet').innerHTML).toBe('');
   });
 
   it('the residency erasure slot renders the Phase E line unchanged', () => {
@@ -93,18 +114,50 @@ describe('ctl.event keep plumbing (section 3.4b)', () => {
   });
 });
 
-describe('placeholder pages', () => {
-  it.each([
-    ['Reset your password', PasswordResetPage],
-    ['Phone camera', CameraJoinPage],
-    ['Organisation erasure', ErasurePage],
-  ] as const)('%s says it is not available yet', (title, Page) => {
+describe('the pages behind the new routes (built in wave 1)', () => {
+  it('the reset page asks for the email', () => {
     render(
       <MemoryRouter>
-        <Page />
+        <PasswordResetPage />
       </MemoryRouter>,
     );
-    expect(screen.getByRole('heading', { name: title })).toBeTruthy();
-    expect(screen.getByText(/not available on this server yet/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Reset your password' })).toBeTruthy();
+    expect(screen.getByRole('form', { name: 'Ask for a reset link' })).toBeTruthy();
+    expect(screen.queryByText(/not available on this server yet/)).toBeNull();
+  });
+
+  it('the phone camera page asks for the camera code', () => {
+    render(
+      <MemoryRouter>
+        <CameraJoinPage />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: 'Show the technician your camera' })).toBeTruthy();
+    expect(screen.getByLabelText(/Camera code/)).toBeTruthy();
+    expect(screen.queryByText(/not available on this server yet/)).toBeNull();
+  });
+
+  it('the erasure page renders for an org_admin', () => {
+    const admin: AuthValue = {
+      status: 'authenticated',
+      me: {
+        user: { id: IDS.user, orgId: IDS.org, email: 'admin@example.test', name: 'Asha', role: 'org_admin', status: 'active', createdAt: ISO } as never,
+        org: { id: IDS.org, name: 'Acme Synthetic', slug: 'acme-synthetic' } as never,
+        seat: null,
+      },
+      error: null,
+      setMe: () => undefined,
+      refresh: () => undefined,
+      logout: async () => undefined,
+    };
+    render(
+      <StaticAuthProvider value={admin}>
+        <MemoryRouter>
+          <ErasurePage />
+        </MemoryRouter>
+      </StaticAuthProvider>,
+    );
+    expect(screen.getByRole('heading', { name: 'Organisation erasure' })).toBeTruthy();
+    expect(screen.queryByText(/not available on this server yet/)).toBeNull();
   });
 });

@@ -30,6 +30,9 @@ export const EMULATOR_LOCK = resolve(repoRoot, 'data', '.emulator.lock');
 /** Section 1.5: a second runner waits up to 30 minutes for the lock. */
 export const LOCK_WAIT_MS = 30 * 60_000;
 const LOCK_POLL_MS = 5_000;
+/** No runner holds the lock longer than a spec's 45-minute timeout, so an older lock is stale even when Windows has
+ * reused its owner's pid for another process. */
+const LOCK_MAX_AGE_MS = 50 * 60_000;
 const BOOT_TIMEOUT_MS = 240_000;
 const TAKEN_PORTS = [4000, 4100, 4105];
 
@@ -73,7 +76,8 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * Takes `data/.emulator.lock` (exclusive create). A lock whose owner process is gone is stale and is taken over.
+ * Takes `data/.emulator.lock` (exclusive create). A lock whose owner process is gone, or that is older than
+ * LOCK_MAX_AGE_MS, is stale and is taken over.
  * Returns false when the lock is still held after `waitMs`.
  */
 export async function acquireEmulatorLock(waitMs = LOCK_WAIT_MS, lockPath = EMULATOR_LOCK): Promise<boolean> {
@@ -89,12 +93,15 @@ export async function acquireEmulatorLock(waitMs = LOCK_WAIT_MS, lockPath = EMUL
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
     }
     let owner: number | null = null;
+    let takenAt = NaN;
     try {
-      owner = Number((JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: unknown }).pid) || null;
+      const held = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: unknown; at?: unknown };
+      owner = Number(held.pid) || null;
+      takenAt = typeof held.at === 'string' ? Date.parse(held.at) : NaN;
     } catch {
-      owner = null; // being written, or unreadable: treat as held and wait
+      // being written, or unreadable: owner stays null, so the lock is treated as held and we wait
     }
-    if (owner !== null && !pidAlive(owner)) {
+    if (owner !== null && (!pidAlive(owner) || Date.now() - takenAt > LOCK_MAX_AGE_MS)) {
       rmSync(lockPath, { force: true });
       continue;
     }

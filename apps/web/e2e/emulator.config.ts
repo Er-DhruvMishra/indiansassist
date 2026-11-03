@@ -5,10 +5,12 @@
  * itself through `withEmulatorChrome` (emulator-chrome.ts), which also serialises runs with `data/.emulator.lock`.
  *
  * The api and web ports are the stream's emulator ports: E2E_API_PORT / E2E_WEB_PORT (camera 4310 / 5315, the
- * defaults; mobile 4320 / 5325). Ports 4000, 4100 and 4105 are refused. The data dir is E2E_DATA_DIR (default
- * ./data/e2e-emulator, reset by reset-data.mjs with its ./data containment check). The desktop Assist is this
- * config's Chromium; the phone is Chrome on the emulator, which reaches both ports as `localhost` through
- * `adb reverse`.
+ * defaults; mobile 4320 / 5325). Ports 4000, 4100 and 4105 are refused. The data dir is E2E_DATA_DIR, one per
+ * stream (camera ./data/e2e-camera-emulator, the default; mobile ./data/e2e-mobile-emulator), reset by reset-data.mjs
+ * with its ./data containment check. The desktop Assist is this config's Chromium; the phone is Chrome on the
+ * emulator, which reaches both ports as `localhost` through `adb reverse`. `adb reverse` connects to 127.0.0.1, so the
+ * web dev server listens there (`--host 127.0.0.1`; Vite's `localhost` is `::1` only on Windows) and the api on its
+ * default 0.0.0.0.
  */
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'node:path';
@@ -18,7 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
 const apiPort = process.env.E2E_API_PORT || '4310';
 const webPort = process.env.E2E_WEB_PORT || '5315';
-const dataDir = process.env.E2E_DATA_DIR || './data/e2e-emulator';
+const dataDir = process.env.E2E_DATA_DIR || './data/e2e-camera-emulator';
 const TAKEN = ['4000', '4100', '4105'];
 if (TAKEN.includes(apiPort) || TAKEN.includes(webPort)) {
   throw new Error('e2e:emulator never uses ports 4000, 4100 or 4105');
@@ -73,9 +75,9 @@ export default defineConfig({
           },
         },
         {
-          command: `pnpm --filter @indiansassist/web dev --port ${webPort} --strictPort`,
+          command: `pnpm --filter @indiansassist/web dev --host 127.0.0.1 --port ${webPort} --strictPort`,
           cwd: repoRoot,
-          url: webUrl,
+          url: `http://127.0.0.1:${webPort}`,
           reuseExistingServer: false,
           timeout: 120_000,
           stdout: 'ignore',

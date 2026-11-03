@@ -43,7 +43,7 @@ object AgentControl {
     /** `agentMinLevelFor(op)` (section 5.1 table). */
     fun minLevelFor(op: String): String = when (op) {
         "os.monitors", "os.monitor.select", "os.quality", "level.request" -> "view"
-        "os.input_lock", "os.privacy_screen" -> "elevated"
+        "os.input_lock", "os.privacy_screen", "os.sas" -> "elevated"
         else -> "control"
     }
 

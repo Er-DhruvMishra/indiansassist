@@ -7,10 +7,10 @@
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OrgErasure, UserRole } from '@indiansassist/shared';
-import { StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
+import { RequireAuth, StaticAuthProvider, type AuthValue } from '../src/auth/AuthContext';
 import { ErasureBanner } from '../src/assist/erasure/ErasureBanner';
 import { ErasurePage } from '../src/assist/erasure/ErasurePage';
 import { RESIDENCY_ERASURE_PRINT_CSS, ResidencyErasure } from '../src/assist/erasure/ResidencyErasure';
@@ -202,6 +202,37 @@ describe('ErasurePage', () => {
     route({ 'GET /orgs/current/erasure': () => jsonResponse(409, { error: { code: 'org_erasing', message: 'x' } }) });
     renderPage();
     await screen.findByText(/being erased now/);
+  });
+});
+
+describe('RequireAuth keeps the #confirm= fragment through sign-in (5.6)', () => {
+  function LoginProbe() {
+    const location = useLocation();
+    return <p>from={(location.state as { from?: string } | null)?.from ?? ''}</p>;
+  }
+
+  it('redirects an anonymous visitor to /login with the path and the fragment', () => {
+    const token = 'C'.repeat(43);
+    const anonymous: AuthValue = { ...auth('org_admin'), status: 'anonymous', me: null };
+    render(
+      <StaticAuthProvider value={anonymous}>
+        <MemoryRouter initialEntries={[`/app/settings/erasure#confirm=${token}`]}>
+          <Routes>
+            <Route path="/login" element={<LoginProbe />} />
+            <Route
+              path="/app/settings/erasure"
+              element={
+                <RequireAuth>
+                  <p>erasure page</p>
+                </RequireAuth>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </StaticAuthProvider>,
+    );
+    expect(screen.getByText(`from=/app/settings/erasure#confirm=${token}`)).toBeTruthy();
+    expect(screen.queryByText('erasure page')).toBeNull();
   });
 });
 

@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { authOptionsSchema } from '@indiansassist/shared';
 import { getOrg, getUser, org as orgTable, OrgErasedError } from '@indiansassist/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -86,9 +87,14 @@ describe('Phase F api hooks', () => {
     await t.close();
   });
 
-  it('the stream route plugins register nothing yet', async () => {
-    expect((await call(t.app, '/api/v1/auth/options')).statusCode).toBe(404);
-    expect((await call(t.app, `/api/v1/erasures/${randomUUID()}/certificate`)).statusCode).toBe(404);
+  it('the stream route plugins are registered (built in wave 1)', async () => {
+    const options = await call(t.app, '/api/v1/auth/options');
+    expect(options.statusCode).toBe(200);
+    expect(authOptionsSchema.safeParse(options.json()).success).toBe(true);
+    // The certificate route exists and answers 404 for an erasure that is not completed (here: unknown).
+    const cert = await call(t.app, `/api/v1/erasures/${randomUUID()}/certificate`);
+    expect(cert.statusCode).toBe(404);
+    expect(cert.json()).toMatchObject({ error: { code: 'not_found', message: 'erasure certificate not found' } });
   });
 
   it('registers the Phase F series zero-initialised', async () => {
@@ -121,10 +127,10 @@ describe('Phase F api hooks', () => {
     expect(after.roleGrantedBy).toBe(admin.user.id);
   });
 
-  it('camera side: the stub hello is refused and a Desk cannot speak as the camera', async () => {
+  it('camera side: an unknown code is refused and a Desk cannot speak as the camera', async () => {
     const cam = await SignalClient.open(url);
     const err = await cam.request({ t: 'camera.hello', code: 'ABCD-EFGH-JKMN' }, 'error');
-    expect(err.code).toBe('forbidden');
+    expect(err.code).toBe('camera_link_invalid');
     expect(await cam.closed()).toBe(4403);
     const desk = await SignalClient.open(url, { origin: null });
     const refused = await desk.request({ t: 'camera.hello', code: 'ABCD-EFGH-JKMN' }, 'error');

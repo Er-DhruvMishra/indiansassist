@@ -238,6 +238,35 @@ coordinator's cross-stream integration before commit.
 Waves: F0, then fixes, mail, erasure, camera and mobile in parallel (TypeScript-heavy); linux-p4
 and wayland follow, one at a time, because two Rust builds at once exhaust this machine's memory.
 
-Still outside this machine: the macOS agent and the native iOS share extension (no Apple host);
-a run against a real Linux window manager and session bus; the manual checks on a disposable
-machine; the full-size 2,000-device load run.
+A Mac host joined on 2 Nov 2026 as a separate session, which became the **apple** stream: the
+macOS P3 agent (ScreenCaptureKit, `zsh` playbooks), its signed packaging, and the iOS app with a
+broadcast extension (view only; Apple allows no remote input on iOS).
+
+Still outside this machine: a run against a real Linux window manager and session bus; the
+manual checks on a disposable machine; the full-size 2,000-device load run.
+
+### 8.1 Status (3 Nov 2026): wave 1 and the apple stream integrated
+
+Done: F0; fixes, mail, erasure, camera and mobile; the apple stream's macOS P3 agent, macOS
+packaging, iOS app and broadcast extension; the coordinator's integration (contract revision 3).
+Every gate is green on this machine: build, typecheck, lint, unit tests, `test:scripts`,
+`license:check`, both fixture checks, `validate:infra`, `recorder:test`, Rust fmt, clippy and
+tests (646 passed), every smoke (`smoke:e` 47, `smoke:f` 27 in all four flows), `e2e:e`, the F
+specs, `e2e:mobile` and `e2e:p3`.
+
+Four defects found by the streams are fixed: an installed worker could delete itself; a missing
+or unknown playbook interpreter ran as PowerShell (now refused `not_allowed`); the Android agent
+lacked `os.sas`; the hourly audit checkpoints stopped at an erased org.
+
+Open after wave 1:
+
+- The Jira, ServiceNow, Freshdesk and Zoho request shapes were checked against vendor
+  documentation only; all four stay `verified: false` until a run against a vendor sandbox.
+- A phone camera that reconnects through a different api node cannot resume (§15.10).
+- `mobile-emulator.spec.ts` is flaky under load on this machine; touch on a real Android phone
+  is unverified.
+- Manual: iPhone and iPad Safari, a real iPhone broadcast, macOS capture with the permission
+  granted, Keep on a real desktop.
+- apple: iOS file receive; macOS unattended waits on linux-p4's `ia-session0` unix half.
+
+Next: linux-p4 (wave 2), then wayland (wave 3), then macOS unattended on the linux-p4 base.

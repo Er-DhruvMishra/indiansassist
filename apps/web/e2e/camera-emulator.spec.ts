@@ -7,7 +7,6 @@
  * web 5315); the shared harness takes `data/.emulator.lock`, so it waits while the mobile stream holds the emulator.
  */
 import { spawnSync } from 'node:child_process';
-import { createConnection, createServer, type AddressInfo, type Server } from 'node:net';
 import { join } from 'node:path';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { isNotRun, withEmulatorChrome } from './emulator-chrome';
@@ -53,30 +52,6 @@ async function liveP1(assist: Page, desk: Page): Promise<string> {
   await desk.getByRole('button', { name: 'Share my screen' }).click();
   await expect.poll(async () => (await probeRemoteVideo(assist))?.width ?? 0, { timeout: 60_000 }).toBeGreaterThan(0);
   return sessionId;
-}
-
-/**
- * `adb reverse` reaches the host on 127.0.0.1, but the web dev server started by `emulator.config.ts` listens on
- * `localhost`, which Node resolves to `::1` first on this machine, so Chrome on the device got an empty response.
- * Until that config passes `--host 127.0.0.1` (proposed contract correction), the spec bridges an IPv4 loopback port
- * to the dev server and points the device's web port at it; the harness still removes the mapping afterwards.
- */
-async function bridgeWebPort(webPort: number): Promise<Server> {
-  const server = createServer((client) => {
-    const upstream = createConnection({ host: 'localhost', port: webPort });
-    client.pipe(upstream).pipe(client);
-    const end = () => {
-      client.destroy();
-      upstream.destroy();
-    };
-    client.on('error', end);
-    upstream.on('error', end);
-  });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
-  const port = (server.address() as AddressInfo).port;
-  const r = spawnSync(adbPath(), ['reverse', `tcp:${webPort}`, `tcp:${port}`], { encoding: 'utf8', timeout: 60_000 });
-  if (r.status !== 0) throw new Error(`adb reverse tcp:${webPort} tcp:${port} failed: ${r.stderr}`);
-  return server;
 }
 
 function adbPath(): string {
@@ -153,7 +128,6 @@ test('Phone camera: Chrome on the Android emulator streams its back camera to a 
   const panel = assist
     .getByRole('heading', { name: 'Phone camera', exact: true })
     .locator('xpath=ancestor::section[1]');
-  const after: (() => Promise<void>)[] = [];
   try {
     let sessionId = '';
     let url = '';
@@ -165,8 +139,6 @@ test('Phone camera: Chrome on the Android emulator streams its back camera to a 
     });
 
     const result = await withEmulatorChrome({ apiPort: API_PORT, webPort: WEB_PORT }, async ({ context }) => {
-      const bridge = await bridgeWebPort(WEB_PORT);
-      after.push(() => new Promise<void>((r) => bridge.close(() => r())));
       const phone = await context.newPage();
       await test.step('Chrome on the emulator opens the link (adb reverse: a secure localhost origin)', async () => {
         // Warm-up on the code-entry page (the same lazy chunk): Vite's dev server optimises dependencies on a new
@@ -244,7 +216,6 @@ test('Phone camera: Chrome on the Android emulator streams its back camera to a 
       expect(body.items.find((e) => e.action === 'camera.ended')!.data.by).toBe('phone_stopped');
     });
   } finally {
-    for (const f of after) await f().catch(() => undefined);
     await deskCtx.close();
     await assistCtx.close();
   }

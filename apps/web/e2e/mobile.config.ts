@@ -92,7 +92,8 @@ export default defineConfig({
       timeout: 300_000,
       stdout: 'ignore',
       stderr: 'pipe',
-      env: { VITE_API_URL: apiUrl },
+      // VITE_E2E_OPS_HOOK keeps the console's `window.__iaOps` hook (mobile.spec.ts) in this build only.
+      env: { VITE_API_URL: apiUrl, VITE_E2E_OPS_HOOK: '1' },
     },
   ],
 });

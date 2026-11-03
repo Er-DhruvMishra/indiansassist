@@ -56,7 +56,7 @@ describe('ia.cam security code (section 6.5)', () => {
     const assist = cameraSecurityCode(OFFER_FPR, ANSWER_FPR, Uint8Array.from(nA), Uint8Array.from(nP));
     expect(assist).toBe(phone);
     const other = Uint8Array.from(nP);
-    other[0] ^= 1;
+    other[0] = other[0]! ^ 1;
     const cases: [string, string, Uint8Array, Uint8Array][] = [
       [ANSWER_FPR, OFFER_FPR, nA, nP],
       [OFFER_FPR, ANSWER_FPR, nP, nA],

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseAuditJsonl, verifyAuditJsonl, GENESIS_HASH } from '@indiansassist/shared';
-import { getOrgChainTail, getOrg, getUser, pgliteClientOf, seedSession, seedToken, listAuditByOrgPaginated } from '@indiansassist/db';
+import { getOrgChainTail, getOrg, getUser, pgliteClientOf, seedSession, seedToken, listAuditByOrgPaginated, org as orgTable } from '@indiansassist/db';
+import { eq } from 'drizzle-orm';
 import { Sweeper } from '../src/sweeper.js';
 import { addMember, call, createToken, makeApp, signup, type Account, type TestApp } from './helpers.js';
 
@@ -105,5 +106,17 @@ describe('audit export, verify and checkpoints', () => {
     const top = await listAuditByOrgPaginated(t.db, fresh.org.id, { limit: 1 });
     expect(top.items[0]?.action).toBe('audit.anchored');
     expect(await sweeper.periodicCheckpoints()).toBe(0);
+  });
+
+  it('an erased org is skipped and does not abort the checkpoints of the other orgs (F §5.3 step 6)', async () => {
+    const erased = await signup(t.app);
+    const live = await signup(t.app);
+    await t.db.update(orgTable).set({ auditPepper: null, erasedAt: new Date() }).where(eq(orgTable.id, erased.org.id));
+    const erasedTail = await getOrgChainTail(t.db, erased.org.id);
+    const sweeper = new Sweeper(t.ctx);
+    await expect(sweeper.periodicCheckpoints()).resolves.toBeGreaterThanOrEqual(1);
+    const top = await listAuditByOrgPaginated(t.db, live.org.id, { limit: 1 });
+    expect(top.items[0]?.action).toBe('audit.anchored');
+    expect(await getOrgChainTail(t.db, erased.org.id)).toEqual(erasedTail);
   });
 });

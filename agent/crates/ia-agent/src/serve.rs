@@ -1971,16 +1971,28 @@ impl Live<'_> {
                 requires_elevation,
             } => {
                 let args = req.as_ref().map(|r| &r.args);
+                // Phase F revision 3: a missing or unknown interpreter is refused `not_allowed`; it
+                // never falls back to PowerShell.
+                let Some(interpreter) = run_interpreter(args) else {
+                    tracing::warn!(playbook = %playbook_id, "playbook refused: missing or unknown interpreter");
+                    response = refused_res(req.as_ref(), "not_allowed");
+                    emit_pb_end_error(
+                        &self.pb_tx,
+                        run_id,
+                        playbook_id,
+                        body_hash,
+                        PlaybookError::NotAllowed,
+                    );
+                    return self
+                        .finish_control(req, response, effect, false, None)
+                        .await;
+                };
                 let run = RunRequest {
                     run_id: run_id.clone(),
                     playbook_id: playbook_id.clone(),
                     body_hash: body_hash.clone(),
                     body: body.clone(),
-                    interpreter: args
-                        .and_then(|a| a.get("interpreter"))
-                        .and_then(|v| v.as_str())
-                        .and_then(parse_interpreter)
-                        .unwrap_or(PlaybookInterpreter::Powershell),
+                    interpreter,
                     requires_elevation: *requires_elevation,
                     timeout_sec: args
                         .and_then(|a| a.get("timeoutSec"))
@@ -2020,6 +2032,19 @@ impl Live<'_> {
             }
             _ => {}
         }
+        self.finish_control(req, response, effect, deferred, playbook)
+            .await;
+    }
+
+    /// The tail of [`Self::on_control`]: seals the reply (unless deferred) and applies the effect.
+    async fn finish_control(
+        &mut self,
+        req: Option<CtlReq>,
+        response: Value,
+        effect: SessionEffect,
+        deferred: bool,
+        playbook: Option<PlaybookCheck>,
+    ) {
         let ok = response
             .get("ok")
             .and_then(|v| v.as_bool())
@@ -3462,25 +3487,41 @@ async fn seal_send(chans: &Chans, sc: &mut SecChannel, label: &str, text: &str) 
     }
 }
 
+/// Every wire interpreter (shared `PLAYBOOK_INTERPRETERS`), on every platform: whether this
+/// platform may run it is `check_run`'s decision, never the parser's (Phase F §17.8).
 fn parse_interpreter(s: &str) -> Option<PlaybookInterpreter> {
     match s {
         "powershell" => Some(PlaybookInterpreter::Powershell),
         "cmd" => Some(PlaybookInterpreter::Cmd),
         "sh" => Some(PlaybookInterpreter::Sh),
-        // apple-owned: begin
-        // Phase F §17.2 / §17.8: the macOS agent runs `zsh` (without this arm the run request
-        // fell back to PowerShell and was refused `not_allowed`).
-        #[cfg(target_os = "macos")]
         "zsh" => Some(PlaybookInterpreter::Zsh),
-        // apple-owned: end
         _ => None,
     }
 }
 
+/// The `interpreter` of a `playbook.run` request; `None` (refused `not_allowed`) when it is
+/// missing or unknown (Phase F revision 3: it used to fall back to PowerShell).
+fn run_interpreter(args: Option<&Value>) -> Option<PlaybookInterpreter> {
+    args.and_then(|a| a.get("interpreter"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_interpreter)
+}
+
 fn emit_pb_error(pb_tx: &mpsc::UnboundedSender<PbMsg>, run: &RunRequest, err: PlaybookError) {
+    emit_pb_end_error(pb_tx, &run.run_id, &run.playbook_id, &run.body_hash, err);
+}
+
+/// `pb.end { error }` for a run refused before it started, so the console's run never hangs.
+fn emit_pb_end_error(
+    pb_tx: &mpsc::UnboundedSender<PbMsg>,
+    run_id: &str,
+    playbook_id: &str,
+    body_hash: &str,
+    err: PlaybookError,
+) {
     let end = PbEnd {
         t: "pb.end".into(),
-        run_id: run.run_id.clone(),
+        run_id: run_id.to_string(),
         exit: None,
         duration_ms: 0,
         truncated: false,
@@ -3490,8 +3531,8 @@ fn emit_pb_error(pb_tx: &mpsc::UnboundedSender<PbMsg>, run: &RunRequest, err: Pl
     };
     let _ = pb_tx.send(PbMsg::End {
         end,
-        playbook_id: run.playbook_id.clone(),
-        body_hash: run.body_hash.clone(),
+        playbook_id: playbook_id.to_string(),
+        body_hash: body_hash.to_string(),
     });
 }
 
@@ -3714,6 +3755,28 @@ mod tests {
             Some(PlaybookInterpreter::Powershell)
         );
         assert_eq!(parse_interpreter("bogus"), None);
+        // Phase F revision 3: zsh parses on every platform (the macOS-only arm is gone).
+        assert_eq!(parse_interpreter("zsh"), Some(PlaybookInterpreter::Zsh));
+        assert_eq!(parse_interpreter("sh"), Some(PlaybookInterpreter::Sh));
+    }
+
+    #[test]
+    fn a_missing_or_unknown_interpreter_is_refused_never_powershell() {
+        assert_eq!(run_interpreter(None), None);
+        assert_eq!(run_interpreter(Some(&json!({}))), None);
+        assert_eq!(run_interpreter(Some(&json!({ "interpreter": 3 }))), None);
+        assert_eq!(
+            run_interpreter(Some(&json!({ "interpreter": "bash" }))),
+            None
+        );
+        assert_eq!(
+            run_interpreter(Some(&json!({ "interpreter": "powershell" }))),
+            Some(PlaybookInterpreter::Powershell)
+        );
+        assert_eq!(
+            run_interpreter(Some(&json!({ "interpreter": "zsh" }))),
+            Some(PlaybookInterpreter::Zsh)
+        );
     }
 
     #[test]

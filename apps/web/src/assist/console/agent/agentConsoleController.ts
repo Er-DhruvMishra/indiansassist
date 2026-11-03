@@ -119,8 +119,10 @@ export class AgentConsoleController extends AgentControllerCore {
   // ---------- ops ----------
 
   private op(op: AgentControlOp, args: Record<string, unknown>, id?: string) {
-    // Phase F section 15.6: an e2e spec may define `window.__iaOps` (an array) to read the ops the console sent.
-    (globalThis as { __iaOps?: { op: string; args: Record<string, unknown> }[] }).__iaOps?.push({ op, args });
+    // Phase F section 15.6: an e2e spec may define `window.__iaOps` (an array) to read the ops the console sent. Only
+    // a build made with VITE_E2E_OPS_HOOK=1 (e2e/mobile.config.ts) has the hook; a production build drops this branch.
+    if (import.meta.env.VITE_E2E_OPS_HOOK === '1')
+      (globalThis as { __iaOps?: { op: string; args: Record<string, unknown> }[] }).__iaOps?.push({ op, args });
     if (this.input && ['os.pointer', 'os.scroll', 'os.key', 'os.text', 'os.nav'].includes(op)) this.input.record(op, args);
     return this.ops.request(op, args, id);
   }

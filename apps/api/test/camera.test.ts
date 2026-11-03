@@ -500,4 +500,43 @@ describe('two nodes sharing presence (section 6.2c)', () => {
       k.closeAll();
     }
   });
+
+  it('a phone on the node that does not own the session is bridged to the owner, which spends the code', async () => {
+    const acc = await signup(A.app);
+    const k = new Kit(A, A.url);
+    try {
+      const s = await k.activeSession(acc); // A owns the session
+      const res = await call(A.app, `/api/v1/sessions/${s.sessionId}/camera-links`, {
+        method: 'POST',
+        cookie: acc.cookie,
+      });
+      expect(res.statusCode).toBe(201);
+      const body = res.json() as { cameraId: string; code: string };
+      await s.assist.next('camera.state', (m: Msg) => m.state === 'linked');
+      // the phone lands on B: B pipes the hello to A, A answers through B
+      const ph = await phone(B.url);
+      const ok = await ph.request({ t: 'camera.hello', code: body.code }, 'camera.hello.ok');
+      expect(ok).toMatchObject({ cameraId: body.cameraId, sessionId: s.sessionId });
+      await s.assist.next('camera.state', (m: Msg) => m.state === 'joined');
+      ph.send({ t: 'camera.ready', cameraId: body.cameraId, width: 640, height: 480, facing: 'environment' });
+      await s.assist.next('camera.state', (m: Msg) => m.state === 'live');
+      // the owner spent the code: the same code is refused on either node
+      const again = await phone(A.url);
+      again.send({ t: 'camera.hello', code: body.code });
+      expect((await again.next('error')).code).toBe('camera_link_invalid');
+      // the owner's end reaches the bridged phone
+      const del = await call(A.app, `/api/v1/sessions/${s.sessionId}/camera-links/${body.cameraId}`, {
+        method: 'DELETE',
+        cookie: acc.cookie,
+      });
+      expect(del.statusCode).toBe(204);
+      expect(await ph.next('camera.closed')).toMatchObject({ reason: 'assist' });
+      await sleep(100);
+      const entries = await actions(s.sessionId, db);
+      expect(entries.some((e) => e.action === 'camera.started')).toBe(true);
+      expect(entries.find((e) => e.action === 'camera.ended')?.data).toMatchObject({ by: 'assist' });
+    } finally {
+      k.closeAll();
+    }
+  });
 });

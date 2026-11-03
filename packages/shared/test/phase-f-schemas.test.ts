@@ -25,7 +25,6 @@ import {
   INTEGRATION_VERIFICATION,
   LIMITS,
   MAIL_KINDS,
-  NotBuiltError,
   ORG_SECRET_PURPOSES,
   PARTICIPANT_ROLES,
   PLAYBOOK_INTERPRETERS,
@@ -53,6 +52,7 @@ import {
   erasureApproveSchema,
   erasureCertificateSchema,
   erasureRequestSchema,
+  ERASURE_SIG_DOMAIN,
   erasureSigningInput,
   erasureStatusReplySchema,
   formatCameraCode,
@@ -108,7 +108,7 @@ describe('Phase F enums and additive values (section 16.2)', () => {
     expect(SESSION_END_REASONS.at(-1)).toBe('org_erased');
     expect(WEBRTC_PEERS).toEqual(['assist', 'recorder', 'camera']);
     expect(CAPTURE_PATHS.slice(-2)).toEqual(['portal', 'sck']);
-    expect(CAPTURE_CAUSES.slice(-2)).toEqual(['portal_denied', 'portal_closed']);
+    expect(CAPTURE_CAUSES.slice(-3)).toEqual(['portal_denied', 'portal_closed', 'sck_stopped']);
     expect(AGENT_CONTROL_EVENT_KINDS.at(-1)).toBe('keep');
     expect(AGENT_PLATFORMS.at(-1)).toBe('macos');
     expect(DESK_OSES.at(-1)).toBe('ios');
@@ -307,7 +307,8 @@ describe('mail (section 4)', () => {
     expect(ok(userSchema, { ...user, inviteMailedAt: T })).toBe(true);
     expect(ok(userSchema, { ...user, inviteMailedAt: null })).toBe(true);
     expect(ok(inviteResponseSchema, { user, inviteUrl: 'x', mailed: true })).toBe(true);
-    expect(ok(inviteResponseSchema, { user, inviteUrl: 'x' })).toBe(true);
+    // Revision 3: the api always sends `mailed`, so it is required.
+    expect(ok(inviteResponseSchema, { user, inviteUrl: 'x' })).toBe(false);
   });
 });
 
@@ -383,25 +384,39 @@ describe('erasure (section 5)', () => {
     expect(ok(erasureCertificateSchema, { ...cert, externalFlows: ['carrier_pigeon'] })).toBe(false);
     expect(ok(erasureCertificateSchema, { ...cert, signature: { ...cert.signature, domain: 'ia-residency-v1' } })).toBe(false);
     expect(ok(erasureCertificateSchema, { ...cert, chain: { ...cert.chain, extra: 1 } })).toBe(false);
-    expect(() => erasureSigningInput(cert)).toThrow(NotBuiltError);
-    expect(() => verifyErasureCertificate(cert, [])).toThrow(NotBuiltError);
-    await expect(signErasureCertificate(cert as never, '00'.repeat(32), '0123456789abcdef')).rejects.toThrow(NotBuiltError);
+    // Built by the erasure stream (5.5): the domain-prefixed signing input; verify never throws; a kid that is not the
+    // seed's is refused before signing.
+    const input = erasureSigningInput(cert);
+    expect(new TextDecoder().decode(input.slice(0, 14))).toBe(`${ERASURE_SIG_DOMAIN}\n`);
+    expect(erasureSigningInput({ ...cert, signature: { ...cert.signature, sig: 'B'.repeat(86) } })).toEqual(input);
+    expect(verifyErasureCertificate(cert, []).ok).toBe(false);
+    expect(verifyErasureCertificate('not a certificate', [])).toEqual({ ok: false, cause: 'malformed' });
+    await expect(signErasureCertificate(cert as never, '00'.repeat(32), '0123456789abcdef')).rejects.toThrow(/kid does not belong/);
   });
 });
 
-describe('touch gestures (section 7.2): types and thresholds only', () => {
-  it('the mobile stream fills the recognizer and the mapping', () => {
+describe('touch gestures (section 7.2): thresholds, the recognizer and the mapping', () => {
+  it('the mobile stream filled the recognizer and the mapping', () => {
     expect(DEFAULT_GESTURE_CONFIG.longPressMs).toBe(500);
     expect(DEFAULT_GESTURE_CONFIG.pinchRatio).toBe(0.15);
-    expect(() => createGestureRecognizer(DEFAULT_GESTURE_CONFIG, { zoom: 1, trackpad: false, scrollWhileZoomed: false })).toThrow(NotBuiltError);
-    expect(() => mapGestureToOps({ kind: 'tap', x: 0.5, y: 0.5 }, { kind: 'native', control: true })).toThrow(NotBuiltError);
+    const r = createGestureRecognizer(DEFAULT_GESTURE_CONFIG, { zoom: 1, trackpad: false, scrollWhileZoomed: false });
+    expect(r.busy).toBe(false);
+    expect(mapGestureToOps({ kind: 'tap', x: 0.5, y: 0.5 }, { kind: 'native', control: true })).toEqual([
+      { kind: 'op', op: 'os.pointer', args: { kind: 'click', nx: 0.5, ny: 0.5, button: 0 } },
+    ]);
+    expect(mapGestureToOps({ kind: 'pinch', scale: 1.5, cx: 10, cy: 20 }, { kind: 'none', control: false })).toEqual([
+      { kind: 'view', action: 'zoom', scale: 1.5, cx: 10, cy: 20 },
+    ]);
   });
 });
 
 describe('integration verification record (section 3.3 V4)', () => {
-  it('every vendor type is present and unverified until the fixes stream fills it', () => {
+  it('every vendor type is present with its sources; verified exactly when nothing is left unconfirmed', () => {
     expect(Object.keys(INTEGRATION_VERIFICATION).sort()).toEqual(['freshdesk', 'jira', 'servicenow', 'zoho_desk']);
-    for (const v of Object.values(INTEGRATION_VERIFICATION)) expect(v).toEqual({ verified: false, sources: [], unconfirmed: [] });
+    for (const v of Object.values(INTEGRATION_VERIFICATION)) {
+      expect(v.sources.length).toBeGreaterThan(0);
+      expect(v.verified).toBe(v.unconfirmed.length === 0);
+    }
   });
 });
 

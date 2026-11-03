@@ -9,7 +9,6 @@
  * holds `data/.emulator.lock`, maps both ports with `adb reverse` (so the phone's origin is a secure localhost) and
  * removes everything it set up; without `IA_EMULATOR=1`, the SDK or Chrome the spec reports itself skipped with why.
  */
-import net from 'node:net';
 import { chromium, expect, test, type BrowserContext, type CDPSession, type Page } from '@playwright/test';
 import { isNotRun, withEmulatorChrome } from './emulator-chrome';
 import { captureConsole, probeRemoteVideo, recordPeerConnections, shot } from './helpers';
@@ -35,34 +34,6 @@ function recordDataChannelSends(): void {
 const annots = (p: Page) =>
   p.evaluate(() => (window as unknown as { __dcSends: string[] }).__dcSends.filter((d) => d.includes('"annot"')));
 
-/**
- * `vite dev` listens on `localhost`, which on Windows is only `[::1]`, while `adb reverse` connects to 127.0.0.1: the
- * phone then gets an empty response. When 127.0.0.1 does not answer, a small pipe on 127.0.0.1:<port> forwards to
- * [::1]:<port> for the run (the same port, another address, so nothing else is taken). Closed in `finally`.
- */
-async function ipv4Bridge(port: number): Promise<net.Server | null> {
-  const answers = await new Promise<boolean>((resolve) => {
-    const c = net.connect({ host: '127.0.0.1', port }, () => {
-      c.destroy();
-      resolve(true);
-    });
-    c.on('error', () => resolve(false));
-  });
-  if (answers) return null;
-  const server = net.createServer((inbound) => {
-    const out = net.connect({ host: '::1', port });
-    inbound.pipe(out).pipe(inbound);
-    const end = () => {
-      inbound.destroy();
-      out.destroy();
-    };
-    inbound.on('error', end);
-    out.on('error', end);
-  });
-  await new Promise<void>((resolve, reject) => server.once('error', reject).listen(port, '127.0.0.1', () => resolve()));
-  return server;
-}
-
 async function touch(
   cdp: CDPSession,
   type: 'touchStart' | 'touchMove' | 'touchEnd',
@@ -74,13 +45,9 @@ async function touch(
   });
 }
 
+// emulator.config.ts serves the web app on 127.0.0.1 (and the api on 0.0.0.0), which `adb reverse` reaches directly.
 test('Android Chrome: sign in, a live P1 console, tap and pinch', async () => {
-  const bridges = process.env.IA_EMULATOR === '1' ? [await ipv4Bridge(WEB_PORT), await ipv4Bridge(API_PORT)] : [];
-  try {
-    await run();
-  } finally {
-    for (const b of bridges) b?.close();
-  }
+  await run();
 });
 
 async function run(): Promise<void> {

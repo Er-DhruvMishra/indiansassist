@@ -388,6 +388,12 @@ fn wire_names_equal_the_shared_names() {
     );
     assert_eq!(names(&NavAction::ALL), strs(&v["navActions"]));
     assert_eq!(names(&CapturePath::ALL), strs(&v["capturePaths"]));
+    // Phase F revision 3: `sck_stopped` (apple) is mirrored in the shared CAPTURE_CAUSES too.
+    let causes: Vec<String> = ia_core::capture_decision::CaptureCause::ALL
+        .iter()
+        .map(|c| c.as_str().to_string())
+        .collect();
+    assert_eq!(causes, strs(&v["captureCauses"]));
     assert_eq!(names(&SecFailReason::ALL), strs(&v["secFailReasons"]));
     assert_eq!(P3_DATA_CHANNEL_LABELS, strs(&v["p3DataChannelLabels"]));
     assert_eq!(SEC_ENCRYPTED_LABELS, strs(&v["secEncryptedLabels"]));

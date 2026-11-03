@@ -50,7 +50,11 @@ export async function handleRecorderHello(hub: SignalHub, conn: Conn, msg: Signa
     return conn.close(WS_CLOSE.forbidden, 'forbidden');
   }
   conn.side = 'recorder';
-  conn.recorder = { recorderId: msg.recorderId, maxSessions: msg.maxSessions ?? LIMITS.recorderMaxSessionsDefault };
+  conn.recorder = {
+    recorderId: msg.recorderId,
+    maxSessions: msg.maxSessions ?? LIMITS.recorderMaxSessionsDefault,
+    features: msg.features ?? [],
+  };
   conn.bucket = new TokenBucket(LIMITS.recorderFramesPerSec, LIMITS.recorderFramesBurst);
   ctx.metrics.recorderConnections.inc();
   ctx.log.info({ connectionId: conn.id, recorderId: msg.recorderId }, 'recorder connected');

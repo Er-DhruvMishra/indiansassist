@@ -14,6 +14,7 @@ import { isoOrNull, iso } from '../lib/time.js';
 import { endSessionQuietly, type EndedSession } from '../services/session-end.js';
 import { clearTimer, clearTimers, setTimer, type Conn, type Live } from './conn.js';
 import { onRecorderClosed, recorderOnEnded } from './recorder.js';
+import { onCameraConnClosed } from './camera.js';
 import { protectionsReleased } from '../fleet/session-hooks.js';
 import type { SignalHub } from './hub.js';
 
@@ -52,6 +53,7 @@ export async function notifyTokenPresence(hub: SignalHub, tokenId: string): Prom
 export async function onConnClosed(hub: SignalHub, conn: Conn): Promise<void> {
   const { ctx } = hub;
   if (conn.side === 'recorder') return onRecorderClosed(hub, conn);
+  if (conn.side === 'camera') return onCameraConnClosed(hub, conn);
   if (conn.side === 'desk' && conn.desk) {
     const sid = conn.desk.sessionId;
     const workerOnly = Boolean(conn.desk.deviceId);

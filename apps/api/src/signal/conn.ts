@@ -24,6 +24,7 @@ import {
   type SessionState,
   type SignalErrorCode,
   type StoredConsentLevel,
+  type RecorderFeature,
 } from '@indiansassist/shared';
 import WebSocket from 'ws';
 import type { Principal } from '../plugins/auth.js';
@@ -49,8 +50,8 @@ export type DeskInfo = {
   client: DeskClient | null;
 };
 
-/** A helloed recorder socket (Phase A.2 section 4). */
-export type RecorderInfo = { recorderId: string; maxSessions: number };
+/** A helloed recorder socket (Phase A.2 section 4); `features` is `recorder.hello.features` (F §6.5a), [] when absent. */
+export type RecorderInfo = { recorderId: string; maxSessions: number; features: readonly RecorderFeature[] };
 
 /** Where a Conn's frames go. */
 export interface Transport {

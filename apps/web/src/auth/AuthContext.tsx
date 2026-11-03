@@ -103,7 +103,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
         <Spinner label="Checking your session" />
       </main>
     );
-  if (status === 'anonymous') return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  // The fragment is kept (F §5.6): the solo erasure's `#confirm=` link must survive the sign-in it may need.
+  if (status === 'anonymous') return <Navigate to="/login" replace state={{ from: location.pathname + location.hash }} />;
   if (status === 'error')
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-3 p-6">

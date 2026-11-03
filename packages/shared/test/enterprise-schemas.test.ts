@@ -364,9 +364,11 @@ describe('rest-sso', () => {
 });
 
 describe('enterprise/integrations and rest-integrations', () => {
-  it('ships no unverified Zoho data centre, so no zoho config validates yet', () => {
-    expect(ZOHO_DATA_CENTERS).toEqual([]);
-    expect(ok(INTEGRATION_CONFIG_SCHEMAS.zoho_desk, { dataCenter: 'in', orgId: '1', departmentId: '2', defaultContactEmail: 'a@b.co', priority: null })).toBe(false);
+  it('ships only the verified Zoho data centres (F §3.3); an unverified one such as cn is refused', () => {
+    expect(ZOHO_DATA_CENTERS.map((d) => d.id)).toEqual(['us', 'eu', 'in', 'au', 'jp', 'ca', 'sa']);
+    const zoho = { dataCenter: 'in', orgId: '1', departmentId: '2', defaultContactEmail: 'a@b.co', priority: null };
+    expect(ok(INTEGRATION_CONFIG_SCHEMAS.zoho_desk, zoho)).toBe(true);
+    expect(ok(INTEGRATION_CONFIG_SCHEMAS.zoho_desk, { ...zoho, dataCenter: 'cn' })).toBe(false);
   });
   it('per-type config schemas', () => {
     const C = INTEGRATION_CONFIG_SCHEMAS;

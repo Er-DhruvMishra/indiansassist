@@ -11,9 +11,10 @@
  * `closed`. Org / user / token scoped events (knock fan-out, held knocks, revocation, sign-out) go to every node on
  * `cluster`; each node applies them to its own sockets.
  */
-import { WS_CLOSE, type SessionState } from '@indiansassist/shared';
+import { WS_CLOSE, type SessionState, type SignalOf } from '@indiansassist/shared';
 import { findTokenByTid, getDevice, getOrg, getSession, type SessionRow, type TokenRow } from '@indiansassist/db';
 import { completeWorkerHello } from '../fleet/worker.js';
+import { handleCameraHello } from './camera.js';
 import { channels } from '../adapters/presence.js';
 import { canActOnToken } from '../lib/rbac.js';
 import { principalFromAuthSessionId } from '../plugins/auth.js';
@@ -26,7 +27,7 @@ import type { SignalHub } from './hub.js';
 import { performHeldKnocks, type KnockUser } from './knock.js';
 import { onConnClosed, onSessionEnded, onTokenRevoked } from './lifecycle.js';
 
-export type ConnSnapshot = { id: string; side: 'assist' | 'desk'; ip: string; ua: string | null; authSessionId: string | null; desk: DeskInfo | null };
+export type ConnSnapshot = { id: string; side: 'assist' | 'desk' | 'camera'; ip: string; ua: string | null; authSessionId: string | null; desk: DeskInfo | null };
 
 type TokRef = Pick<TokenRow, 'orgId' | 'createdBy'>;
 
@@ -45,6 +46,9 @@ export type NodeMsg =
   | { k: 'device-kick'; deviceId: string; code: 'device_disabled' | 'device_unauthenticated'; message: string }
   // Phase D rule 3.6d: a P4 worker hello verified on the holder node, completed by the session's owner.
   | { k: 'worker-hello'; from: string; conn: ConnSnapshot; sessionId: string; gen: number; re?: string }
+  // Phase F section 6.4: a phone's first `camera.hello { code }` on a node that does not own the session; the owner
+  // consumes the code, so the holder never spends it.
+  | { k: 'camera-hello'; from: string; conn: ConnSnapshot; msg: SignalOf<'camera.hello'> }
   | { k: 'rpc-reply'; id: string; value: unknown };
 
 export type ClusterEvent =
@@ -136,7 +140,7 @@ export class Bridge {
   /** The owner node a frame of this local socket must be forwarded to, or null to handle it here. */
   async ownerFor(conn: Conn, sessionId: string | undefined): Promise<string | null> {
     if (!this.on || conn.remote) return null;
-    if (conn.side === 'desk') return conn.pipeTo;
+    if (conn.side === 'desk' || conn.side === 'camera') return conn.pipeTo;
     if (conn.side !== 'assist' || !sessionId || this.hub.live.has(sessionId)) return null;
     const cached = conn.routes.get(sessionId);
     if (cached) return cached;
@@ -169,6 +173,20 @@ export class Bridge {
     conn.pipes.add(s.nodeId);
     conn.desk.sessionId = s.id;
     this.toNode(s.nodeId, { k: 'worker-hello', from: this.self, conn: snapshot(conn), sessionId: s.id, gen, ...(re !== undefined ? { re } : {}) });
+    return true;
+  }
+
+  /**
+   * Phase F section 6.4: a phone whose code names a session owned by another live node is piped there, as a Desk is;
+   * the owner peeks, consumes and answers. True when forwarded.
+   */
+  async forwardCameraHello(conn: Conn, s: Pick<SessionRow, 'id' | 'nodeId'>, msg: SignalOf<'camera.hello'>): Promise<boolean> {
+    if (!this.on || conn.remote || s.nodeId === this.self || !(await this.alive(s.nodeId))) return false;
+    conn.side = 'camera';
+    conn.pipeTo = s.nodeId;
+    conn.pipes.add(s.nodeId);
+    conn.route(s.id, s.nodeId);
+    this.toNode(s.nodeId, { k: 'camera-hello', from: this.self, conn: snapshot(conn), msg });
     return true;
   }
 
@@ -257,6 +275,9 @@ export class Bridge {
       else if (c.side === 'desk' && c.pipeTo && c.desk?.sessionId === sessionId) {
         c.send(frame);
         c.close(WS_CLOSE.sessionEnded, 'session ended');
+      } else if (c.side === 'camera' && c.pipeTo && c.routes.has(sessionId)) {
+        c.send({ t: 'camera.closed', reason: 'session_ended' });
+        c.close(WS_CLOSE.normal, 'camera ended');
       }
     }
   }
@@ -364,6 +385,19 @@ export class Bridge {
         const rc = this.remoteFor(m.from, m.conn);
         return this.enqueue(rc, () => this.workerHello(rc, m));
       }
+      case 'camera-hello': {
+        const rc = this.remoteFor(m.from, m.conn);
+        return this.enqueue(rc, () => this.cameraHello(rc, m));
+      }
+    }
+  }
+
+  /** The phone's node peeked the code and found this node the owner (section 6.4); the hello runs here. */
+  private async cameraHello(rc: RemoteConn, m: Extract<NodeMsg, { k: 'camera-hello' }>): Promise<void> {
+    try {
+      await handleCameraHello(this.hub, rc, m.msg);
+    } catch (err) {
+      this.hub.helloFailed(rc, err, m.msg.id);
     }
   }
 
@@ -429,7 +463,7 @@ export class Bridge {
 function snapshot(conn: Conn): ConnSnapshot {
   return {
     id: conn.id,
-    side: conn.side === 'assist' ? 'assist' : 'desk',
+    side: conn.side === 'assist' ? 'assist' : conn.side === 'camera' ? 'camera' : 'desk',
     ip: conn.ip,
     ua: conn.userAgent,
     authSessionId: conn.principal?.authSession.id ?? null,

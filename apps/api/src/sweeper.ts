@@ -198,10 +198,15 @@ export class Sweeper {
     return n;
   }
 
-  /** Every org whose tail entry is not itself an `audit.anchored` entry gets a `periodic` checkpoint. */
+  /**
+   * Every org whose tail entry is not itself an `audit.anchored` entry gets a `periodic` checkpoint.
+   * An erased org (F §5.3 step 6) is skipped: its pepper is gone, so a checkpoint would throw
+   * `OrgErasedError` and abort every later org's checkpoint in the same pass.
+   */
   async periodicCheckpoints(): Promise<number> {
     let n = 0;
     for (const o of await this.ctx.db.select().from(orgTable)) {
+      if (o.erasedAt) continue;
       const tail = await getOrgChainTail(this.ctx.db, o.id);
       if (!tail) continue;
       const last = await getAuditEntryBySeq(this.ctx.db, o.id, tail.seq);

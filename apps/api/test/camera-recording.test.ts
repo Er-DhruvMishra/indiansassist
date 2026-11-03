@@ -47,11 +47,7 @@ async function open(): Promise<SignalClient> {
   return c;
 }
 
-/**
- * A recorder socket. `recorder.hello.features` is parsed by the shared schema, but the A.2 hello handler
- * (`signal/recorder.ts`, not owned by the camera stream) does not keep it yet; until it does (proposed contract
- * correction), the test sets it on the server-side connection as that handler would.
- */
+/** A recorder socket; the A.2 hello handler keeps `recorder.hello.features` on `conn.recorder` (F §6.5a, revision 3). */
 async function recorderOnline(camera: boolean): Promise<SignalClient> {
   const r = await open();
   const ok = await r.request(
@@ -66,7 +62,7 @@ async function recorderOnline(camera: boolean): Promise<SignalClient> {
     'recorder.hello.ok',
   );
   const conn = t.ctx.hub.conns.get(ok.connectionId as string)!;
-  if (camera && conn.recorder) (conn.recorder as { features?: string[] }).features ??= ['camera'];
+  expect(conn.recorder?.features).toEqual(camera ? ['camera'] : []);
   return r;
 }
 

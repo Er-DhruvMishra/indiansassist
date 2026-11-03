@@ -11,7 +11,7 @@
  * starter playbook ("Collect logs (zip)", non-elevation and non-destructive) streaming pb.output and exiting 0,
  * the agent stats widget showing fps/bitrate, the elevation request (hand-over mint audit entry; the runas
  * relaunch is stubbed), Stop from the agent (a `stop` line on its stdin) ending the session, the audit chain
- * verifying, and the self-delete decision being logged. Files the run creates on the host (the received note,
+ * verifying, and the exit decision being logged. Files the run creates on the host (the received note,
  * the logs zip) are removed after they are checked.
  */
 import { createHash, randomBytes } from 'node:crypto';
@@ -199,7 +199,7 @@ test('Package 3: Assist console completes a real session with the native agent',
       // --stop-after fires; or interrupt the agent to Stop now.
       agent!.interrupt();
       await expect(assist.getByText(/^Session ended/).first()).toBeVisible({ timeout: 30_000 });
-      await agent!.waitForLine(/self-delete.*(skip|decision|keep)/i, 15_000); // self-delete decision logged (--no-self-delete)
+      await agent!.waitForLine(/exit decision: no file change.*no-self-delete/i, 15_000); // exit decision logged (--no-self-delete: no file change)
       await shot(assist, 'assist-ended');
     });
 

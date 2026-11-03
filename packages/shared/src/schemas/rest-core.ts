@@ -200,8 +200,8 @@ export const inviteRequestSchema = z.object({
   /** Phase F section 4.2a: default true when invite mail is available (`/auth/options.inviteMail`), else ignored. */
   sendEmail: z.boolean().optional(),
 });
-/** `mailed` (Phase F section 4.2a): whether the invitation mail was sent; absent from a pre-Phase F api. */
-export const inviteResponseSchema = z.object({ user: userSchema, inviteUrl: z.string(), mailed: z.boolean().optional() });
+/** `mailed` (Phase F section 4.2a, required since revision 3: the api always sends it): whether the invitation mail was sent. */
+export const inviteResponseSchema = z.object({ user: userSchema, inviteUrl: z.string(), mailed: z.boolean() });
 
 export const roleChangeRequestSchema = z.object({ role: userRoleSchema, tier: packageTierSchema.optional() });
 export const statusChangeRequestSchema = z.object({ status: z.enum(['active', 'disabled']) });

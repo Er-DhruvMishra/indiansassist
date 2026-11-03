@@ -15,6 +15,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -67,7 +68,8 @@ export class AgentProcess {
       env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'ia_agent=info,info' },
     }) as ChildProcessWithoutNullStreams;
     const onChunk = (buf: Buffer) => {
-      for (const line of buf.toString('utf8').split(/\r?\n/)) {
+      // The agent's tracing output is coloured: patterns such as `op=os.pointer` match only once the ANSI escapes go.
+      for (const line of stripVTControlCharacters(buf.toString('utf8')).split(/\r?\n/)) {
         if (!line) continue;
         this.lines.push(line);
         console.log(`[agent] ${line}`);
