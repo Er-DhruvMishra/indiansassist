@@ -281,17 +281,108 @@ pub fn linux_capabilities(monitors: u8, wayland: bool) -> AgentCapabilities {
 }
 
 // apple-owned: begin
-/// Phase F §17.2: the macOS `desk.hello.client.capabilities`, from what TCC has granted at
-/// `desk.hello`. The documented empty value until the apple stream fills it: no features.
+/// Phase F §17.2: what TCC has granted this process at `desk.hello`.
 #[cfg(target_os = "macos")]
-pub fn macos_capabilities(monitors: u8) -> AgentCapabilities {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MacGrants {
+    /// Screen Recording (`CGPreflightScreenCaptureAccess`).
+    pub screen: bool,
+    /// Accessibility (`AXIsProcessTrusted`).
+    pub accessibility: bool,
+}
+
+/// Phase F §17.2: the macOS `desk.hello.client.capabilities`, from what TCC has granted at
+/// `desk.hello`: `screen` (and `multi_monitor`, `recorder`) only with Screen Recording, `input`
+/// and `input_text` only with Accessibility; `clipboard`, `files`, `chat` and `playbooks` always.
+/// Without Screen Recording one monitor is advertised (the schema minimum, as on Wayland) and the
+/// console shows the no-screen state in words. `elevation: 'user'`, interpreters `zsh` and `sh`.
+#[cfg(target_os = "macos")]
+pub fn macos_capabilities(monitors: u8, grants: MacGrants) -> AgentCapabilities {
+    let monitors = if grants.screen {
+        monitors.clamp(1, 16)
+    } else {
+        1
+    };
+    let mut features: Vec<String> = Vec::new();
+    if grants.screen {
+        features.push("screen".into());
+        if monitors > 1 {
+            features.push("multi_monitor".into());
+        }
+    }
+    if grants.accessibility {
+        features.extend(["input".to_string(), "input_text".to_string()]);
+    }
+    features.extend(["clipboard", "files", "chat", "playbooks"].map(String::from));
+    if grants.screen {
+        features.push("recorder".into());
+    }
     AgentCapabilities {
-        monitors: monitors.clamp(1, 16),
+        monitors,
         elevation: ElevationLevel::User,
-        features: Vec::new(),
+        features,
         encoders: vec![VideoEncoder::Vp8, VideoEncoder::Vp9],
         hw_encoder: false,
-        interpreters: Vec::new(),
+        interpreters: vec![PlaybookInterpreter::Zsh, PlaybookInterpreter::Sh],
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_capabilities_tests {
+    use super::*;
+
+    fn grants(screen: bool, accessibility: bool) -> MacGrants {
+        MacGrants {
+            screen,
+            accessibility,
+        }
+    }
+
+    #[test]
+    fn everything_granted_on_two_displays() {
+        let c = macos_capabilities(2, grants(true, true));
+        assert_eq!(c.monitors, 2);
+        assert_eq!(
+            c.features,
+            [
+                "screen",
+                "multi_monitor",
+                "input",
+                "input_text",
+                "clipboard",
+                "files",
+                "chat",
+                "playbooks",
+                "recorder"
+            ]
+        );
+        assert_eq!(
+            c.interpreters,
+            [PlaybookInterpreter::Zsh, PlaybookInterpreter::Sh]
+        );
+        assert_eq!(c.elevation, ElevationLevel::User);
+    }
+
+    #[test]
+    fn no_screen_recording_means_no_screen_and_one_monitor() {
+        let c = macos_capabilities(3, grants(false, true));
+        assert_eq!(c.monitors, 1);
+        assert!(!c.features.iter().any(|f| f == "screen" || f == "recorder"));
+        assert!(c.features.iter().any(|f| f == "input"));
+    }
+
+    #[test]
+    fn no_accessibility_means_no_input() {
+        let c = macos_capabilities(1, grants(true, false));
+        assert!(!c.features.iter().any(|f| f.starts_with("input")));
+        assert!(!c.features.iter().any(|f| f == "multi_monitor"));
+        assert!(c.features.iter().any(|f| f == "screen"));
+    }
+
+    #[test]
+    fn nothing_granted_still_offers_chat_files_and_playbooks() {
+        let c = macos_capabilities(1, grants(false, false));
+        assert_eq!(c.features, ["clipboard", "files", "chat", "playbooks"]);
     }
 }
 // apple-owned: end

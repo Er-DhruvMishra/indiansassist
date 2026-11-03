@@ -78,13 +78,114 @@ fn main() {
         None => println!("No support code supplied; the connect window would prompt for one."),
     }
 
+    // apple-owned: begin
+    // Phase F §17.2: AppKit windows run only on the main thread, so on macOS the agent's work
+    // moves to a worker thread and the main thread hosts the UI.
+    #[cfg(all(target_os = "macos", feature = "gui"))]
+    let Some(resolved) = macos_run_on_worker(&cli, resolved) else {
+        return;
+    };
+    // apple-owned: end
     run(&cli, resolved);
 }
 
 // apple-owned: begin
-/// Phase F §17.2: the macOS start-up checks and carriers (apple stream). Empty until then.
+/// Run [`run`] on a worker thread while the main thread hosts the UI windows; returns `None`
+/// when that is done (the caller then returns), so `run` is never called twice.
+#[cfg(all(target_os = "macos", feature = "gui"))]
+fn macos_run_on_worker(
+    cli: &Cli,
+    resolved: Option<ia_agent::tokensource::Resolved>,
+) -> Option<Option<ia_agent::tokensource::Resolved>> {
+    ia_ui::app::macos_main_thread_enable();
+    let cli = cli.clone();
+    let worker = match std::thread::Builder::new()
+        .name("ia-agent".into())
+        .spawn(move || run(&cli, resolved))
+    {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("the agent thread could not start: {e}");
+            std::process::exit(1);
+        }
+    };
+    ia_ui::app::macos_main_thread_host(|| worker.is_finished());
+    if worker.join().is_err() {
+        std::process::exit(1);
+    }
+    None
+}
+// apple-owned: end
+
+// apple-owned: begin
+/// Phase F §17.2: the macOS start-up. Never as root; the signed `IndiansAssist.iaconfig` sidecar
+/// beside `IndiansAssist.app` (the macOS carrier: the zip's name is gone after extraction); the
+/// `indiansassist://` link of a Launch Services launch, which arrives as a `GetURL` Apple Event
+/// rather than an argument; and the single instance over the per-user socket.
 #[cfg(target_os = "macos")]
-fn macos_start(_cli: &Cli, _candidates: &mut Candidates) {}
+fn macos_start(cli: &Cli, candidates: &mut Candidates) {
+    use ia_platform::macos::{deeplink, os, paths, MacEnv};
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Run IndiansAssist as your normal user account");
+        std::process::exit(1);
+    }
+    let exe = std::env::current_exe().ok();
+    if let Some(path) = exe.as_deref().and_then(paths::sidecar_for) {
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let keys = option_env!("IA_TOKEN_PUBKEYS").unwrap_or("");
+                match ia_agent::desk::macos_sidecar(&bytes, keys) {
+                    Ok(ia_agent::desk::MacSidecar::Verified(tok)) => {
+                        candidates.sidecar_code = Some(tok)
+                    }
+                    Ok(ia_agent::desk::MacSidecar::Unsigned(tok)) => {
+                        eprintln!(
+                            "the sidecar is unsigned (no region key in this build); using it"
+                        );
+                        candidates.sidecar_code = Some(tok);
+                    }
+                    Ok(ia_agent::desk::MacSidecar::NoCode) => {}
+                    Err(e) => eprintln!("the sidecar beside the app was ignored: {e}"),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("the sidecar beside the app could not be read: {e}"),
+        }
+    }
+    let bundled = exe.as_deref().and_then(paths::bundle_of).is_some();
+    if bundled && candidates.arg.is_none() && candidates.sidecar_code.is_none() {
+        if let Some(url) = deeplink::catch_launch_url(std::time::Duration::from_millis(1000)) {
+            match normalise_token_input(&url) {
+                Some(tok) => candidates.arg = Some((ia_core::types::TokenSource::Deeplink, tok)),
+                None => eprintln!("the link that opened IndiansAssist is not a join link"),
+            }
+        }
+    }
+    let env = MacEnv::from_process();
+    let forward = cli
+        .arg
+        .as_ref()
+        .map(|(_, t)| t.0.clone())
+        .unwrap_or_else(|| "focus".to_string());
+    match os::acquire_single_instance(&env, &forward) {
+        Ok(os::InstanceOutcome::First(server)) => {
+            let _ = server.spawn(|line| {
+                // A second start while this one runs is never acted on as a command; the
+                // running session continues (C §11.5).
+                eprintln!(
+                    "Another start of IndiansAssist was ignored ({} bytes); this session continues.",
+                    line.len()
+                );
+            });
+        }
+        Ok(os::InstanceOutcome::Forwarded) => {
+            println!("IndiansAssist is already running.");
+            std::process::exit(0);
+        }
+        Err(e) => eprintln!("single instance unavailable: {e}"),
+    }
+}
 // apple-owned: end
 
 /// Phase E rule 7.3d: never as root. §7.4: a graphical session is required (a synthetic dev run

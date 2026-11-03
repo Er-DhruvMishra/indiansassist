@@ -1,0 +1,114 @@
+# Phase F section 17.4: the iOS app and its ReplayKit broadcast extension. Generate the Xcode project with
+#   ~/.local/bin/xcodegen generate --spec apps/ios/project.yml   (a wrapper for ~/.local/xcodegen/bin/xcodegen)
+# (XcodeGen 2.46.0, a build tool, never shipped). The generated IndiansAssist.xcodeproj is committed beside this file.
+name: IndiansAssist
+options:
+  bundleIdPrefix: com.indiansassist
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+settings:
+  base:
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # No paid identity is assumed (section 17.1): the simulator, or a free development team set locally.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+packages:
+  IndiansAssistKit:
+    path: IndiansAssistKit
+  # Section 17.4: Google's WebRTC as a binary xcframework (BSD-3-Clause), pinned exactly; SwiftPM checks the
+  # binaryTarget checksum (155.0.0: cb9adacf2d6bbf598d1d9e3e6c16d8fb97ca987b5b697746891828f9dc068ffe).
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    exactVersion: 155.0.0
+targets:
+  IndiansAssist:
+    type: application
+    platform: iOS
+    sources:
+      - path: IndiansAssist
+    dependencies:
+      - package: IndiansAssistKit
+        product: IASession
+      - package: IndiansAssistKit
+        product: IASec
+      - target: IndiansAssistBroadcast
+        embed: true
+        codeSign: true
+      # WebRTC is a dynamic framework: an extension cannot embed one, so the app links it and Xcode embeds it in the app's Frameworks folder
+      # and the extension loads it through @executable_path/../../Frameworks.
+      - package: WebRTC
+        product: WebRTC
+    entitlements:
+      path: IndiansAssist/IndiansAssist.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.indiansassist.ios
+    info:
+      path: IndiansAssist/Info.plist
+      properties:
+        CFBundleDisplayName: IndiansAssist
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # The join link (section 17.4); no universal links (they need a file on every self-hosted origin).
+        CFBundleURLTypes:
+          - CFBundleURLName: com.indiansassist.join
+            CFBundleURLSchemes: [indiansassist]
+        NSCameraUsageDescription: Scan the support code's QR on the technician's screen.
+        # Set per build by the operator; the app's Server sheet can override them (for example a dev Mac on the LAN).
+        IAApiOrigin: https://in.indiansassist.example
+        IAWebOrigin: https://in.indiansassist.example
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.indiansassist.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+  IndiansAssistBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: IndiansAssistBroadcast
+    dependencies:
+      - package: IndiansAssistKit
+        product: IASession
+      - package: IndiansAssistKit
+        product: IASec
+      - sdk: ReplayKit.framework
+      - package: WebRTC
+        product: WebRTC
+        embed: false
+    entitlements:
+      path: IndiansAssistBroadcast/IndiansAssistBroadcast.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.indiansassist.ios
+    info:
+      path: IndiansAssistBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: IndiansAssist
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.indiansassist.ios.broadcast
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+schemes:
+  IndiansAssist:
+    build:
+      targets:
+        IndiansAssist: all
+        IndiansAssistBroadcast: all
+    test:
+      gatherCoverageData: false

@@ -25,11 +25,16 @@ pub enum CaptureCause {
     PortalDenied,
     /// Phase F §9.3: the portal stream ended or the user stopped sharing (name only; wayland stream).
     PortalClosed,
+    // apple-owned: begin
+    /// Phase F §17.2: the ScreenCaptureKit stream stopped (Screen Recording revoked, display gone).
+    /// A shared wire name, so it exists on every target, like the portal names.
+    SckStopped,
+    // apple-owned: end
 }
 
 impl CaptureCause {
     /// Every cause, in the order of the shared `CAPTURE_CAUSES`.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Start,
         Self::DdaLost,
         Self::SecureDesktop,
@@ -38,6 +43,9 @@ impl CaptureCause {
         Self::X11Lost,
         Self::PortalDenied,
         Self::PortalClosed,
+        // apple-owned: begin
+        Self::SckStopped,
+        // apple-owned: end
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -50,6 +58,9 @@ impl CaptureCause {
             CaptureCause::X11Lost => "x11_lost",
             CaptureCause::PortalDenied => "portal_denied",
             CaptureCause::PortalClosed => "portal_closed",
+            // apple-owned: begin
+            CaptureCause::SckStopped => "sck_stopped",
+            // apple-owned: end
         }
     }
 }

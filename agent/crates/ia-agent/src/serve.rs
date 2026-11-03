@@ -184,11 +184,19 @@ fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>
 }
 
 // apple-owned: begin
-/// Phase F §17.2: CGEvent input (Accessibility granted) and the `NSPasteboard` text clipboard on
-/// macOS (feature `macos`). The no-op sinks until the apple stream fills it.
+/// Phase F §17.2: CGEvent input (with the pre-injection guard over the agent's own windows) and
+/// the `NSPasteboard` text clipboard on macOS; no-op sinks when capture is synthetic, as on
+/// Windows and Linux. Input is advertised only with the Accessibility grant (`desk.rs`), and
+/// without it Quartz drops posted events, so a sink without the grant does nothing.
 #[cfg(all(target_os = "macos", feature = "macos"))]
-fn platform_io(_synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
-    (Box::new(NoopInput), Box::new(NoopClip))
+fn platform_io(synthetic: bool) -> (Box<dyn InputSink>, Box<dyn ClipboardBridge>) {
+    if synthetic {
+        return (Box::new(NoopInput), Box::new(NoopClip));
+    }
+    (
+        Box::new(ia_input_mac::MacInput::new()),
+        Box::new(ia_input_mac::MacClipboard::new()),
+    )
 }
 // apple-owned: end
 
@@ -237,6 +245,16 @@ fn capture_monitors(cli: &Cli) -> Vec<MonitorInfo> {
             return m;
         }
     }
+    // apple-owned: begin
+    // Phase F §17.2: the active displays in global points (the ScreenCaptureKit list).
+    #[cfg(all(target_os = "macos", feature = "macos"))]
+    {
+        let m = crate::desk::macos_monitors();
+        if !m.is_empty() {
+            return m;
+        }
+    }
+    // apple-owned: end
     // Phase E §7.4 / §7.5: the RandR monitors of an X11 session; the one placeholder a Wayland
     // session advertises (never captured, no video track).
     match crate::desk::detect(cli.synthetic_capture) {
@@ -3449,6 +3467,12 @@ fn parse_interpreter(s: &str) -> Option<PlaybookInterpreter> {
         "powershell" => Some(PlaybookInterpreter::Powershell),
         "cmd" => Some(PlaybookInterpreter::Cmd),
         "sh" => Some(PlaybookInterpreter::Sh),
+        // apple-owned: begin
+        // Phase F §17.2 / §17.8: the macOS agent runs `zsh` (without this arm the run request
+        // fell back to PowerShell and was refused `not_allowed`).
+        #[cfg(target_os = "macos")]
+        "zsh" => Some(PlaybookInterpreter::Zsh),
+        // apple-owned: end
         _ => None,
     }
 }
@@ -3497,6 +3521,25 @@ fn x11_capture_change(
     if reported == Some(now) {
         return None;
     }
+    // apple-owned: begin
+    // Phase F §17.2: ScreenCaptureKit starting (again) is `start`; the stream stopping (Screen
+    // Recording revoked, display gone) is `sck_stopped`, reported once.
+    #[cfg(target_os = "macos")]
+    match now {
+        CapturePath::Sck => {
+            return Some(crate::desk::capture_event(monitor_id, "sck", "start", ts))
+        }
+        CapturePath::None if reported == Some(CapturePath::Sck) => {
+            return Some(crate::desk::capture_event(
+                monitor_id,
+                "none",
+                "sck_stopped",
+                ts,
+            ))
+        }
+        _ => {}
+    }
+    // apple-owned: end
     match now {
         CapturePath::Xshm => Some(crate::desk::capture_event(monitor_id, "xshm", "start", ts)),
         CapturePath::Xgetimage => Some(crate::desk::capture_event(

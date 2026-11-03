@@ -167,8 +167,9 @@ pub enum CaptureSource {
     #[cfg(all(target_os = "linux", feature = "x11"))]
     X11(Box<ia_capture_x11::X11Capturer>),
     // apple-owned: begin
-    // Phase F §17.2: the ScreenCaptureKit source (`ia-capture-mac`, feature `macos`) is added
-    // here by the apple stream, with its arms in `next_frame`, `path` and `lost` below.
+    // Phase F §17.2: the ScreenCaptureKit source (`ia-capture-mac`, feature `macos`).
+    #[cfg(all(target_os = "macos", feature = "macos"))]
+    Sck(Box<ia_capture_mac::SckCapturer>),
     // apple-owned: end
 }
 
@@ -188,10 +189,13 @@ impl CaptureSource {
             }
         }
         // apple-owned: begin
-        // Phase F §17.2: open the ScreenCaptureKit source when Screen Recording is granted;
-        // until the apple stream fills it, macOS falls through to the synthetic source.
+        // Phase F §17.2: ScreenCaptureKit when Screen Recording is granted (checked without a
+        // prompt); without it the session goes on with the synthetic placeholder and `screen` is
+        // not advertised, so the console shows the no-screen state.
         #[cfg(all(target_os = "macos", feature = "macos"))]
-        if !synthetic {}
+        if !synthetic && ia_capture_mac::screen_recording_granted() {
+            return CaptureSource::Sck(Box::new(ia_capture_mac::SckCapturer::new()));
+        }
         // apple-owned: end
         let _ = synthetic;
         CaptureSource::Synthetic(SyntheticCapturer::single(w, h))
@@ -205,6 +209,8 @@ impl CaptureSource {
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.next_frame(id),
             // apple-owned: begin
+            #[cfg(all(target_os = "macos", feature = "macos"))]
+            CaptureSource::Sck(c) => c.next_frame(id),
             // apple-owned: end
         }
     }
@@ -219,6 +225,8 @@ impl CaptureSource {
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.path(id),
             // apple-owned: begin
+            #[cfg(all(target_os = "macos", feature = "macos"))]
+            CaptureSource::Sck(c) => c.path(id),
             // apple-owned: end
         }
     }
@@ -228,6 +236,10 @@ impl CaptureSource {
         match self {
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.lost(),
+            // apple-owned: begin
+            #[cfg(all(target_os = "macos", feature = "macos"))]
+            CaptureSource::Sck(c) => c.lost(),
+            // apple-owned: end
             _ => false,
         }
     }

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Phase F section 17.3: MDM PPPC (Privacy Preferences Policy Control) profile TEMPLATE for the unattended
+     worker. Deploy it only through your MDM; it is never installed by a script or a test (A2).
+
+     Replace before deploying:
+       @TEAM_ID@            your Apple Developer Team ID (the Developer ID Application certificate's OU)
+       @PAYLOAD_UUID_1@ / @PAYLOAD_UUID_2@   two fresh UUIDs (uuidgen)
+
+     What it does, and what it cannot do:
+       * Accessibility is ALLOWED for the worker, so control works without a person approving it.
+       * Screen Recording cannot be pre-granted by any MDM profile: Apple allows only
+         AllowStandardUserToSetSystemService, which lets a standard (non-admin) user approve it once. The first
+         unattended session on each Mac therefore needs a person once; the console says so in words.
+     An ad hoc signed build has no stable code requirement; this profile applies only to a Developer ID build. -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.TCC.configuration-profile-policy</string>
+			<key>PayloadIdentifier</key>
+			<string>com.indiansassist.pppc.tcc</string>
+			<key>PayloadUUID</key>
+			<string>@PAYLOAD_UUID_2@</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadDisplayName</key>
+			<string>IndiansAssist privacy settings</string>
+			<key>Services</key>
+			<dict>
+				<key>Accessibility</key>
+				<array>
+					<dict>
+						<key>Identifier</key>
+						<string>com.indiansassist.desktop</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier "com.indiansassist.desktop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "@TEAM_ID@"</string>
+						<key>Authorization</key>
+						<string>Allow</string>
+						<key>Comment</key>
+						<string>Lets the technician use the mouse and keyboard during an unattended session.</string>
+					</dict>
+				</array>
+				<key>ScreenCapture</key>
+				<array>
+					<dict>
+						<key>Identifier</key>
+						<string>com.indiansassist.desktop</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier "com.indiansassist.desktop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "@TEAM_ID@"</string>
+						<key>Authorization</key>
+						<string>AllowStandardUserToSetSystemService</string>
+						<key>Comment</key>
+						<string>Screen Recording cannot be pre-granted; a standard user may approve it once.</string>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>PayloadDisplayName</key>
+	<string>IndiansAssist</string>
+	<key>PayloadIdentifier</key>
+	<string>com.indiansassist.pppc</string>
+	<key>PayloadOrganization</key>
+	<string>IndiansAssist</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>@PAYLOAD_UUID_1@</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

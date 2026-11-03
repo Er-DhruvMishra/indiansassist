@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Phase F section 17.2: the portable macOS agent's bundle. @VERSION@ is filled by agent/scripts/macos-bundle.sh. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.indiansassist.agent</string>
+	<key>CFBundleName</key>
+	<string>IndiansAssist</string>
+	<key>CFBundleDisplayName</key>
+	<string>IndiansAssist</string>
+	<key>CFBundleExecutable</key>
+	<string>IndiansAssist</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<!-- ScreenCaptureKit (SCStream, SCContentFilter) needs macOS 12.3. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>12.3</string>
+	<key>LSArchitecturePriority</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<!-- No Dock icon: the consent window, the pill and the menu-bar item carry the UI. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<!-- The deep link (section 17.2): Launch Services sends a GetURL Apple Event; nothing is registered at run time. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.indiansassist.join</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>indiansassist</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSHumanReadableCopyright</key>
+	<string>IndiansAssist</string>
+</dict>
+</plist>

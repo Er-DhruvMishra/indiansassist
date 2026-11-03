@@ -1,0 +1,128 @@
+import Foundation
+import XCTest
+@testable import IASession
+
+final class HandoffTests: XCTestCase {
+    func store() throws -> HandoffStore {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ia-handoff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return HandoffStore(directory: dir)
+    }
+
+    func handoff(at date: Date) -> JoinHandoff {
+        JoinHandoff(code: "482193657715", tokenSource: .manual, apiOrigin: "https://in.example", consentedAt: date)
+    }
+
+    func testTheHandoffIsReadOnceAndTheFileIsGoneAfterReading() throws {
+        let s = try store()
+        let now = Date()
+        let h = handoff(at: now)
+        try s.write(h)
+        XCTAssertTrue(s.exists)
+        XCTAssertEqual(s.take(now: now), h)
+        XCTAssertFalse(s.exists, "deleted on read, before the extension opens /signal")
+        XCTAssertNil(s.take(now: now), "read once")
+    }
+
+    func testAnExpiredHandoffIsDeletedAndIgnored() throws {
+        let s = try store()
+        let then = Date(timeIntervalSince1970: 1_800_000_000)
+        try s.write(handoff(at: then))
+        XCTAssertNil(s.take(now: then.addingTimeInterval(JoinHandoff.maxAge + 1)))
+        XCTAssertFalse(s.exists, "a stale hand-off is deleted too")
+        try s.write(handoff(at: then))
+        XCTAssertNil(s.take(now: then.addingTimeInterval(-5)), "from the future")
+        XCTAssertFalse(s.exists)
+    }
+
+    func testAnUnreadableHandoffIsDeleted() throws {
+        let s = try store()
+        try Data("not json".utf8).write(to: s.file)
+        XCTAssertNil(s.take(now: Date()))
+        XCTAssertFalse(s.exists)
+    }
+
+    func testTheAppClearsALeftoverHandoffOnLaunch() throws {
+        let s = try store()
+        try s.write(handoff(at: Date()))
+        s.clear() // what the app does on launch and on cancel
+        XCTAssertFalse(s.exists)
+        s.clear() // and clearing nothing is harmless
+        XCTAssertFalse(s.exists)
+    }
+
+    func testTheCodeIsNeverInUserDefaults() throws {
+        let s = try store()
+        try s.write(handoff(at: Date()))
+        let dump = UserDefaults.standard.dictionaryRepresentation().description
+        XCTAssertFalse(dump.contains("482193657715"))
+    }
+
+    func testTheSignalUrlFollowsTheOrigin() {
+        func url(_ o: String) -> String? {
+            JoinHandoff(code: "c", tokenSource: .manual, apiOrigin: o, consentedAt: Date()).signalUrl
+        }
+        XCTAssertEqual(url("https://in.example"), "wss://in.example/signal")
+        XCTAssertEqual(url("http://192.168.1.20:4170"), "ws://192.168.1.20:4170/signal")
+        XCTAssertNil(url("https://in.example/sub"))
+        XCTAssertNil(url("ftp://in.example"))
+        XCTAssertNil(url("not a url"))
+    }
+
+    func testAStaleHandoffIsNotFresh() {
+        let then = Date(timeIntervalSince1970: 1_000_000)
+        let h = JoinHandoff(code: "c", tokenSource: .deeplink, apiOrigin: "https://x", consentedAt: then)
+        XCTAssertTrue(h.isFresh(now: then.addingTimeInterval(60)))
+        XCTAssertFalse(h.isFresh(now: then.addingTimeInterval(JoinHandoff.maxAge + 1)))
+        XCTAssertFalse(h.isFresh(now: then.addingTimeInterval(-5)), "from the future")
+    }
+
+    func noteStore() throws -> SessionNoteStore {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ia-note-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return SessionNoteStore(directory: dir)
+    }
+
+    func testANewSessionOverwritesTheLastNote() throws {
+        let s = try noteStore()
+        try s.write(SessionNote(state: "ended", technician: "Asha", chat: ["old secret"], files: ["old.txt"]))
+        try s.write(SessionNote(state: "connecting"))
+        let note = s.load()
+        XCTAssertEqual(note?.state, "connecting")
+        XCTAssertEqual(note?.chat, [], "nothing of the last session remains")
+        XCTAssertEqual(note?.files, [])
+        XCTAssertNil(note?.technician)
+    }
+
+    func testDismissingTheSummaryDeletesTheNote() throws {
+        let s = try noteStore()
+        try s.write(SessionNote(state: "ended", technician: "Asha", chat: ["hi"], files: ["a.txt"]))
+        XCTAssertEqual(s.load()?.technician, "Asha")
+        s.clear()
+        XCTAssertFalse(s.exists)
+        XCTAssertNil(s.load())
+    }
+
+    func testOnLaunchANoteOlderThanADayIsDeletedAndAFreshOneKept() throws {
+        let s = try noteStore()
+        let then = Date(timeIntervalSince1970: 1_800_000_000)
+        try s.write(SessionNote(state: "ended", chat: ["hi"], updatedAt: then))
+        s.clearIfStale(now: then.addingTimeInterval(60 * 60))
+        XCTAssertTrue(s.exists, "an hour old is kept")
+        s.clearIfStale(now: then.addingTimeInterval(SessionNoteStore.maxAge + 1))
+        XCTAssertFalse(s.exists, "over a day old is deleted")
+        try Data("garbage".utf8).write(to: s.file)
+        s.clearIfStale(now: then)
+        XCTAssertFalse(s.exists, "an unreadable note is deleted")
+    }
+
+    func testTheNoteIsExcludedFromBackupAndNeverInUserDefaults() throws {
+        let s = try noteStore()
+        try s.write(SessionNote(state: "active", chat: ["a private chat line"]))
+        let excluded = try s.file.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+        XCTAssertEqual(excluded, true)
+        XCTAssertFalse(UserDefaults.standard.dictionaryRepresentation().description.contains("a private chat line"))
+    }
+}

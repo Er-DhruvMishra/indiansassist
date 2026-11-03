@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Phase F section 17.3: the unattended service (root). Installed by the PKG at
+     /Library/LaunchDaemons/com.indiansassist.agent.plist; holds the identity, /signal/device, the policy,
+     the queue, the waker and the tamper outbox. It never captures (F5): the worker does. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.indiansassist.agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Library/IndiansAssist/ia-service</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Standard</string>
+	<key>StandardOutPath</key>
+	<string>/Library/Logs/IndiansAssist/ia-service.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/IndiansAssist/ia-service.log</string>
+</dict>
+</plist>
