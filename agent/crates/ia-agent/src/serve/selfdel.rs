@@ -491,7 +491,46 @@ pub(super) fn perform_self_delete() {
     }
 }
 
-#[cfg(not(any(windows, all(target_os = "linux", feature = "linux-os"))))]
+// apple-owned: begin
+/// §10 D1/D2 on macOS: `selfdel::plan(.., false)` removes the support directory and the
+/// `.iaconfig` sidecar now, and hands the running bundle to a detached helper that removes it once
+/// this process has exited, only when it is a downloaded `IndiansAssist.app`, or the kept copy in
+/// `~/Applications` whose person unticked Keep (rule 3.4d); never one in `/Applications`.
+/// Received files in `~/Downloads/IndiansAssist` stay.
+/// Never run in an automated test (the e2e passes
+/// `--no-self-delete`); the plan and its application are tested against a temporary `$HOME` in
+/// `ia_platform::macos`.
+#[cfg(target_os = "macos")]
+pub(super) fn perform_self_delete() {
+    use ia_platform::macos::{os, selfdel, MacEnv};
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let env = MacEnv::from_process();
+    // `exit_action` returns SelfDelete for the running kept copy only when its person unticked
+    // Keep (remove_after), so on this path a kept copy always means `kept_remove_after`.
+    let kept_remove_after = selfdel::is_kept_copy(&env, &exe);
+    let plan = selfdel::removal_plan(&env, &exe, kept_remove_after);
+    match os::apply_self_delete(&plan, &env, &exe) {
+        Ok(r) if r.failures.is_empty() => tracing::info!(
+            removed = r.removed.len(),
+            bundle_after_exit = ?r.bundle_after_exit,
+            "self-delete: done"
+        ),
+        Ok(r) => tracing::warn!(failures = ?r.failures, "self-delete: partly done"),
+        Err(e) => tracing::warn!(
+            "self-delete: not run ({e}); delete {} by hand",
+            exe.display()
+        ),
+    }
+}
+// apple-owned: end
+
+#[cfg(not(any(
+    windows,
+    all(target_os = "linux", feature = "linux-os"),
+    target_os = "macos"
+)))]
 pub(super) fn perform_self_delete() {}
 
 /// Delete the working directory (`%LOCALAPPDATA%\IndiansAssist\`), the `.iaconfig` sidecar next
