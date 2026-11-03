@@ -2650,6 +2650,18 @@ fn spawn_video(
             .find(|m| m.id == viewed)
             .map(|m| (m.width.max(2) & !1, m.height.max(2) & !1))
             .unwrap_or((1280, 720));
+        // apple-owned: begin
+        // Phase F §17.2: a macOS monitor is in points, and ScreenCaptureKit captures its backing
+        // pixels, so the encoder's native size is the backing size (the ABR ladder still caps it).
+        #[cfg(target_os = "macos")]
+        let (w, h) = match monitors.iter().find(|m| m.id == viewed) {
+            Some(m) if !synthetic => {
+                let px = |v: u32| ((v as f32 * m.scale.max(1.0)).round() as u32).max(2) & !1;
+                (px(m.width), px(m.height))
+            }
+            _ => (w, h),
+        };
+        // apple-owned: end
         let spec = PumpSpec {
             monitor_id: viewed,
             native_w: w,
