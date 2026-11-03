@@ -195,7 +195,7 @@ describe('macOS download (C section 2.2 with the Phase F section 17.2 zip)', () 
     }
   });
 
-  it('a dist zip that cannot be served answers 410 on the download, not a broken archive', async () => {
+  it('a dist zip that cannot be served is left out at load: 503 download_unavailable on prepare', async () => {
     writeDist();
     const dir = t.ctx.config.agent.distDir;
     const bad = storedZip([['Other.app/x', EXE]]);
@@ -213,11 +213,11 @@ describe('macOS download (C section 2.2 with the Phase F section 17.2 zip)', () 
     ];
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ v: 1, builds }));
     t.ctx.agentDist.load();
+    expect(t.ctx.agentDist.lastError).toMatch(/not served: member Other\.app\/x is outside the bundle/);
+    expect(t.ctx.agentDist.manifest().builds).toEqual([]);
     const { compact } = await p3Token(t, admin, 'timed');
     const res = await prepare(compact);
-    expect(res.statusCode).toBe(201);
-    const g = await t.app.inject({ method: 'GET', url: new URL(res.json().url).pathname });
-    expect(g.statusCode).toBe(410);
-    expect(g.json().error.code).toBe('link_expired');
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe('download_unavailable');
   });
 });

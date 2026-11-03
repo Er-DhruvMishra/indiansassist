@@ -7,7 +7,7 @@
  *
  * Every member is stored (method 0), so the archive is a concatenation of fixed parts:
  *
- * - the bundle's local records, cut from the dist zip once (on the first download of a build) and cached;
+ * - the bundle's local records, cut from the dist zip when the build is loaded and cached;
  * - the sidecar's local record, built per request;
  * - the dist zip's central directory, unchanged (the bundle's offsets do not move);
  * - the sidecar's central record and the end-of-central-directory record, built per request.
@@ -116,19 +116,20 @@ export function macZipParts(body: MacZipBody, sidecar: string): Buffer[] {
   return [body.local, member.local, body.central, member.central, eocd];
 }
 
-/** The cached bodies, by dist path and digest (a reload that changes the file changes the digest). */
-const cache = new Map<string, MacZipBody>();
+/** The cached body of each loaded build, by dist path, with the digest it was loaded for. */
+const cache = new Map<string, { sha256: string; body: MacZipBody }>();
 
-/** The cached body of a served macOS build, cut on first use; null when the dist zip is not servable. */
+/**
+ * Loads a macOS build's dist zip (at boot and on the C section 2.2 reload): cuts and caches its parts, or throws with
+ * the reason it cannot be served, so a broken build is reported "not served" when the api starts.
+ */
+export function loadMacZip(build: { path: string; sha256: string }): void {
+  cache.delete(build.path);
+  cache.set(build.path, { sha256: build.sha256, body: macZipBody(readFileSync(build.path)) });
+}
+
+/** The cached body of a loaded macOS build; null unless it was loaded with this digest. */
 export function macZipBodyFor(build: { path: string; sha256: string }): MacZipBody | null {
-  const key = `${build.path}\n${build.sha256}`;
-  const hit = cache.get(key);
-  if (hit) return hit;
-  try {
-    const body = macZipBody(readFileSync(build.path));
-    cache.set(key, body);
-    return body;
-  } catch {
-    return null;
-  }
+  const hit = cache.get(build.path);
+  return hit && hit.sha256 === build.sha256 ? hit.body : null;
 }

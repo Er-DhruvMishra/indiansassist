@@ -178,9 +178,9 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
       parts = linuxArchiveParts(g.region, g.deskCode, build.archive);
     }
     // apple-owned: begin
-    // Phase F section 17.2: the macOS zip of this grant: the bundle's stored members (cut from the dist zip on the
-    // first download of the build and cached) and the signed sidecar `IndiansAssist.iaconfig` carrying this grant's
-    // desk code. Ed25519 is deterministic, so the bytes are a pure function of the grant (Range and HEAD hold).
+    // Phase F section 17.2: the macOS zip of this grant: the bundle's stored members (cut from the dist zip when the
+    // build was loaded) and the signed sidecar `IndiansAssist.iaconfig` carrying this grant's desk code. Ed25519 is
+    // deterministic, so the bytes are a pure function of the grant (Range and HEAD hold).
     if (build.platform === 'macos') {
       const { macZipBodyFor, macZipParts } = await import('../services/macos-archive.js');
       const { signIaconfig } = await import('@indiansassist/shared');
