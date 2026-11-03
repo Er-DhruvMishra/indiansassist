@@ -56,6 +56,14 @@ pub(super) fn keep_event(kept: bool, ts: i64) -> Value {
 /// C L3: the page the agent opens once after Keep, `<origin>/join?kept=1`. The web app is served
 /// from the region's origin (the one the agent joined through); only an http(s) origin with no
 /// path, query or credentials is used.
+#[cfg_attr(
+    not(any(
+        windows,
+        all(target_os = "linux", feature = "linux-os"),
+        target_os = "macos"
+    )),
+    allow(dead_code)
+)]
 pub(super) fn kept_page_url(origin: &str) -> Option<String> {
     let o = origin.trim_end_matches('/');
     let rest = o
@@ -201,7 +209,19 @@ pub(super) fn running_kept_copy() -> bool {
         let env = ia_platform::linux::XdgEnv::from_process();
         ia_platform::linux::selfdel::is_kept_copy(&env, &exe)
     }
-    #[cfg(not(any(windows, all(target_os = "linux", feature = "linux-os"))))]
+    // apple-owned: begin
+    // Phase F §3.4d (macOS): the bundle this runs from is `~/Applications/IndiansAssist.app`.
+    #[cfg(target_os = "macos")]
+    {
+        let env = ia_platform::macos::MacEnv::from_process();
+        ia_platform::macos::selfdel::is_kept_copy(&env, &exe)
+    }
+    // apple-owned: end
+    #[cfg(not(any(
+        windows,
+        all(target_os = "linux", feature = "linux-os"),
+        target_os = "macos"
+    )))]
     {
         let _ = exe;
         false
@@ -270,11 +290,51 @@ pub(super) fn perform_keep(first: bool) {
     }
 }
 
-#[cfg(not(any(windows, all(target_os = "linux", feature = "linux-os"))))]
+// apple-owned: begin
+/// Rule 3.4c (macOS): `selfdel::plan(.., true)` copies the bundle to
+/// `~/Applications/IndiansAssist.app` (replacing an older kept app, no administrator needed) and
+/// removes the logs and state; a kept app running again only clears those (rule 3.4d). Then
+/// `/join?kept=1` opens once when newly kept. Never reached by an automated run (rule 3.4e).
+#[cfg(target_os = "macos")]
+pub(super) fn perform_keep(first: bool) {
+    use ia_platform::macos::{os, selfdel, MacEnv};
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let env = MacEnv::from_process();
+    let plan = selfdel::plan(&env, &exe, true);
+    match os::apply_self_delete(&plan, &env, &exe) {
+        Ok(r) => tracing::info!(
+            kept = ?r.kept_copy,
+            removed = r.removed.len(),
+            failures = ?r.failures,
+            "keep: done"
+        ),
+        Err(e) => {
+            tracing::warn!("keep: not applied ({e})");
+            return;
+        }
+    }
+    if first {
+        open_kept_page();
+    }
+}
+// apple-owned: end
+
+#[cfg(not(any(
+    windows,
+    all(target_os = "linux", feature = "linux-os"),
+    target_os = "macos"
+)))]
 pub(super) fn perform_keep(_first: bool) {}
 
-/// C L3: open `<origin>/join?kept=1` once in the default browser (`ShellExecuteExW` / `xdg-open`).
-#[cfg(any(windows, all(target_os = "linux", feature = "linux-os")))]
+/// C L3: open `<origin>/join?kept=1` once in the default browser (`ShellExecuteExW` / `xdg-open`
+/// / `open`).
+#[cfg(any(
+    windows,
+    all(target_os = "linux", feature = "linux-os"),
+    target_os = "macos"
+))]
 fn open_kept_page() {
     let Some(url) = crate::session::joined().and_then(|j| kept_page_url(&j.api_origin)) else {
         tracing::info!("keep: no web origin to open");
@@ -317,6 +377,21 @@ fn open_kept_page() {
         Ok(_) => tracing::info!("keep: opened the kept page"),
         Err(e) => tracing::warn!("keep: xdg-open failed: {e}"),
     }
+    // apple-owned: begin
+    // Phase F §3.4 (macOS): Launch Services opens the http(s) URL in the default browser; the URL
+    // is one argument (no shell), checked by `kept_page_url`.
+    #[cfg(target_os = "macos")]
+    match std::process::Command::new("/usr/bin/open")
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => tracing::info!("keep: opened the kept page"),
+        Err(e) => tracing::warn!("keep: open failed: {e}"),
+    }
+    // apple-owned: end
 }
 
 /// §10 D1/D2 user-instance self-delete: delete everything the agent can in-process (the

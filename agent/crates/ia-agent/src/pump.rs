@@ -223,6 +223,11 @@ impl CaptureSource {
     pub fn path(&self, id: u32) -> CapturePath {
         let _ = id;
         match self {
+            // apple-owned: begin
+            // Phase F §17.2: a macOS Desk captures only through ScreenCaptureKit, so its synthetic
+            // (dev) source reports `sck`, never the Windows `gdi`.
+            CaptureSource::Synthetic(_) if cfg!(target_os = "macos") => CapturePath::Sck,
+            // apple-owned: end
             CaptureSource::Synthetic(_) => CapturePath::Gdi,
             #[cfg(all(windows, feature = "winapi"))]
             CaptureSource::Dxgi(c) => c.path(id),

@@ -92,6 +92,8 @@ public struct SessionNote: Codable, Equatable {
     public var technician: String?
     public var chat: [String]
     public var files: [String]
+    /// A file the technician offered, waiting for Save or Decline (C §6.1 F4); nil otherwise.
+    public var pendingFile: IncomingOffer?
     /// When the extension last wrote it (seconds since 1970).
     public var updatedAt: Double
 

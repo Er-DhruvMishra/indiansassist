@@ -85,6 +85,53 @@ pub struct SelfDeleteReport {
     pub failures: Vec<String>,
 }
 
+/// Keep (rule 3.4c): copies the bundle `from` to `to` with `ditto` (which keeps the signature)
+/// into a new sibling first, then swaps it in by renames, so `to` never holds a half-copied or
+/// merged bundle; an older kept app is replaced, not overlaid. `~/Applications` is created when
+/// missing (no administrator needed).
+fn keep_bundle(from: &Path, to: &Path) -> io::Result<()> {
+    let dir = to
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no parent"))?;
+    fs::create_dir_all(dir)?;
+    let tag = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    );
+    let fresh = dir.join(format!(".IndiansAssist.app.{tag}.new"));
+    let status = Command::new("/usr/bin/ditto")
+        .arg(from)
+        .arg(&fresh)
+        .status()?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(&fresh);
+        return Err(io::Error::other(format!("ditto exited with {status}")));
+    }
+    let old = dir.join(format!(".IndiansAssist.app.{tag}.old"));
+    let had_old = match fs::symlink_metadata(to) {
+        Ok(_) => {
+            fs::rename(to, &old)?;
+            true
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    if let Err(e) = fs::rename(&fresh, to) {
+        if had_old {
+            let _ = fs::rename(&old, to);
+        }
+        let _ = fs::remove_dir_all(&fresh);
+        return Err(e);
+    }
+    if had_old {
+        let _ = fs::remove_dir_all(&old);
+    }
+    Ok(())
+}
+
 /// Apply a self-delete plan. Refuses a plan that is not contained to the agent's own files; the
 /// bundle goes last. `ditto` copies a kept bundle with its extended attributes and signature.
 pub fn apply_self_delete(
@@ -100,13 +147,7 @@ pub fn apply_self_delete(
     }
     let mut report = SelfDeleteReport::default();
     if let Some((from, to)) = &plan.keep_copy {
-        if let Some(dir) = to.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let status = Command::new("/usr/bin/ditto").arg(from).arg(to).status()?;
-        if !status.success() {
-            return Err(io::Error::other(format!("ditto exited with {status}")));
-        }
+        keep_bundle(from, to)?;
         report.kept_copy = Some(to.clone());
     }
     for f in &plan.remove_files {
@@ -352,6 +393,45 @@ mod tests {
     }
 
     #[test]
+    fn keep_replaces_an_older_kept_app_and_a_kept_app_running_again_only_clears_logs() {
+        let home = temp_home("rekeep");
+        let exe = fake_bundle(&home);
+        let env = MacEnv {
+            home: Some(home.clone()),
+            tmpdir: None,
+        };
+        // An older kept app with a file the new bundle does not have.
+        let kept = home.join("Applications/IndiansAssist.app");
+        fs::create_dir_all(kept.join("Contents/Resources")).unwrap();
+        fs::write(kept.join("Contents/Resources/stale.txt"), b"old").unwrap();
+        apply_self_delete(&selfdel::plan(&env, &exe, true), &env, &exe).unwrap();
+        assert!(kept.join("Contents/MacOS/IndiansAssist").exists());
+        assert!(
+            !kept.join("Contents/Resources/stale.txt").exists(),
+            "replaced, not merged"
+        );
+        let leftovers: Vec<_> = fs::read_dir(home.join("Applications"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            leftovers,
+            vec![std::ffi::OsString::from("IndiansAssist.app")]
+        );
+        // The kept app runs again and keeps: nothing copied, the logs go, the app stays.
+        let kept_exe = kept.join("Contents/MacOS/IndiansAssist");
+        let support = home.join("Library/Application Support/IndiansAssist");
+        fs::create_dir_all(&support).unwrap();
+        fs::write(support.join("agent.log"), b"log").unwrap();
+        let r = apply_self_delete(&selfdel::plan(&env, &kept_exe, true), &env, &kept_exe).unwrap();
+        assert_eq!(r.kept_copy, None);
+        assert!(!support.exists());
+        assert!(kept_exe.exists());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
     fn keep_copies_the_bundle_into_applications_and_leaves_the_rest() {
         let home = temp_home("keep");
         let exe = fake_bundle(&home);
@@ -368,9 +448,12 @@ mod tests {
             .join("Applications/IndiansAssist.app/Contents/MacOS/IndiansAssist")
             .exists());
         assert!(home.join("Downloads/IndiansAssist.app").exists());
-        assert!(home
+        // Rule 3.4c: the logs and state go; the sidecar and received files stay.
+        assert!(!home
             .join("Library/Application Support/IndiansAssist")
             .exists());
+        assert!(home.join("Downloads/IndiansAssist.iaconfig").exists());
+        assert!(home.join("Downloads/IndiansAssist/received.txt").exists());
         fs::remove_dir_all(&home).unwrap();
     }
 

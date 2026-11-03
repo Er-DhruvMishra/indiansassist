@@ -200,7 +200,7 @@ mod mac_host {
 
     use eframe::egui::{self, ViewportBuilder, WindowLevel};
 
-    use super::{ConsentRequest, Emit, IaApp, UiEvent, UiHandle, CONSENT_TITLE};
+    use super::{ConsentRequest, Emit, IaApp, KeepChoice, UiEvent, UiHandle, CONSENT_TITLE};
 
     type Job = Box<dyn FnOnce() + Send>;
     type Queue = (Sender<Job>, Mutex<Option<Receiver<Job>>>);
@@ -304,6 +304,8 @@ mod mac_host {
         let (tx, rx) = channel();
         let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
         let slot = ctx_slot.clone();
+        let keep: Arc<Mutex<KeepChoice>> = Arc::new(Mutex::new(KeepChoice::default()));
+        let app_keep = keep.clone();
         let (done_tx, done_rx) = channel::<()>();
         let job: Job = Box::new(move || {
             let emit: Rc<Emit> = Rc::new(emit);
@@ -328,7 +330,7 @@ mod mac_host {
                     if let Ok(mut g) = slot.lock() {
                         *g = Some(cc.egui_ctx.clone());
                     }
-                    Ok(Box::new(IaApp::new(req, rx, app_emit)))
+                    Ok(Box::new(IaApp::new(req, rx, app_emit, app_keep)))
                 }),
             );
             match result {
@@ -348,6 +350,7 @@ mod mac_host {
             tx,
             ctx: ctx_slot,
             thread,
+            keep,
         }
     }
 }

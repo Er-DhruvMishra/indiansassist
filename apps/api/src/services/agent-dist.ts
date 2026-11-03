@@ -18,6 +18,7 @@ import {
 } from '@indiansassist/shared';
 import type { Config } from '../config.js';
 import { linuxArchiveBody, type LinuxArchiveBody } from './linux-archive.js';
+import { loadMacZip } from './macos-archive.js'; // apple-owned (import)
 
 /** `archive` is set for a Linux build only: the cached compressed ELF body of its per-download `.tar.gz`. */
 export type ServedBuild = AgentBuild & { path: string; file: string; archive?: LinuxArchiveBody };
@@ -55,7 +56,20 @@ export class AgentDist {
           void _f;
           // apple-owned: begin
           // Phase F section 17.2: the macOS build (the cached members of the signed IndiansAssist.app); the apple
-          // stream fills this block, and the coordinator alone edits around it.
+          // stream fills this block, and the coordinator alone edits around it. `services/macos-archive.ts` cuts the
+          // bundle's stored members from the dist zip here and caches them (`routes/download.ts` adds the signed
+          // sidecar per grant); a zip it cannot serve leaves the build out, so it is "not served" from boot on.
+          if (build.platform === 'macos') {
+            const served: ServedBuild = { ...build, size: statSync(path).size, path, file };
+            try {
+              loadMacZip(served);
+            } catch (err) {
+              this.lastError = `${file} is not served: ${(err as Error).message.slice(0, 200)}`;
+              continue;
+            }
+            out.push(served);
+            continue;
+          }
           // apple-owned: end
           if (build.platform === 'linux') {
             const elf = readFileSync(path);

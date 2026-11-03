@@ -1,5 +1,6 @@
 import Foundation
 import IASession
+import UserNotifications
 
 /// The app's state: the server addresses, the code being entered, and the hand-off to the broadcast extension.
 @MainActor
@@ -12,6 +13,8 @@ final class AppModel: ObservableObject {
     @Published var codeError: String?
     @Published var consented = false
     @Published var note: SessionNote?
+    /// Files received from technicians, in the App Group `Received` folder, newest first.
+    @Published var received: [URL] = []
     @Published var apiOrigin: String {
         didSet { UserDefaults.standard.set(apiOrigin, forKey: "server.api") }
     }
@@ -21,6 +24,10 @@ final class AppModel: ObservableObject {
 
     private let handoffs = HandoffStore.appGroup()
     private let notes = SessionNoteStore.appGroup()
+    private let answers = FileAnswerStore.appGroup()
+    private let folder = ReceivedFolder.appGroup()
+    /// Offers answered here: hidden until the extension clears them from the note (within half a second).
+    private var answered: Set<Int64> = []
 
     init() {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -93,10 +100,28 @@ final class AppModel: ObservableObject {
             return false
         }
         consented = true
+        // A file the technician sends is put to the person in a notification while another app is in front (C §6.1
+        // F4 on iOS); asked here, after the person chose to share, never earlier.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         return true
     }
 
+    /// Save or Decline for the file the technician offered; the extension holding the transfer reads it.
+    func answerFile(_ fileId: Int64, accept: Bool) {
+        try? answers?.answer(fileId: fileId, accept: accept)
+        answered.insert(fileId)
+        if note?.pendingFile?.fileId == fileId { note?.pendingFile = nil }
+    }
+
+    func deleteReceived(_ url: URL) {
+        folder?.remove(url)
+        received = folder?.list() ?? []
+    }
+
     func refreshNote() {
-        note = notes?.load()
+        received = folder?.list() ?? []
+        var loaded = notes?.load()
+        if let id = loaded?.pendingFile?.fileId, answered.contains(id) { loaded?.pendingFile = nil }
+        note = loaded
     }
 }

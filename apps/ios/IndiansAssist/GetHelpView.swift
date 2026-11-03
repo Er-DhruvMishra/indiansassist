@@ -1,3 +1,4 @@
+import IASession
 import ReplayKit
 import SwiftUI
 import UIKit
@@ -52,6 +53,19 @@ struct GetHelpView: View {
                         ForEach(note.files, id: \.self) { Label($0, systemImage: "doc") }
                         Button("Dismiss summary", role: .destructive) { model.dismissNote() }
                     }
+                    if let offer = note.pendingFile {
+                        FileOfferSection(offer: offer, technician: note.technician)
+                    }
+                }
+                if !model.received.isEmpty {
+                    Section("Files from the technician") {
+                        ForEach(model.received, id: \.self) { url in
+                            ShareLink(item: url) { Label(url.lastPathComponent, systemImage: "doc") }
+                        }
+                        .onDelete { $0.map { model.received[$0] }.forEach(model.deleteReceived) }
+                        Text("IndiansAssist never opens these files. Use Share to keep one in Files or another app.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     Button("Use another code", role: .cancel) { model.cancel() }
@@ -80,4 +94,29 @@ struct BroadcastPicker: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {}
+}
+
+/// C §6.1 F4 on iOS: the file the technician offered, with Save and Decline (the same answer the notification gives).
+struct FileOfferSection: View {
+    @EnvironmentObject var model: AppModel
+    let offer: IncomingOffer
+    let technician: String?
+
+    var body: some View {
+        Section("\(technician ?? "The technician") wants to send you a file") {
+            Label(offer.name, systemImage: "doc")
+            Text(ByteCountFormatter.string(fromByteCount: offer.size, countStyle: .file)).foregroundStyle(.secondary)
+            if offer.executable {
+                Text("This type of file can run programs on a computer. Save it only if you expected it.")
+                    .foregroundStyle(.red).font(.footnote)
+            }
+            HStack {
+                Button("Save") { model.answerFile(offer.fileId, accept: true) }
+                Spacer()
+                Button("Decline", role: .destructive) { model.answerFile(offer.fileId, accept: false) }
+            }
+            .buttonStyle(.borderless)
+            Text("Not answered in a minute, it is declined.").font(.footnote).foregroundStyle(.secondary)
+        }
+    }
 }

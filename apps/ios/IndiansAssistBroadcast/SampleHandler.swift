@@ -2,6 +2,7 @@ import Foundation
 import IASec
 import IASession
 import ReplayKit
+import UserNotifications
 
 /// Phase F section 17.4: the ReplayKit Broadcast Upload Extension. It joins as a native, view-only Desk from the
 /// hand-off the app wrote after its consent screen, and holds the signal socket itself (the app is suspended while
@@ -20,6 +21,9 @@ final class SampleHandler: RPBroadcastSampleHandler, PeerSessionEvents {
     private var note = SessionNote(state: "connecting")
     private var peer: PeerSession?
     private var gen = 0
+    private let answers = FileAnswerStore.appGroup()
+    /// Polls the App Group for the person's Save or Decline while an offer waits (at most 60 s, C §6.1 F4).
+    private var answerTimer: DispatchSourceTimer?
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         queue.async { self.start() }
@@ -153,6 +157,55 @@ final class SampleHandler: RPBroadcastSampleHandler, PeerSessionEvents {
     }
 
     func recording(_ on: Bool) {}
+
+    /// C §6.1 F4 on iOS: the extension has no window, so the offer goes into the session note (the app's Get help
+    /// screen shows Save and Decline) and into a notification with the same two actions; the answer comes back
+    /// through the App Group. No answer in 60 s is Decline.
+    func fileOffer(_ offer: IncomingOffer) {
+        answers?.clear()
+        note.pendingFile = offer
+        save()
+        let content = UNMutableNotificationContent()
+        content.title = "\(note.technician ?? "The technician") wants to send you a file"
+        let size = ByteCountFormatter.string(fromByteCount: offer.size, countStyle: .file)
+        content.body = "\(offer.name) (\(size))." + (offer.executable
+            ? " This type of file can run programs on a computer; save it only if you expected it."
+            : "")
+        content.categoryIdentifier = FileOfferNotification.category
+        content.userInfo = [FileOfferNotification.fileIdKey: NSNumber(value: offer.fileId)]
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: FileOfferNotification.id(offer.fileId), content: content, trigger: nil))
+        answerTimer?.cancel()
+        let deadline = Date().addingTimeInterval(60)
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        t.setEventHandler { [weak self] in
+            guard let self, let peer = self.peer else { return }
+            if let accept = self.answers?.take(fileId: offer.fileId) {
+                peer.answerFile(offer.fileId, accept: accept)
+            } else if Date() >= deadline {
+                peer.answerFile(offer.fileId, accept: false)
+            }
+        }
+        t.resume()
+        answerTimer = t
+    }
+
+    func fileOfferEnded(_ fileId: Int64) {
+        answerTimer?.cancel()
+        answerTimer = nil
+        answers?.clear()
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [FileOfferNotification.id(fileId)])
+        guard note.pendingFile?.fileId == fileId else { return }
+        note.pendingFile = nil
+        save()
+    }
+
+    func fileSaved(_ name: String) {
+        note.files.append(String(name.prefix(200)))
+        note.files = Array(note.files.suffix(50))
+        save()
+    }
 
     private func closed(_ code: Int) {
         run(.socketClosed(code: code))
