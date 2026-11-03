@@ -20,11 +20,6 @@ public enum P3Channels {
         ])
     }
 
-    /// `file.reject { reason: 'declined' }` while receiving files on iOS is not built.
-    public static func fileReject(fileId: Int64) -> JSONValue {
-        .object(["t": .string("file.reject"), "fileId": .int(fileId), "reason": .string("declined")])
-    }
-
     /// `pong` for an `ia.ctrl` `ping`.
     public static func pong(ts: Int64) -> JSONValue {
         .object(["t": .string("pong"), "ts": .int(ts)])

@@ -65,6 +65,25 @@ lines, received file names; never the code or a key). Chat is end-to-end encrypt
 24-hour cleanup of the summary; backup exclusion; and neither ever reaching UserDefaults. UserDefaults holds only the
 two server addresses.
 
+## Files from the technician (`ia.file`, C section 6.1 on iOS)
+
+The broadcast extension receives one file at a time: `IASession.FileReceiver`, the Swift twin of the Android host's,
+with the same refusals (`bad_name` for an empty or over-long name, a passive-risk type or a bad header, `too_large`
+above 2 GiB, `busy` for a second transfer), the chunk rules, a streaming SHA-256, `file.ack` and the
+`desk.event file.received` attestation. File names go through `FileNames.sanitise`, checked against the shared
+`sec-vectors.json` `fileNames` and `file-lists.json`.
+
+- **The prompt.** The extension has no window, so an offer goes into the session note (Get help shows **Save** and
+  **Decline**) and into a notification with the same two actions. The answer comes back through one App Group file
+  (`FileAnswerStore`, `file-answer.json`, read once). No answer in 60 seconds is Decline. Notification permission is
+  asked only after the person accepts the consent screen.
+- **Where files go.** The App Group folder `Received/`: the final name is chosen first (`name (2).ext` on a
+  collision), the bytes go to `<final>.<8 hex>.iapart` (created exclusively, mode 0600, complete protection), and the
+  part is renamed only after `file.done` and a matching hash. A mismatch, a cancel or the end of the session deletes
+  the part; parts older than a day are swept when the folder opens.
+- **The app never opens a received file.** Get help lists them under "Files from the technician" with **Share**, so
+  the person can keep one in Files or another app, and a swipe deletes one.
+
 ## Testing limits
 
 A broadcast cannot be driven end to end on the simulator (A5): the session logic is the unit-tested `IASession`, and a

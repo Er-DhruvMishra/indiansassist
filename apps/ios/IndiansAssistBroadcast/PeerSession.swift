@@ -12,6 +12,12 @@ protocol PeerSessionEvents: AnyObject {
     func secFailed(_ reason: String)
     func chat(_ line: String)
     func recording(_ on: Bool)
+    /// A file offer to put to the person (Save or Decline within 60 s).
+    func fileOffer(_ offer: IncomingOffer)
+    /// The offer was answered, cancelled or ended.
+    func fileOfferEnded(_ fileId: Int64)
+    /// A file was verified and saved under `name` in the App Group `Received` folder.
+    func fileSaved(_ name: String)
 }
 
 /// The Desk → Assist peer connection of one key generation (C §§1.3, 3.3, 3.7), the Swift twin of the Android host's
@@ -44,6 +50,11 @@ final class PeerSession: NSObject {
     private var boundRemoteFpr: String?
     private var adaptedFor: (Int, Int)?
     private var chatInbox = ChatInbox()
+    /// `ia.file` (C §6.1 on iOS): files stream into the App Group `Received` folder.
+    private let files = FileReceiver { offer in
+        guard let folder = ReceivedFolder.appGroup() else { throw CocoaError(.fileNoSuchFile) }
+        return try folder.sink(for: offer)
+    }
 
     init(ice: [IceServer], sessionId: String, gen: Int, queue: DispatchQueue, events: PeerSessionEvents) {
         self.queue = queue
@@ -186,7 +197,23 @@ final class PeerSession: NSObject {
         return false
     }
 
+    /// The person's answer to the pending offer (or the 60 s timeout, `accept: false`).
+    func answerFile(_ fileId: Int64, accept: Bool) {
+        apply(accept ? files.accept(fileId) : files.decline(fileId))
+        events?.fileOfferEnded(fileId)
+    }
+
+    private func apply(_ step: FileStep) {
+        for m in step.send { sendText("ia.file", m) }
+        if let offer = step.prompt { events?.fileOffer(offer) }
+        if let data = step.attest { events?.sendSignal(DeskSignal.event(sessionId: sessionId, action: "file.received", data: data)) }
+        if let saved = step.savedTo { events?.fileSaved(saved.lastPathComponent) }
+    }
+
     func close() {
+        // Hard rule 2: a partial file is discarded with the peer.
+        if let pending = files.pending { events?.fileOfferEnded(pending.fileId) }
+        files.abortAll()
         closing = true
         for dc in channels.values {
             dc.delegate = nil
@@ -254,15 +281,20 @@ final class PeerSession: NSObject {
             return
         }
         guard established, let sec = SecLabel(rawValue: label), let h = handshake else { return fail("decrypt") }
-        let text: String?
+        let opened: (text: String?, bytes: Data)
         do {
-            text = try h.channel(sec).open(data).text
+            opened = try h.channel(sec).open(data)
         } catch let r as SecFailReason {
             return fail(r.rawValue)
         } catch {
             return fail("decrypt")
         }
-        guard let text, let m = JSONValue.parse(text) else { return }
+        // A binary frame on ia.file is a chunk (A §8.3); no other channel carries binary frames.
+        if opened.text == nil {
+            if label == "ia.file" { apply(files.onChunk(opened.bytes)) }
+            return
+        }
+        guard let text = opened.text, let m = JSONValue.parse(text) else { return }
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         switch label {
         case "ia.chat":
@@ -273,8 +305,15 @@ final class PeerSession: NSObject {
         case "ia.control":
             if let id = m["id"]?.stringValue { sendText("ia.control", P3Channels.controlNotSupported(id: id, ts: now)) }
         case "ia.file":
-            if m["t"]?.stringValue == "file.offer", let id = m["fileId"]?.intValue {
-                sendText("ia.file", P3Channels.fileReject(fileId: id))
+            switch m["t"]?.stringValue {
+            case "file.offer": apply(files.onOffer(m))
+            case "file.done": apply(files.onDone(m))
+            case "file.cancel":
+                let id = m["fileId"]?.intValue
+                let wasPending = files.pending?.fileId == id
+                apply(files.onCancel(m))
+                if wasPending, let id { events?.fileOfferEnded(id) }
+            default: break // the Desk sends no files on iOS, so no accept, reject or ack arrives for it
             }
         case "ia.ctrl":
             switch m["t"]?.stringValue {
