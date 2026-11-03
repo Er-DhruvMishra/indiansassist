@@ -25,6 +25,23 @@ use ia_core::policy::{ConsentDecision, UnattendedPolicy};
 /// into memory without bound.
 pub const BLOB_MAX: usize = 16 * 1024;
 
+/// The Linux session the worker is launched for (F §8.2). Present only on a Linux service's
+/// blob; absent on Windows (and macOS) so the existing shape is unchanged. The worker reads it
+/// to know which display and runtime directory it is attaching to; it discovers `XAUTHORITY`
+/// itself (§8.4c) rather than being handed it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinuxLaunch {
+    /// The session's `Display` property (for example `:0`); empty on a no-screen Wayland session.
+    pub display: String,
+    /// `x11` or `wayland` (§8.4b).
+    pub session_type: String,
+    /// The uid of the active graphical session's user (the uid the service dropped to).
+    pub uid: u32,
+    /// `/run/user/<uid>` in production, or the harness runtime dir in `--console` dev mode.
+    pub xdg_runtime_dir: String,
+}
+
 /// The consent the server already settled (`auto_grant` only): the worker applies it rather
 /// than asking anyone (§6.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +84,9 @@ pub struct LaunchBlob {
     pub secure_desktop: bool,
     pub worker_credential: Secret,
     pub worker_credential_expires_at: String,
+    /// The Linux session facts (§8.2); absent on Windows and macOS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<LinuxLaunch>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -150,6 +170,13 @@ impl LaunchBlob {
         self.policy
             .validate()
             .map_err(|_| BlobError::Invalid("policy: not a valid UnattendedPolicy"))?;
+        if let Some(linux) = &self.linux {
+            if linux.session_type != "x11" && linux.session_type != "wayland" {
+                return Err(BlobError::Invalid(
+                    "linux.sessionType: one of x11 or wayland",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -187,6 +214,7 @@ mod tests {
             secure_desktop: false,
             worker_credential: Secret::new("A".repeat(43)),
             worker_credential_expires_at: "2026-11-01T10:02:00.000Z".into(),
+            linux: None,
         }
     }
 
@@ -282,6 +310,39 @@ mod tests {
             ..blob()
         };
         assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn the_linux_session_facts_round_trip_and_are_validated() {
+        // Absent by default (Windows / macOS): the shape is unchanged.
+        let text = String::from_utf8(blob().to_bytes().unwrap().to_vec()).unwrap();
+        assert!(!text.contains("linux"), "absent linux must not serialise");
+        // Present on a Linux service's blob.
+        let b = LaunchBlob {
+            linux: Some(LinuxLaunch {
+                display: ":0".into(),
+                session_type: "x11".into(),
+                uid: 1000,
+                xdg_runtime_dir: "/run/user/1000".into(),
+            }),
+            ..blob()
+        };
+        let back = LaunchBlob::parse(&b.to_bytes().unwrap()).unwrap();
+        let lx = back.linux.unwrap();
+        assert_eq!(lx.display, ":0");
+        assert_eq!(lx.session_type, "x11");
+        assert_eq!(lx.uid, 1000);
+        // A bogus session type is refused.
+        let bad = LaunchBlob {
+            linux: Some(LinuxLaunch {
+                display: ":0".into(),
+                session_type: "mir".into(),
+                uid: 1000,
+                xdg_runtime_dir: "/run/user/1000".into(),
+            }),
+            ..blob()
+        };
+        assert!(bad.validate().is_err());
     }
 
     #[test]

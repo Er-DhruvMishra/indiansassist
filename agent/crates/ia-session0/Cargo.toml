@@ -22,6 +22,12 @@ thiserror.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
 
+# The Unix session-0 transport (contract F §8.2, §16.3): SO_PEERCRED, getppid and FD_CLOEXEC
+# through libc. Built on every Unix target (not Linux-only), so macOS can fill its apple-owned
+# arms later; compiles to nothing on Windows.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, optional = true, features = [
     "Win32_Foundation",

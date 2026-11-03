@@ -9,6 +9,9 @@ pub mod display;
 pub mod instance;
 pub mod paths;
 pub mod selfdel;
+/// The Linux service seam (F §8.4, §8.5): the logind facts table and the worker spawn plan as
+/// data. Pure, so it compiles and is tested on every host; the OS impls live in `ia-service`.
+pub mod service;
 pub mod testguard;
 
 #[cfg(all(target_os = "linux", feature = "linux-os"))]

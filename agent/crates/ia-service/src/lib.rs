@@ -40,6 +40,11 @@ pub mod session;
 #[cfg(all(windows, feature = "service"))]
 pub mod win;
 
+/// The Linux half (F §8.2, §8.3). Present today: the pure `FileModeSealer` mode check of §8.3b.
+/// Compiled on Linux only, so the Windows gate is untouched.
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 // apple-owned: begin
 /// Phase F §17.3: the macOS LaunchDaemon half (feature `macos-service`, apple stream).
 #[cfg(target_os = "macos")]

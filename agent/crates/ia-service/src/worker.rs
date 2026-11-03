@@ -69,6 +69,8 @@ pub fn blob_for(
         secure_desktop: target.is_secure_surface(),
         worker_credential: credential.clone(),
         worker_credential_expires_at: credential_expires_at.to_string(),
+        // The Windows handoff carries no Linux session facts; the Linux service sets them.
+        linux: None,
     }
 }
 

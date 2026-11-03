@@ -20,10 +20,15 @@ pub mod desktop;
 pub mod pipe;
 pub mod proto;
 
+/// The Unix session-0 transport (F §8.2): the socketpair handoff and its peer checks, built on
+/// every Unix target (Linux now, macOS once the apple stream fills its arms).
+#[cfg(unix)]
+pub mod unix;
+
 #[cfg(all(windows, feature = "winapi"))]
 pub mod win;
 
-pub use blob::{BlobConsent, BlobError, LaunchBlob, BLOB_MAX};
+pub use blob::{BlobConsent, BlobError, LaunchBlob, LinuxLaunch, BLOB_MAX};
 pub use desktop::{
     derive_interactive, secure_surface_verdict, select_desktop, surface_of, transition,
     SecureSurface, SessionFacts, SurfaceVerdict, Transition,
