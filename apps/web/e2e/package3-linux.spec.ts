@@ -130,7 +130,7 @@ async function chat(assist: Page, agent: LinuxAgent, text: string): Promise<void
 async function stopFromAgent(assist: Page, agent: LinuxAgent): Promise<void> {
   agent.interrupt();
   await expect(assist.getByText(/^Session ended/).first()).toBeVisible({ timeout: 30_000 });
-  await agent.waitForLine(/self-delete.*(skip|decision|keep)/i, 20_000);
+  await agent.waitForLine(/exit decision: no file change.*no-self-delete/i, 20_000); // --no-self-delete: no file change
 }
 
 test.describe.configure({ mode: 'serial' });
