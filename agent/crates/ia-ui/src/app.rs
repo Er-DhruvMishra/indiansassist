@@ -758,6 +758,11 @@ impl IaApp {
                 .small(),
             );
         });
+        // apple-owned: begin
+        // Phase F §17.2: the "How to allow" guide beside System Settings while a grant is missing.
+        #[cfg(target_os = "macos")]
+        crate::tray::tcc_guide(ctx);
+        // apple-owned: end
         if decline {
             self.decline(ctx);
         } else if share {

@@ -193,8 +193,12 @@ impl CaptureSource {
         // prompt); without it the session goes on with the synthetic placeholder and `screen` is
         // not advertised, so the console shows the no-screen state.
         #[cfg(all(target_os = "macos", feature = "macos"))]
-        if !synthetic && ia_capture_mac::screen_recording_granted() {
-            return CaptureSource::Sck(Box::new(ia_capture_mac::SckCapturer::new()));
+        if !synthetic {
+            let granted = ia_capture_mac::screen_recording_granted();
+            tracing::info!(granted, "macOS capture: Screen Recording");
+            if granted {
+                return CaptureSource::Sck(Box::new(ia_capture_mac::SckCapturer::new()));
+            }
         }
         // apple-owned: end
         let _ = synthetic;

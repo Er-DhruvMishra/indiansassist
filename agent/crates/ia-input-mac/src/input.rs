@@ -243,6 +243,36 @@ impl Drop for MacInput {
 /// The on-screen windows of this process in global points, from the window server.
 pub fn own_windows() -> Vec<AgentWindow> {
     let pid = std::process::id() as i64;
+    on_screen_windows(|owner, _| owner == pid)
+}
+
+/// The main window of System Settings (bundle `com.apple.systempreferences`, so any language),
+/// in global points, when it is on screen: the consent window's permission guide sits beside it.
+/// Window bounds and owners need no grant (titles would).
+pub fn settings_window() -> Option<AgentWindow> {
+    let pids: Vec<i64> = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+        &NSString::from_str("com.apple.systempreferences"),
+    )
+    .iter()
+    // `processIdentifier` sits behind objc2-app-kit's `libc` feature; the message is the same.
+    // SAFETY: `-[NSRunningApplication processIdentifier]` takes no argument and returns a pid_t.
+    .map(|app| {
+        let pid: i32 = unsafe { objc2::msg_send![&*app, processIdentifier] };
+        i64::from(pid)
+    })
+    .collect();
+    if pids.is_empty() {
+        return None;
+    }
+    on_screen_windows(|owner, layer| layer == 0 && pids.contains(&owner))
+        .into_iter()
+        // The main window, not a toolbar strip or a sheet's sliver.
+        .find(|w| w.height > 200.0 && w.width > 300.0)
+}
+
+/// The on-screen windows the window server lists (front to back), kept when `keep(owner pid,
+/// layer)` holds, in global points.
+fn on_screen_windows(mut keep: impl FnMut(i64, i64) -> bool) -> Vec<AgentWindow> {
     let option =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(option, kCGNullWindowID) else {
@@ -259,7 +289,9 @@ pub fn own_windows() -> Vec<AgentWindow> {
     };
     let mut out = Vec::new();
     for w in windows.iter() {
-        if number(&w, "kCGWindowOwnerPID").map(|n| n.longLongValue()) != Some(pid) {
+        let owner = number(&w, "kCGWindowOwnerPID").map_or(-1, |n| n.longLongValue());
+        let layer = number(&w, "kCGWindowLayer").map_or(-1, |n| n.longLongValue());
+        if !keep(owner, layer) {
             continue;
         }
         let Some(bounds) = w
