@@ -9,11 +9,12 @@
 //! | [`paths`] | the layout (and the dev `--console` one under a temporary root) |
 //! | [`keychain`] | the device keys in the System keychain (a file keychain in a dev run) |
 //! | [`facts`] | the machine facts and the service capabilities |
+//! | [`runmarker`] | the restart signal (`watchdog_restarted`), from a run marker |
 //! | `workersock` | the worker socket: accept, the handshake deadline, the peer checks, the cap |
 //! | `runtime` | the loops: the device socket, the heartbeat, the console watch, integrity |
 //!
 //! The decisions (who the console user is, which worker is admitted, what a switch means) are
-//! pure, in `ia_platform::macos::service`. The first three modules build without the
+//! pure, in `ia_platform::macos::service`. The first four modules build without the
 //! `macos-service` feature (and are tested by a plain `cargo test -p ia-service`); the rest need it.
 
 use ia_core::fleet::InteractiveState;
@@ -22,6 +23,7 @@ use ia_core::policy::InteractiveStateName;
 pub mod facts;
 pub mod keychain;
 pub mod paths;
+pub mod runmarker;
 
 #[cfg(feature = "macos-service")]
 pub mod runtime;

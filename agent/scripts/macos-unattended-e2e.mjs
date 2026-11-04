@@ -15,14 +15,18 @@
 // 6. checks the device row says `platform: macos`, online, and an `active` interactive state;
 // 7. asks for an unattended session, and checks the daemon handed it to the waiting worker (`auto_grant`), the worker
 //    read the blob, and the session reached the server from the worker;
-// 8. stops everything it started (only its own pids) and removes the root.
+// 8. runs a read-only zsh playbook (sw_vers, uname -a) as a device action: done, exit 0, ranAs admin, the output
+//    seen on the device and never on the server (rule 9.7);
+// 9. kills the daemon outright and starts it again: watchdog_restarted is chained once; a clean stop removes the
+//    run marker;
+// 10. stops everything it started (only its own pids) and removes the root.
 //
 // Isolation (A1-A3): no launchd job, no System keychain, no TCC prompt (synthetic capture), nothing under /var/run or
 // /Library, IA_ICE_LOOPBACK=1 so the firewall is never asked. No personal data is used: the org and the account are
 // synthetic.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ApiClient } from '../../scripts/smoke/http.mjs';
@@ -148,6 +152,13 @@ async function main() {
   );
   const t = await api.expect('POST', '/api/v1/tokens', { tier: 'p4_installed', typ: 'enrollment', maxDevices: 1, label: 'mac e2e' }, [201]);
   const cfg = await api.expect('GET', `/api/v1/devices/enroll-config?tokenId=${t.token.id}&groupId=${g.id}`);
+  // The catalogue entry exists before the device connects: its manifest arrives in device.hello.ok.
+  const pb = await api.expect(
+    'POST',
+    '/api/v1/orgs/current/playbooks',
+    { name: `Mac read-only ${sx}`, interpreter: process.env.E2E_MAC_PB_SHELL || 'zsh', body: 'sw_vers\nuname -a\n' },
+    [201],
+  );
   const enrollFile = `${root}/enroll.iaconfig`;
   writeFileSync(enrollFile, cfg.iaconfig, { mode: 0o600 });
   log('org', `group ${g.id}, token ${t.token.id}`);
@@ -195,10 +206,40 @@ async function main() {
   });
   log('session', `${sessionId} state ${live.state ?? live.status}`);
 
-  // The worker serves one session, then exits; the daemon must forget it when its channel closes.
-  daemon.kill('SIGTERM');
-  await until('the daemon to stop', async () => daemon.exitCode !== null, 15_000);
-  log('stop', `daemon exited ${daemon.exitCode}; the worker ${worker.exitCode === null ? 'is ending' : `exited ${worker.exitCode}`}`);
+  // A read-only zsh playbook as a device action: run as root by the daemon (ranAs admin), exit 0. Rule 9.7 keeps the
+  // output off the server; the dev daemon logs it, so the check reads it there.
+  const actionsPath = `/api/v1/devices/${deviceId}/actions`;
+  const q = await api.expect('POST', actionsPath, { kind: 'playbook_run', payload: { playbookId: pb.id, args: {}, requiresElevation: false } }, [202]);
+  const done = await until('the playbook run to finish', async () => {
+    const row = (await api.expect('GET', actionsPath)).items.find((a) => a.id === q.actionId);
+    return row && ['done', 'failed'].includes(row.state) ? row : null;
+  }, 60_000).catch((e) => fail(`${e.message}\n--- daemon ---\n${logs.daemon.slice(-3000)}`));
+  if (done.state !== 'done') fail(`the playbook run ${done.state}: ${JSON.stringify(done.result)}`);
+  if (done.result?.ranAs !== 'admin') fail(`ranAs ${done.result?.ranAs}`);
+  if (done.result?.exit !== 0) fail(`exit ${done.result?.exit}`);
+  if (JSON.stringify(done.result).includes('ProductName')) fail('the output reached the server (rule 9.7)');
+  await until('the output on the device', async () => /dev: the action's output.*ProductName.*Darwin/s.test(logs.daemon), 10_000);
+  log('playbook', `${q.actionId} done, exit 0, ranAs admin, output seen on the device only`);
+
+  // The restart signal: a daemon killed outright and started again in this boot reports watchdog_restarted once.
+  daemon.kill('SIGKILL');
+  await until('the daemon to die', async () => daemon.exitCode !== null || daemon.signalCode !== null, 10_000);
+  if (!existsSync(`${root}/state/run.marker`)) fail('no run marker was left by the killed daemon');
+  logs.daemon = '';
+  const again = start('daemon', `${bin}/ia-service`, ['--console', '--data-dir', root], { RUST_LOG: 'info' });
+  await until('the restarted daemon to connect', async () => /device socket open/.test(logs.daemon), 60_000);
+  const tamper = await until('watchdog_restarted on the server', async () => {
+    const chain = await api.expect('GET', '/api/v1/audit?action=tamper.alert&limit=20');
+    return chain.items.find((e) => JSON.stringify(e.data ?? {}).includes('watchdog_restarted')) ?? null;
+  }, 30_000).catch((e) => fail(`${e.message}\n--- daemon ---\n${logs.daemon.slice(-3000)}`));
+  log('restart', `watchdog_restarted chained (${tamper.id ?? 'audit row'})`);
+
+  // A clean stop removes the marker, so the next start is not a restart.
+  again.kill('SIGTERM');
+  await until('the daemon to stop', async () => again.exitCode !== null, 15_000);
+  if (again.exitCode !== 0) fail(`the daemon exited ${again.exitCode}`);
+  if (existsSync(`${root}/state/run.marker`)) fail('a clean stop left the run marker');
+  log('stop', `daemon exited 0 and removed its marker; the worker ${worker.exitCode === null ? 'is ending' : `exited ${worker.exitCode}`}`);
   console.log('[macos-e2e] PASS');
 }
 

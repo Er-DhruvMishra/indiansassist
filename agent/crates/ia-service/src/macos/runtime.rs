@@ -7,6 +7,7 @@
 //! | the heartbeat | 30 s ± jitter | `device.heartbeat` with the current facts (§3.4) |
 //! | the console | every 2 s, and on every lock report | `device.interactive`, the worker's `interactive` frame, and ending the session when the console user changes |
 //! | the integrity check | at start and hourly | `binary_changed` / `config_changed` against the installed file list, when the package ships one |
+//! | the run marker | at start and at a clean stop | `watchdog_restarted` after a death in this boot ([`super::runmarker`]) |
 //! | the worker socket | on every connection | the handshake of [`super::workersock`]; an admitted worker waits here for a session |
 //!
 //! **The workers come to the daemon.** launchd starts the LaunchAgent `ia-desktop` in every GUI
@@ -478,6 +479,10 @@ fn session_frame(shared: &Arc<MacShared>, id: u64, session_id: &str, frame: &Wor
 
 /// Run the daemon until `stop` is signalled.
 pub async fn run(shared: Arc<MacShared>, mut stop: tokio::sync::watch::Receiver<bool>) {
+    {
+        let shared = shared.clone();
+        let _ = tokio::task::spawn_blocking(move || note_restart(&shared)).await;
+    }
     if let Err(e) = start_worker_socket(&shared) {
         tracing::error!(error = %e, socket = %shared.layout.socket().display(), "the worker socket could not be opened; no session can be served");
     }
@@ -494,6 +499,26 @@ pub async fn run(shared: Arc<MacShared>, mut stop: tokio::sync::watch::Receiver<
         let _ = tokio::task::spawn_blocking(move || live.stop("service_stopping")).await;
     }
     tasks.shutdown().await;
+    // A clean stop: the next start is not a restart.
+    super::runmarker::on_clean_stop(&shared.layout.state, std::process::id() as i32);
+}
+
+/// `watchdog_restarted` when the last run of this daemon died in this boot and launchd started it
+/// again ([`super::runmarker`]).
+fn note_restart(shared: &Arc<MacShared>) {
+    use super::runmarker::{on_start, sys};
+    let image = std::env::current_exe().unwrap_or_else(|_| shared.layout.service_image());
+    if on_start(
+        &shared.layout.state,
+        &sys::boot_session(),
+        std::process::id() as i32,
+        |pid| sys::running_as(pid, &image),
+    ) {
+        shared.record_tamper(
+            TamperCause::WatchdogRestarted,
+            Some("the daemon stopped without a clean shutdown and launchd started it again"),
+        );
+    }
 }
 
 /// The `/signal/device` socket (§3.4), with the C §3.1 reconnect ladder.
@@ -1054,6 +1079,14 @@ pub async fn run_action(shared: &Arc<MacShared>, req: ActionRequest) {
             Err(e) => crate::actions::Outcome::failed(&format!("the action task failed: {e}")),
         }
     };
+    // Rule 9.7: the output is never reported to the server. Its size is logged; a dev `--console`
+    // run also logs the (masked) text, so the end-to-end check can see the run happened here.
+    if !outcome.output.is_empty() {
+        tracing::info!(action = %req.action_id, bytes = outcome.output.len(), "the action produced output");
+        if shared.dev_console {
+            tracing::info!(action = %req.action_id, output = %outcome.output, "dev: the action's output");
+        }
+    }
     report(
         if outcome.ok {
             ReportedActionState::Done
