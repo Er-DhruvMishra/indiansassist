@@ -5,8 +5,9 @@
 #   agent/scripts/macos-pkg.sh [--out <dir>]
 #
 # Writes <out>/IndiansAssist-Agent-<version>-macos-<arch>.pkg (default out: agent/target/macos-pkg), for this
-# Mac's architecture, and prints its release-manifest row on the last line:
-#   {"platform":"macos","arch":...,"format":"pkg","version":...,"file":...,"size":...,"sha256":...,"signed":false}
+# Mac's architecture, and <out>/manifest.json (the dist manifest: copy both into <AGENT_MSI_DIST_DIR>/macos/), and
+# prints its release-manifest row on the last line:
+#   {"platform":"macos","format":"pkg","arch":...,"version":...,"size":...,"sha256":...,"signed":false,"minOs":...,"file":...}
 #
 # Payload (install location /):
 #   /Library/IndiansAssist/ia-service                                        the LaunchDaemon (root)
@@ -103,5 +104,13 @@ plutil -replace 0.BundleOverwriteAction -string upgrade "$comp"
 pkgbuild --root "$stage" --component-plist "$comp" --scripts "$repo/packaging/macos/pkg/scripts" --identifier com.indiansassist.agent.pkg \
     --version "$version" --install-location / --ownership recommended "$out/$pkg" >&2
 
-printf '{"platform":"macos","arch":"%s","format":"pkg","version":"%s","file":"%s","size":%s,"sha256":"%s","signed":false}\n' \
-    "$arch" "$version" "$pkg" "$(size "$out/$pkg")" "$(sha "$out/$pkg")"
+# The release-manifest row (installerBuildSchema plus the bare `file`), and the dist manifest the api serves from
+# (`<AGENT_MSI_DIST_DIR>/macos/manifest.json`, installerDistManifestSchema).
+case "$arch" in
+    arm64) min_os="macOS 12.3+ on Apple silicon" ;;
+    *) min_os="macOS 12.3+ on Intel" ;;
+esac
+row=$(printf '{"platform":"macos","format":"pkg","arch":"%s","version":"%s","size":%s,"sha256":"%s","signed":false,"minOs":"%s","file":"%s"}' \
+    "$arch" "$version" "$(size "$out/$pkg")" "$(sha "$out/$pkg")" "$min_os" "$pkg")
+printf '{"v":1,"builds":[%s]}\n' "$row" >"$out/manifest.json"
+echo "$row"
