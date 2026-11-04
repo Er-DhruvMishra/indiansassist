@@ -5,7 +5,8 @@
 #
 #   service-e2e.sh build
 #       the dev binaries into $CARGO_TARGET_DIR/release: ia-service (linux-service, dev) with the
-#       logind fake example beside it, and ia-desktop (linux, dev); ia-desktop must sit beside
+#       logind fake example beside it, and ia-desktop (the linux set without `gui` unless
+#       IA_E2E_WORKER_GUI=1, plus dev); ia-desktop must sit beside
 #       ia-service, because the dev service launches the worker from its own directory
 #   service-e2e.sh run [service args...]
 #       a fresh /tmp/ia-service-e2e.XXXXXX root; the harness Xvfb :97; the fake logind on a private
@@ -46,8 +47,14 @@ shift || true
 
 if [ "$mode" = "build" ]; then
   cd "$agent_dir" || exit 1
+  # The worker is built without the `gui` feature unless IA_E2E_WORKER_GUI=1: the egui/winit window needs
+  # libxkbcommon-x11 at run time, which this WSL distro does not have (and nothing is installed here), and its
+  # absence aborts the worker. Without `gui` the worker runs headless (no consent window, no pill), exactly the
+  # "no GUI in this build" path of the serve loop; the session itself is unchanged.
+  worker_feats="ia-agent/media,ia-agent/x11,ia-agent/linux-os,ia-platform/linux-os,dev"
+  [ "${IA_E2E_WORKER_GUI:-0}" = "1" ] && worker_feats="linux,dev"
   cargo build --release --locked -p ia-service --features linux-service,dev --bin ia-service --example logind_fake \
-    && cargo build --release --locked -p ia-desktop --no-default-features --features linux,dev
+    && cargo build --release --locked -p ia-desktop --no-default-features --features "$worker_feats"
   exit $?
 fi
 

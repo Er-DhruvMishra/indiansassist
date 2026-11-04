@@ -127,7 +127,7 @@ name = "logind_fake"
 required-features = ["linux-service"]
 
 # Phase F §8.9: the Linux packages. `pnpm linux:pkg` (packaging/linux/build.mjs) builds the two
-# release binaries with the E §7.9 zigbuild (glibc 2.35 floor), stages them with the installed-file
+# release binaries with the E §7.9 zigbuild (glibc 2.34 floor, F §8.9 revision 3), stages them with the installed-file
 # manifest the §8.8 integrity check reads in packaging/linux/out/stage/, and then runs cargo-deb
 # 3.8.0 and cargo-generate-rpm 0.21.1 with `--no-build` over that stage (cargo-deb also with
 # `--no-strip`, so the shipped bytes are the bytes the manifest hashes). Paths are relative to this
@@ -143,7 +143,7 @@ extended-description = """\
 The IndiansAssist agent service for Linux: a systemd system service that holds the device \
 identity and attaches to the signed-in user's X11 session for unattended remote support. \
 Third-party licences are listed in docs/LICENSE-REGISTER.md of the source distribution."""
-depends = "libc6 (>= 2.35)"
+depends = "libc6 (>= 2.34)"
 recommends = "systemd"
 maintainer-scripts = "../../../packaging/linux/debian/"
 assets = [
@@ -177,7 +177,7 @@ assets = [
 ]
 
 [package.metadata.generate-rpm.requires]
-glibc = ">= 2.35"
+glibc = ">= 2.34"
 
 [package.metadata.generate-rpm.recommends]
 systemd = "*"

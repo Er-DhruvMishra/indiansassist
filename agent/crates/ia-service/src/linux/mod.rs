@@ -19,6 +19,8 @@
 pub mod facts;
 pub mod paths;
 pub mod sealer;
+/// SIGTERM / SIGINT in every state of the service, the unenrolled wait included (§8.8).
+pub mod stop;
 
 #[cfg(feature = "linux-service")]
 pub mod logind;

@@ -23,6 +23,10 @@ import { ensureLive, startConsentTimer } from '../signal/messages.js';
 import { effectivePolicy, featuresOf, getDevicePresence, groupOf, interactiveOf, isDeviceOnline } from './common.js';
 import { mintWorkerCredential } from './worker.js';
 
+/** Phase F rule 8.4f, verbatim. */
+export const PRELOGIN_UNSUPPORTED_TEXT =
+  'Nobody is signed in to this Linux computer. IndiansAssist can connect only to a signed-in desktop session.';
+
 /** A.2 recorder availability as seen from this node: a helloed recorder socket and a Desk that answers it. */
 function recorderAvailable(ctx: AppContext, d: DeviceRow): boolean {
   const recorders = [...ctx.hub.conns.values()].some((c) => c.side === 'recorder' && !c.closed);
@@ -47,6 +51,9 @@ export async function openDeviceSession(
   if (!presence || !(await isDeviceOnline(ctx, d.id))) fail('device_offline', 'the device is offline', { hint: 'POST /api/v1/devices/:id/wake' });
   const open = await findOpenSessionByDevice(ctx.db, d.id);
   if (open) fail('device_busy', 'the device already has a live session', { sessionId: open.id });
+  // Phase F rule 8.4f: a Linux device reaches only a signed-in desktop session; the greeter is out of scope, so
+  // nobody signed in is refused whatever `allowLogonScreen` says.
+  if (d.platform === 'linux' && interactiveOf(d)?.state === 'none') fail('prelogin_unsupported', PRELOGIN_UNSUPPORTED_TEXT);
   const policy = effectivePolicy(d, await groupOf(ctx, d), p.org);
   const verdict = decideDeviceSession({ unattended: body.unattended, policy, interactive: interactiveOf(d), recorderAvailable: recorderAvailable(ctx, d) });
   if (verdict.error) {

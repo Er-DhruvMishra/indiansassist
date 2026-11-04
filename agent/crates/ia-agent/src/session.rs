@@ -161,6 +161,58 @@ fn desk_capabilities(cli: &Cli, has_voice: bool) -> ia_core::types::AgentCapabil
     caps
 }
 
+/// Phase F §8.7: a Linux desktop worker's `desk.hello` capabilities, pure. The E §7.5 Wayland
+/// set when the launch blob's `linux.sessionType` is `wayland` (ia-desktop exports it as
+/// `XDG_SESSION_TYPE`, and no screen is shared under the service, 8.4d), else the E §7.5 X11 set
+/// over the RandR `monitors` count (1 for a synthetic run). Both are subsets of the service's
+/// §8.7 envelope by construction (`ia_service::linux::facts` tests it).
+pub fn linux_worker_capabilities(
+    wayland_session: bool,
+    mode: &crate::desk::ScreenMode,
+    monitors: usize,
+) -> ia_core::types::AgentCapabilities {
+    if wayland_session {
+        return crate::desk::linux_caps(&crate::desk::ScreenMode::Wayland, 1);
+    }
+    crate::desk::linux_caps(mode, monitors)
+}
+
+/// The capabilities a worker (or the Windows hand-over child) says hello with: the C §3.1
+/// Windows set, or on Linux the §8.7 worker set, so a Linux worker never advertises a feature
+/// the device row lacks (the api would refuse it with `capability_mismatch`).
+fn worker_capabilities(cli: &Cli, has_voice: bool) -> ia_core::types::AgentCapabilities {
+    if !cfg!(target_os = "linux") {
+        return windows_capabilities(1, false, has_voice);
+    }
+    let wayland = std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland");
+    let mode = crate::desk::detect(cli.synthetic_capture);
+    let monitors = match &mode {
+        crate::desk::ScreenMode::X11 { display } if !wayland => {
+            crate::desk::x11_monitors(display).len()
+        }
+        _ => 1,
+    };
+    let caps = linux_worker_capabilities(wayland, &mode, monitors);
+    tracing::info!(
+        ?mode,
+        wayland,
+        monitors = caps.monitors,
+        features = ?caps.features,
+        "linux worker capabilities"
+    );
+    caps
+}
+
+/// The worker's `platform.osVersion`: `10.0` on Windows (as before), the os-release
+/// `PRETTY_NAME` (at most 32 characters) on Linux, as the service's facts send it (§8.3d).
+fn worker_os_version() -> String {
+    if cfg!(target_os = "linux") {
+        crate::desk::os_version()
+    } else {
+        "10.0".to_string()
+    }
+}
+
 /// Run the hello/knock/poll exchange, up to `budget`. Returns how it ended.
 pub async fn run_signaling(
     cli: &Cli,
@@ -218,7 +270,7 @@ pub async fn run_signaling(
 
     // Knock / poll until a `session.created` arrives; then split the socket and run the live
     // serve loop (consent, peer, handshake, channels, media, teardown).
-    let created = match drive_until_created(&mut client, budget).await? {
+    let created = match drive_until_created(&mut client, budget, true).await? {
         Drive::Created(v) => v,
         Drive::Outcome(o) => return Ok(o),
     };
@@ -252,7 +304,7 @@ pub async fn run_handover_child_session(
     std::thread::spawn(crate::voice::voice_available);
     let id = AgentIdentity {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        os_version: "10.0".to_string(),
+        os_version: worker_os_version(),
         arch: arch().to_string(),
     };
     tracing::info!(
@@ -263,7 +315,7 @@ pub async fn run_handover_child_session(
     );
     let mut client = SignalClient::connect(&blob.signal_url, &id).await?;
     let has_voice = crate::voice::voice_available();
-    let caps = windows_capabilities(1, false, has_voice);
+    let caps = worker_capabilities(cli, has_voice);
     client
         .desk_hello_handover(
             &blob.token,
@@ -274,7 +326,7 @@ pub async fn run_handover_child_session(
             &caps,
         )
         .await?;
-    let created = match drive_until_created(&mut client, budget).await? {
+    let created = match drive_until_created(&mut client, budget, true).await? {
         Drive::Created(v) => v,
         Drive::Outcome(o) => {
             // §7.3 step 5: a child the server rejects (its hand-over was consumed or expired)
@@ -305,7 +357,7 @@ pub async fn run_worker_session(cli: &Cli, budget: Duration) -> Result<SignalOut
     let os_version = crate::desk::os_version();
     #[cfg(not(target_os = "macos"))]
     // apple-owned: end
-    let os_version = "10.0".to_string();
+    let os_version = worker_os_version();
     let id = AgentIdentity {
         version: env!("CARGO_PKG_VERSION").to_string(),
         os_version,
@@ -327,11 +379,11 @@ pub async fn run_worker_session(cli: &Cli, budget: Duration) -> Result<SignalOut
     let caps = desk_capabilities(cli, has_voice);
     #[cfg(not(target_os = "macos"))]
     // apple-owned: end
-    let caps = windows_capabilities(1, false, has_voice);
+    let caps = worker_capabilities(cli, has_voice);
     client
         .desk_hello_worker(ctx.credential.expose(), &id, &caps)
         .await?;
-    let created = match drive_until_created(&mut client, budget).await? {
+    let created = match drive_until_created(&mut client, budget, false).await? {
         Drive::Created(v) => v,
         Drive::Outcome(o) => {
             tracing::warn!(outcome = ?o, "the worker did not reach session.created");
@@ -353,7 +405,12 @@ enum Drive {
     Outcome(SignalOutcome),
 }
 
-async fn drive_until_created(client: &mut SignalClient, budget: Duration) -> Result<Drive, String> {
+/// Waits for `session.created` after the hello. `knock` is false for a P4 worker: its session already exists, so the server answers a knock with `error bad_state` ("a desktop worker does not knock"), and that late error would otherwise be read as the answer to the worker's `desk.consent`.
+async fn drive_until_created(
+    client: &mut SignalClient,
+    budget: Duration,
+    knock: bool,
+) -> Result<Drive, String> {
     let mut poll = tokio::time::interval(Duration::from_secs(3));
     let deadline = tokio::time::sleep(budget);
     tokio::pin!(deadline);
@@ -368,9 +425,13 @@ async fn drive_until_created(client: &mut SignalClient, budget: Duration) -> Res
                 let Some(v): Option<Value> = msg else { return Ok(Drive::Outcome(SignalOutcome::Closed)) };
                 match v.get("t").and_then(|t| t.as_str()) {
                     Some("desk.hello.ok") => {
-                        tracing::info!("desk.hello.ok; knocking and polling");
-                        client.knock(None).await?;
-                        waiting = true;
+                        if knock {
+                            tracing::info!("desk.hello.ok; knocking and polling");
+                            client.knock(None).await?;
+                            waiting = true;
+                        } else {
+                            tracing::info!("desk.hello.ok; waiting for the session");
+                        }
                     }
                     Some("poll.status") | Some("knock.ok") | Some("knock.held") | Some("token.presence") => {
                         tracing::debug!(msg = %v, "waiting update");
@@ -385,6 +446,76 @@ async fn drive_until_created(client: &mut SignalClient, budget: Duration) -> Res
                     _ => {}
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::desk::ScreenMode;
+
+    /// The §8.7 service envelope (`ia_service::linux::facts::features`, with the waker).
+    const SERVICE_SET: &[&str] = &[
+        "screen",
+        "multi_monitor",
+        "input",
+        "input_text",
+        "clipboard",
+        "files",
+        "chat",
+        "playbooks",
+        "recorder",
+        "service_input",
+        "waker",
+    ];
+
+    #[test]
+    fn the_linux_worker_set_fits_the_service_set() {
+        let x11 = ScreenMode::X11 {
+            display: ":97".into(),
+        };
+        for (wayland, mode) in [
+            (false, x11.clone()),
+            (false, ScreenMode::Synthetic),
+            (true, x11),
+            (true, ScreenMode::Synthetic),
+            (false, ScreenMode::Wayland),
+        ] {
+            for monitors in [1, 2, 4] {
+                let caps = linux_worker_capabilities(wayland, &mode, monitors);
+                for f in &caps.features {
+                    assert!(
+                        SERVICE_SET.contains(&f.as_str()),
+                        "{f} ({wayland}, {mode:?})"
+                    );
+                }
+                assert_eq!(caps.elevation, ia_core::types::ElevationLevel::User);
+                assert!(!caps
+                    .features
+                    .iter()
+                    .any(|f| f == "voice" || f == "elevation"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_wayland_session_shares_no_screen_even_when_synthetic() {
+        let caps = linux_worker_capabilities(true, &ScreenMode::Synthetic, 2);
+        assert_eq!(caps.features, vec!["files", "chat", "playbooks"]);
+        assert_eq!(caps.monitors, 1);
+        let x11 = linux_worker_capabilities(false, &ScreenMode::Synthetic, 1);
+        assert!(x11.features.iter().any(|f| f == "screen"));
+        assert!(!x11.features.iter().any(|f| f == "multi_monitor"));
+    }
+
+    #[test]
+    fn the_worker_os_version_is_the_platform_s() {
+        let v = worker_os_version();
+        if cfg!(target_os = "linux") {
+            assert!(!v.is_empty() && v.chars().count() <= 32);
+        } else {
+            assert_eq!(v, "10.0");
         }
     }
 }

@@ -10,11 +10,11 @@
 // Steps:
 //   1. `build-wsl.sh tools`: cargo-deb 3.8.0, cargo-generate-rpm 0.21.1, cargo-zigbuild and Zig in
 //      WSL, or the package gates are "not met" (they are never installed by this script);
-//   2. `build-wsl.sh build`: the E section 7.9 zigbuild (glibc 2.35 floor) of
+//   2. `build-wsl.sh build`: the E section 7.9 zigbuild (glibc 2.34 floor, F section 8.9) of
 //      `-p ia-service --features linux-service` and `-p ia-desktop --no-default-features
 //      --features linux`, staged in packaging/linux/out/stage/ (`--skip-build` stages the release
 //      binaries already in the target directory);
-//   3. Windows Node: scripts/elf-check.mjs on both staged binaries (NEEDED subset, GLIBC_ <= 2.35,
+//   3. Windows Node: scripts/elf-check.mjs on both staged binaries (NEEDED subset, GLIBC_ <= 2.34,
 //      <= 25 MiB), then stage/manifest.json, the installed-file list and sha256 the section 8.8
 //      integrity check reads at /usr/lib/indiansassist/manifest.json;
 //   4. `build-wsl.sh package`: cargo-deb and cargo-generate-rpm with --no-build over the stage;
@@ -39,10 +39,10 @@ const ROOT = resolve(HERE, '..', '..');
 /** The only arch Phase F builds (section 8.13: no arm64). */
 export const ARCH = 'x64';
 /** The glibc floor (E section 7.9, F section 8.9) and the size gate. */
-export const MAX_GLIBC = '2.35';
+export const MAX_GLIBC = '2.34';
 export const MAX_SIZE_MIB = 25;
 /** `installerBuildSchema.minOs` (at most 64 characters). */
-export const MIN_OS = 'glibc 2.35+, x86_64 (Ubuntu 22.04+, Debian 12+, Fedora 36+)';
+export const MIN_OS = 'glibc 2.34+ x86_64: Ubuntu 22.04+, Debian 12+, EL 9+, Fedora 35+';
 /** The two binaries, as installed under /usr/lib/indiansassist/. */
 export const BINARIES = Object.freeze(['ia-service', 'ia-desktop']);
 

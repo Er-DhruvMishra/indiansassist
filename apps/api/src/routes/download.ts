@@ -14,6 +14,7 @@ import {
   downloadPrepareSchema,
   INSTALLER_ARCHES,
   installerDownloadQuerySchema,
+  installerPlatformForFormat,
   isRegionServed,
   LIMITS,
   sha256Hex,
@@ -21,6 +22,7 @@ import {
   type AgentPlatform,
   type DownloadPrepareReply,
   type InstallerArch,
+  type InstallerFormat,
   type InstallerManifest,
   type Region,
 } from '@indiansassist/shared';
@@ -50,6 +52,14 @@ type Grant = {
   version: string;
   sha256: string;
   ip: string;
+};
+
+/** Phase F section 8.11: each installer format's media type (the MSI as in Phase D). */
+export const INSTALLER_CONTENT_TYPES: Record<InstallerFormat, string> = {
+  msi: 'application/x-msi',
+  deb: 'application/vnd.debian.binary-package',
+  rpm: 'application/x-rpm',
+  pkg: 'application/octet-stream',
 };
 
 const grantKey = (hash: string) => `ia:dl:${hash}`;
@@ -248,15 +258,17 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
     if (tok.typ !== 'enrollment' || tok.tier !== 'p4_installed') fail('invalid_token_type', 'the installer is served for a p4_installed enrollment token');
     const status = effectiveStatus(tok);
     if (status !== 'active') fail('token_gone', `token is ${status}`, { status });
-    const build = ctx.installerDist.find(arch);
-    if (!build) fail('download_unavailable', 'no installer for this architecture is available on this server');
+    const format: InstallerFormat = q.format ?? 'msi';
+    const platform = installerPlatformForFormat(format);
+    const build = ctx.installerDist.find(arch, format, platform);
+    if (!build) fail('download_unavailable', `no ${format} installer for this architecture is available on this server`);
     const range = parseRange(req.headers['range'], build.size);
     if (range === 'bad') {
       reply.header('Content-Range', `bytes */${build.size}`);
       return reply.status(416).send();
     }
     reply
-      .header('Content-Type', 'application/x-msi')
+      .header('Content-Type', INSTALLER_CONTENT_TYPES[format])
       .header('Content-Disposition', `attachment; filename="${build.file}"`)
       .header('X-Content-Type-Options', 'nosniff')
       .header('Cache-Control', 'private, no-store')
@@ -268,7 +280,8 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
         sessionId: null,
         actor: userActor(p.user),
         action: 'download.served',
-        data: { tokenId: tok.id, platform: 'windows', arch: build.arch, version: build.version, sha256: build.sha256 },
+        // Section 8.11: the entry names the platform and the package format (`msi` included).
+        data: { tokenId: tok.id, platform, arch: build.arch, version: build.version, sha256: build.sha256, format },
       });
     const start = range?.start ?? 0;
     const end = range?.end ?? build.size - 1;

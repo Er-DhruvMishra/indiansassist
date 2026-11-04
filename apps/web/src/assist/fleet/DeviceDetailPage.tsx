@@ -29,10 +29,13 @@ import { useAssistSignal } from '../signal/AssistSignalProvider';
 import { ActionQueue, RunActionForm } from './ActionQueue';
 import {
   coldPowerOnText,
+  linuxDisplayText,
   onlineBadge,
+  platformName,
   policyHighlights,
   presenceText,
   refusalText,
+  SCREEN_LOCKED_TEXT,
   tamperBadge,
   UNATTENDED_MODE_TEXT,
   unattendedModeTone,
@@ -154,7 +157,8 @@ export function DeviceDetailPage() {
               <Row label="Last seen" value={fmtDateTime(d.lastSeenAt)} />
               <Row label="First seen" value={fmtDateTime(d.firstSeenAt)} />
               <Row label="Enrolled" value={fmtDateTime(d.enrolledAt)} />
-              <Row label="Platform" value={`${d.platform} ${d.arch ?? ''} ${d.osVersion ?? ''}`.trim()} />
+              <Row label="Platform" value={`${platformName(d.platform)} ${d.arch ?? ''} ${d.osVersion ?? ''}`.trim()} />
+              {linuxDisplayText(d) !== null && <Row label="Display" value={linuxDisplayText(d)!} />}
               <Row label="Service version" value={d.serviceVersion ?? '-'} />
               <Row label="Desktop worker version" value={d.agentVersion ?? '-'} />
               <Row label="Device key" value={d.keyId ?? '-'} />
@@ -402,6 +406,11 @@ export function ConnectPanel({ detail, onOpened }: { detail: DeviceDetail; onOpe
     <section aria-label="Connect" className="flex flex-col gap-3">
       <h3 className="text-base font-semibold">Connect</h3>
       <p className="text-sm">{presenceText(detail.interactive)}</p>
+      {detail.interactive?.state === 'locked' && (
+        <p className="text-sm font-medium" role="status" data-testid="screen-locked">
+          {SCREEN_LOCKED_TEXT}
+        </p>
+      )}
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">How to connect</legend>
         <label className="flex items-start gap-2 text-sm">

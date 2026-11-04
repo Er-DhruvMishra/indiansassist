@@ -75,7 +75,9 @@ export function p4ConsentRevokeReason(s: SessionRow): SessionEndReason {
 /**
  * Rule 5.2b: the worker raises the level to `elevated` in place (privileged mode, no relaunch) after the policy /
  * approval check: `desk.consent_level { level: 'elevated', requested: true, opId }`. Refused when the effective policy
- * forbids privileged mode.
+ * forbids privileged mode. Phase F section 8.7: refused with `bad_state`, and no `elevation.granted` chained, for the
+ * worker of a `linux` device (or any service that reports `elevation: 'user'`), whose session work runs as the
+ * signed-in user, so the console never shows a user-level worker as elevated.
  */
 export async function p4PrivilegedMode(
   hub: SignalHub,
@@ -86,6 +88,10 @@ export async function p4PrivilegedMode(
   msg: SignalOf<'desk.consent_level'>,
 ): Promise<void> {
   const { ctx } = hub;
+  const deviceId = live.p4?.deviceId ?? s.deviceId;
+  const device = deviceId ? await getDevice(ctx.db, deviceId) : null;
+  if (device && userLevelDevice(device))
+    return conn.error('bad_state', 'privileged mode is not available on this device: its sessions run as the signed-in user', msg.id);
   const policy = policyOfSession(live, s);
   if (!policy?.allowPrivileged) return conn.error('bad_payload', 'the policy does not allow privileged mode', msg.id);
   if (!msg.opId) return conn.error('bad_payload', 'privileged mode needs the opId of the elevation request', msg.id);
@@ -108,6 +114,12 @@ export async function p4PrivilegedMode(
   live.agent = { ...agent, level, elevation: 'admin' };
   conn.send({ t: 'consent.level_ok', ...re(msg.id), sessionId: s.id, level, backstage: false, clipboard: agent.clipboard });
   pushAgentConsent(hub, live, live.agent);
+}
+
+/** Section 8.7: a device whose session work runs as the signed-in user (a Linux service, or `elevation: 'user'`). */
+export function userLevelDevice(d: { platform: string; capabilities: unknown }): boolean {
+  const caps = d.capabilities as { elevation?: unknown } | null;
+  return d.platform === 'linux' || caps?.elevation === 'user';
 }
 
 /** The P4 `desk.event` attestations (section 13.3, actor `desk`). */

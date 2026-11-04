@@ -12,7 +12,7 @@
 #           --die-with-parent
 # * Inside it: `dpkg -i` the deb (it depends only on libc6, which Ubuntu Base has: no
 #   --force-depends), assert the files, their modes and owners, the unit and that postinst skipped
-#   systemd, run `ia-service --version` and `ia-desktop --version` (the glibc 2.35 floor), give the
+#   systemd, run `ia-service --version` and `ia-desktop --version` (the glibc 2.34 floor), give the
 #   service a device identity and an enrolled config.json pointing at an unreachable api, then
 #   `dpkg --purge` (the prerm's offline deregister must not stop it) and assert that nothing remains:
 #   the file tree after the purge is the tree before the install, apart from dpkg's own logs.
@@ -105,7 +105,7 @@ TREE='find / -xdev \( -path /proc -o -path /dev -o -path /tmp -o -path /mnt/pkg 
 echo "pkg-sandbox-test: Ubuntu Base 22.04 in $T (bubblewrap, fake root, no network)"
 check "the sandbox is uid 0 with no network (only lo)" \
   'test "$(id -u)" = 0 && test "$(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d " " | sort | tr "\n" " ")" = "lo "'
-check "the root has libc6 >= 2.35 and no systemd running" \
+check "the root has libc6 >= 2.34 and no systemd running" \
   'dpkg-query -W -f="\${Version}\n" libc6 | grep -q "^2\.35" && ! test -d /run/systemd/system'
 sandbox "$TREE" >"$T/before.txt"
 
@@ -126,7 +126,7 @@ else
   echo "  FAIL postinst did not report skipping systemd"
 fi
 check "installed: ok installed" 'dpkg-query -W -f="\${Status}\n" indiansassist-agent | grep -qx "install ok installed"'
-check "Depends is exactly libc6 (>= 2.35)" 'dpkg-query -W -f="\${Depends}\n" indiansassist-agent | grep -qx "libc6 (>= 2.35)"'
+check "Depends is exactly libc6 (>= 2.34)" 'dpkg-query -W -f="\${Depends}\n" indiansassist-agent | grep -qx "libc6 (>= 2.34)"'
 for line in \
   "755 root root /usr/lib/indiansassist/ia-service" \
   "755 root root /usr/lib/indiansassist/ia-desktop" \
@@ -142,8 +142,8 @@ check "the unit was not enabled (no systemd)" \
   '! test -e /etc/systemd/system/multi-user.target.wants/indiansassist-agent.service'
 check "the binaries hash to the installed manifest.json" \
   'cd /usr/lib/indiansassist && for b in ia-service ia-desktop; do grep -q "\"sha256\": \"$(sha256sum $b | cut -d" " -f1)\"" manifest.json || exit 1; done'
-check "ia-service --version runs on glibc 2.35" '/usr/lib/indiansassist/ia-service --version | grep -Eq "^ia-service [0-9]+\.[0-9]+\.[0-9]+"'
-check "ia-desktop --version runs on glibc 2.35" '/usr/lib/indiansassist/ia-desktop --version | grep -Eq "^ia-desktop [0-9]+\.[0-9]+\.[0-9]+"'
+check "ia-service --version runs on glibc 2.35 (floor 2.34)" '/usr/lib/indiansassist/ia-service --version | grep -Eq "^ia-service [0-9]+\.[0-9]+\.[0-9]+"'
+check "ia-desktop --version runs on glibc 2.35 (floor 2.34)" '/usr/lib/indiansassist/ia-desktop --version | grep -Eq "^ia-desktop [0-9]+\.[0-9]+\.[0-9]+"'
 sandbox '/usr/lib/indiansassist/ia-service --version'
 
 echo "== an enrolled device on an offline host"

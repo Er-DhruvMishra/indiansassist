@@ -33,6 +33,26 @@ export function presenceText(i: InteractiveState | null): string {
   return 'Nobody signed in';
 }
 
+/** Phase F rule 8.4e: shown while the device reports its signed-in session locked. */
+export const SCREEN_LOCKED_TEXT = "The Desk's screen is locked";
+
+/** Phase F section 8.11: the operating system, as the device page names it. */
+export function platformName(platform: Device['platform']): string {
+  return platform === 'linux' ? 'Linux' : platform === 'macos' ? 'macOS' : 'Windows';
+}
+
+/**
+ * Phase F section 8.11: what a Linux device can show, from the type of its signed-in session (rule 8.4b). Null for
+ * another platform, or before the device reported any state.
+ */
+export function linuxDisplayText(d: Pick<Device, 'platform' | 'interactive'>): string | null {
+  if (d.platform !== 'linux' || !d.interactive) return null;
+  if (d.interactive.state === 'none') return 'Nobody signed in: device actions only';
+  if (d.interactive.display === 'wayland') return 'Wayland session: chat and files only';
+  if (d.interactive.display === 'x11') return 'Signed-in X11 session';
+  return null;
+}
+
 export function presenceShort(i: InteractiveState | null): string {
   if (!i) return 'Unknown';
   return i.state === 'active' ? 'Present' : i.state === 'locked' ? 'Locked' : 'Signed out';
@@ -119,6 +139,8 @@ const REFUSALS: Record<string, string> = {
   approval_required: 'This group requires someone at the device to approve. Nobody is there now, so the session cannot start.',
   outside_policy_window: 'This is outside the allowed hours in the policy. Try again inside the window, or ask an org admin to change it.',
   prelogin_not_permitted: 'Nobody is signed in and the policy does not allow access to the Windows sign-in screen for this device.',
+  // Phase F rule 8.4f, verbatim from the api.
+  prelogin_unsupported: 'Nobody is signed in to this Linux computer. IndiansAssist can connect only to a signed-in desktop session.',
   recorder_required: 'The policy requires recording and no recorder could be assigned. Try again shortly.',
   policy_forbidden: 'The policy for this device does not allow this. An org admin can change it on the group or the device.',
   amt_unavailable: 'Cold power on is not available for this device: no AMT proxy could be found on its network.',

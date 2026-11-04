@@ -3,7 +3,7 @@
  * `assist.accept`, `assist.deny` (with auto-revoke after three consecutive denials), `assist.resume`,
  * `session.stats` and `chat.channel_open`.
  */
-import { LIMITS, WS_CLOSE, type SignalOf } from '@indiansassist/shared';
+import { isNativeTier, LIMITS, WS_CLOSE, type SignalOf } from '@indiansassist/shared';
 import {
   addParticipant,
   findTokenByTid,
@@ -13,6 +13,7 @@ import {
   replaceParticipant,
   SessionAlreadyEndedError,
   resetTokenDenied,
+  type SessionRow,
   session as sessionTable,
   transitionSession,
   updateSession,
@@ -23,7 +24,8 @@ import { refOf, userRefs } from '../lib/lookup.js';
 import { canActOnToken, hasRole, TECH_ROLES } from '../lib/rbac.js';
 import { endSessionFlow } from '../services/session-end.js';
 import { afterTokenRevoked, revokeTokenRow } from '../services/token-revoke.js';
-import { clearTimer, type Conn } from './conn.js';
+import { agentOfRow, clearTimer, type Conn, type Live } from './conn.js';
+import { pushAgentConsent } from './desk-p3.js';
 import { forbiddenKey } from './forbidden.js';
 import { performHeldKnocks } from './knock.js';
 import type { SignalHub } from './hub.js';
@@ -185,6 +187,21 @@ export async function handleAssistDeny(hub: SignalHub, conn: Conn, msg: SignalOf
   if (revoked) await afterTokenRevoked(ctx, tok.id, requested ? actor : systemActor);
 }
 
+/**
+ * A native (P3 / P4) console reads its consent level only from `consent.changed`, which is not buffered: an Assist
+ * that attaches (the first `assist.resume` of a REST-opened device session) or re-attaches (a reconnect) after the
+ * Desk consented would otherwise never learn the level and sit at "View only". So the server repeats its own record,
+ * the in-memory `live.agent` (updated synchronously by every consent handler) or else the session row, right after
+ * `session.created`, in the same shape `pushAgentConsent` sends. It is computed and sent in one synchronous step, so
+ * any later change reaches this socket after it, in order, and the replay can never undo a newer level.
+ */
+function replayAgentConsent(hub: SignalHub, conn: Conn, live: Live, s: SessionRow): void {
+  if (s.state !== 'active' || live.state === 'ended' || !isNativeTier(s.tier)) return;
+  const a = live.agent ?? agentOfRow(s);
+  if (!a || hub.conn(live.assistConnId) !== conn) return;
+  pushAgentConsent(hub, live, a);
+}
+
 export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: SignalOf<'assist.resume'>): Promise<void> {
   const { ctx } = hub;
   const p = conn.principal!;
@@ -230,6 +247,7 @@ export async function handleAssistResume(hub: SignalHub, conn: Conn, msg: Signal
   await ensureAgentManifest(hub, live, s);
   await ensureP4Device(hub, live);
   conn.send({ ...sessionCreatedMsg(hub, s, org, { id: p.user.id, name: p.user.name }, 'assist'), ...re(msg.id) });
+  replayAgentConsent(hub, conn, live, s);
   if (live.recorder.joined) conn.send({ t: 'session.recording', sessionId: s.id, recording: true, source: 'server' });
   scheduleIceRefresh(hub, live, 'assist');
   const desk = hub.conn(live.deskConnId);

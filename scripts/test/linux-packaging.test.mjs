@@ -149,11 +149,11 @@ describe('the package metadata (agent/crates/ia-service/Cargo.toml, section 8.9)
     expect(role).toMatch(/name: indiansassist-agent\n\s+state: absent/);
   });
 
-  it('depends on libc6 (>= 2.35) / glibc >= 2.35 and recommends systemd, nothing else', () => {
-    expect(deb).toMatch(/^depends = "libc6 \(>= 2\.35\)"$/m);
+  it('depends on libc6 (>= 2.34) / glibc >= 2.34 and recommends systemd, nothing else', () => {
+    expect(deb).toMatch(/^depends = "libc6 \(>= 2\.34\)"$/m);
     expect(deb).toMatch(/^recommends = "systemd"$/m);
     expect(deb).not.toMatch(/^(pre-depends|suggests|conflicts) =/m);
-    expect(section('package.metadata.generate-rpm.requires').trim()).toBe('glibc = ">= 2.35"');
+    expect(section('package.metadata.generate-rpm.requires').trim()).toBe('glibc = ">= 2.34"');
     expect(section('package.metadata.generate-rpm.recommends').trim()).toBe('systemd = "*"');
     expect(rpm).toMatch(/^auto-req = "no"$/m);
   });
@@ -195,10 +195,10 @@ describe('the package metadata (agent/crates/ia-service/Cargo.toml, section 8.9)
     expect(sh).toMatch(/cargo deb -p ia-service --no-build --no-strip/);
     expect(sh).toMatch(/cargo generate-rpm --auto-req no/);
     expect(sh).toMatch(
-      /cargo zigbuild --release --locked --target "\$triple\.2\.35" -p ia-service --features linux-service/,
+      /cargo zigbuild --release --locked --target "\$triple\.2\.34" -p ia-service --features linux-service/,
     );
     expect(sh).toMatch(
-      /cargo zigbuild --release --locked --target "\$triple\.2\.35" -p ia-desktop --no-default-features --features linux/,
+      /cargo zigbuild --release --locked --target "\$triple\.2\.34" -p ia-desktop --no-default-features --features linux/,
     );
   });
 });

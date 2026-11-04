@@ -313,10 +313,24 @@ fn prepare(
     Ok((shared, stop_tx))
 }
 
-/// Run the service until SIGTERM / SIGINT. Returns the process exit code.
+/// Run the service until SIGTERM / SIGINT. Returns the process exit code: 0 on a stop request
+/// in any state (waiting unenrolled, enrolling, running), so systemd's stop is a clean exit.
 fn serve(layout: LinuxLayout, options: Options) -> i32 {
+    // Before anything that can block: a SIGTERM while waiting unenrolled used to kill the
+    // process with the default action (exit status 143).
+    if let Err(e) = ia_service::linux::stop::install() {
+        tracing::warn!(error = %e, "the stop-signal handler could not be installed");
+    }
     let mut waiting_said = false;
     let (shared, stop) = loop {
+        if ia_service::linux::stop::requested() {
+            tracing::info!(
+                signal = ia_service::linux::stop::signal_name(),
+                "stopping before the service ran"
+            );
+            let _ = sys::sd_notify("STOPPING=1");
+            return 0;
+        }
         match prepare(&layout, &options) {
             Ok(v) => break v,
             Err(PrepareError::NotEnrolled) => {
@@ -330,7 +344,11 @@ fn serve(layout: LinuxLayout, options: Options) -> i32 {
                     waiting_said = true;
                 }
                 let _ = sys::sd_notify(NOTIFY_WATCHDOG);
-                std::thread::sleep(Duration::from_secs(10));
+                // Wakes within 100 ms of a stop request; the loop head then exits 0.
+                ia_service::linux::stop::sleep_or_stop(
+                    Duration::from_secs(10),
+                    Duration::from_millis(100),
+                );
             }
             Err(PrepareError::Fatal(e)) => {
                 tracing::error!(error = %e, "the service cannot start");
@@ -355,14 +373,30 @@ fn serve(layout: LinuxLayout, options: Options) -> i32 {
     let stop_rx = stop.subscribe();
     rt.spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut term = match signal(SignalKind::terminate()) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        tokio::select! {
-            _ = term.recv() => tracing::info!("stopping on SIGTERM"),
-            _ = tokio::signal::ctrl_c() => tracing::info!("stopping on SIGINT"),
+        let mut term = signal(SignalKind::terminate()).ok();
+        let mut int = signal(SignalKind::interrupt()).ok();
+        // A stop that arrived after `prepare` but before these streams existed was caught by
+        // the early handler; poll it too, so neither path can lose a request.
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            tokio::select! {
+                _ = async { term.as_mut()?.recv().await }, if term.is_some() => {
+                    tracing::info!("stopping on SIGTERM");
+                    break;
+                }
+                _ = async { int.as_mut()?.recv().await }, if int.is_some() => {
+                    tracing::info!("stopping on SIGINT");
+                    break;
+                }
+                _ = tick.tick() => {
+                    if ia_service::linux::stop::requested() {
+                        tracing::info!(signal = ia_service::linux::stop::signal_name(), "stopping");
+                        break;
+                    }
+                }
+            }
         }
+        let _ = sys::sd_notify("STOPPING=1");
         let _ = stop.send(true);
     });
     rt.block_on(ia_service::linux::runtime::run(shared, stop_rx));

@@ -27,6 +27,7 @@ import {
   type DevicePatch,
   type DeviceStatus,
   type InstallerArch,
+  type InstallerFormat,
   type InstallerManifest,
   type Page,
   type UnattendedPolicy,
@@ -121,11 +122,13 @@ export const deviceGroupsApi = {
 /**
  * The branded installer this server serves (sections 12.1, 13.4). `manifest` says whether to offer the download at
  * all (`builds: []` = nothing configured on this node); `url` is a plain authenticated GET, so the browser can follow
- * it straight from a link and the server audits it as `download.served` against the enrollment token.
+ * it straight from a link and the server audits it as `download.served` against the enrollment token. Phase F
+ * section 8.11: the list carries every platform's packages, and `url` names the format of a non-MSI one.
  */
 export const installerApi = {
   manifest: () => api.get<InstallerManifest>('/download/installer', { schema: installerManifestSchema }),
-  url: (arch: InstallerArch, tokenId: string) => `${API_BASE}/download/installer/${arch}?tokenId=${encodeURIComponent(tokenId)}`,
+  url: (arch: InstallerArch, tokenId: string, format: InstallerFormat = 'msi') =>
+    `${API_BASE}/download/installer/${arch}?tokenId=${encodeURIComponent(tokenId)}${format === 'msi' ? '' : `&format=${format}`}`,
 };
 
 export const fleetPolicyApi = {

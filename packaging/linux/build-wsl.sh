@@ -7,7 +7,7 @@
 #       print the packaging tool versions; exit 1 when cargo-deb 3.8.0, cargo-generate-rpm 0.21.1,
 #       cargo-zigbuild or Zig is missing (the gates are then "not met"; nothing is installed here)
 #   build-wsl.sh build <cargo-target-dir> <stage-dir>
-#       the E section 7.9 release build at the glibc 2.35 floor for both binaries, then stage them
+#       the E section 7.9 release build at the glibc 2.34 floor (F section 8.9, revision 3 (g)) for both binaries, then stage them
 #   build-wsl.sh stage <cargo-target-dir> <stage-dir>
 #       stage the release binaries already built in <cargo-target-dir> (no build)
 #   build-wsl.sh package <stage-dir> <dist-dir> <deb-file-name> <rpm-file-name> <source-date-epoch>
@@ -75,12 +75,13 @@ case "$cmd" in
     [ "$#" -eq 2 ] || { echo "usage: build-wsl.sh build <cargo-target-dir> <stage-dir>" >&2; exit 2; }
     env_for "$1"
     cd "$agent"
-    # E section 7.9: glibc 2.35 floor through Zig; LIBVPX_TARGET picks the prebuilt libvpx for it.
+    # F section 8.9 (revision 3 (g), linux-p4 L3): the glibc 2.34 floor through Zig, so the packages install on EL 9
+    # (glibc 2.34); LIBVPX_TARGET picks the prebuilt libvpx, which links at 2.34 too.
     export LIBVPX_TARGET=ubuntu-22.04_x86_64
     echo "build-wsl: ia-service (release, linux-service) into $CARGO_TARGET_DIR"
-    cargo zigbuild --release --locked --target "$triple.2.35" -p ia-service --features linux-service
+    cargo zigbuild --release --locked --target "$triple.2.34" -p ia-service --features linux-service
     echo "build-wsl: ia-desktop (release, linux) into $CARGO_TARGET_DIR"
-    cargo zigbuild --release --locked --target "$triple.2.35" -p ia-desktop --no-default-features --features linux
+    cargo zigbuild --release --locked --target "$triple.2.34" -p ia-desktop --no-default-features --features linux
     stage_bins "$CARGO_TARGET_DIR" "$2"
     ;;
   stage)

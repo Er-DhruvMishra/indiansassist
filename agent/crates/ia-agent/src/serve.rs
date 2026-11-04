@@ -438,6 +438,7 @@ async fn worker_consent(
     ws_rx: &mut mpsc::UnboundedReceiver<Value>,
     info: &CreatedInfo,
     all_monitors: &[MonitorInfo],
+    dev_auto_consent: Option<AgentConsentLevel>,
 ) -> Result<
     (
         ConsentPayload,
@@ -492,6 +493,40 @@ async fn worker_consent(
                 Some((ui, rx)) => Ok((payload, Some(ui), Some(rx))),
                 // No GUI in this build (the headless loopback): the session still runs, and the
                 // missing indicator is a build fact, not a policy decision.
+                None => Ok((payload, None, None)),
+            }
+        }
+        ConsentDecision::LocalApproval | ConsentDecision::LocalConsent
+            if dev_auto_consent.is_some() =>
+        {
+            // The dev `--auto-consent` switch (parsed only in a `dev` build, never in a
+            // release one) stands in for the person at the device, as it does for a P3 Desk:
+            // the F §8.12 end to end passes it to the worker (`--worker-arg`), because nobody
+            // can click the consent window on the harness display.
+            let level = dev_auto_consent.unwrap_or(AgentConsentLevel::Control);
+            tracing::info!(
+                session = %ctx.session_id,
+                level = level_wire(level),
+                monitors = all_monitors.len(),
+                "auto-consent granted (dev): the local consent window is skipped"
+            );
+            let payload = ConsentPayload {
+                level,
+                monitors: all_monitors.iter().map(|m| m.id).collect(),
+                clipboard: false,
+            };
+            let req = ConsentRequest {
+                technician: info.technician.clone(),
+                org: info.org.clone(),
+                api_host: String::new(),
+                monitors: all_monitors.to_vec(),
+                recording_sentence: ia_ui::bridge::recording_sentence(&info.recording_mode, None),
+                warnings: vec![],
+                deadline_secs: CONSENT_SECS,
+                start_live: true,
+            };
+            match DeskUi::spawn(req) {
+                Some((ui, rx)) => Ok((payload, Some(ui), Some(rx))),
                 None => Ok((payload, None, None)),
             }
         }
@@ -689,7 +724,7 @@ pub async fn run_live_session(
         // F §8.7: tell the service how many monitors this session has (a Linux service never
         // connects to X and learns the count only from its worker).
         ctx.ops.report_monitors(all_monitors.len() as u32);
-        worker_consent(ctx, ws, ws_rx, &info, &all_monitors).await?
+        worker_consent(ctx, ws, ws_rx, &info, &all_monitors, cli.auto_consent).await?
     } else if let Some(level) = cli.auto_consent {
         // Give the freshly-navigated Assist console a moment to mount and subscribe to the
         // signalling stream, so the `consent.changed` the server mirrors is not delivered
