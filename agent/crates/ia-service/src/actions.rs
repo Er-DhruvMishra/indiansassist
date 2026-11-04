@@ -198,7 +198,10 @@ pub fn run_playbook(
 /// runner on Linux, where a device action runs as root and reports `ranAs: 'admin'`, F §8.6).
 #[cfg(any(
     feature = "service",
-    all(target_os = "linux", feature = "linux-service")
+    all(target_os = "linux", feature = "linux-service"),
+    // apple-owned: begin
+    all(target_os = "macos", feature = "macos-service"),
+    // apple-owned: end
 ))]
 pub fn phase_c_runner(
     request: &ia_core::playbook::RunRequest,

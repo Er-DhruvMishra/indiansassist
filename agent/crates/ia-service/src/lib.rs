@@ -78,6 +78,10 @@ pub fn user_agent() -> String {
         env!("CARGO_PKG_VERSION"),
         if cfg!(target_os = "linux") {
             "Linux"
+        // apple-owned: begin
+        } else if cfg!(target_os = "macos") {
+            "macOS"
+        // apple-owned: end
         } else {
             "Windows"
         },
@@ -97,6 +101,16 @@ pub fn version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // apple-owned: begin
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_user_agent_says_macos_and_never_windows() {
+        let ua = user_agent();
+        assert!(ua.contains("(macOS; "), "{ua}");
+        assert!(!ua.contains("Windows"), "{ua}");
+    }
+    // apple-owned: end
 
     /// The names the MSI registers (`packaging/windows/IndiansAssist.wxs`) and the watchdog
     /// watches (`ia_watchdog::{AGENT_SERVICE, WATCHDOG_SERVICE}`, asserted equal there, since
@@ -121,6 +135,10 @@ mod tests {
         // F §8.2: a Linux service says so; no personal data is ever in it.
         assert!(ua.contains(if cfg!(target_os = "linux") {
             "(Linux; "
+        // apple-owned: begin
+        } else if cfg!(target_os = "macos") {
+            "(macOS; "
+        // apple-owned: end
         } else {
             "(Windows; "
         }));

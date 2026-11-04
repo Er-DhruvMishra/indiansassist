@@ -1,0 +1,35 @@
+#!/bin/sh
+# Phase F section 17.3: run by Installer as root after the payload is in place.
+#   1. ownership and modes: the binaries and plists root:wheel, the state directory 0700;
+#   2. the daemon (com.indiansassist.agent) is bootstrapped into the system domain;
+#   3. the worker (com.indiansassist.desktop) is bootstrapped into each GUI session that is open now; later
+#      log-ins get it from /Library/LaunchAgents.
+# The enrollment file, when an admin dropped one at /Library/Application Support/IndiansAssist/enroll.iaconfig,
+# is read by the daemon at its start (and shredded after use).
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+set -u
+target="${3:-/}"
+[ "$target" = "/" ] || target="${target%/}"
+[ "$target" = "/" ] && target=""
+install="$target/Library/IndiansAssist"
+state="$target/Library/Application Support/IndiansAssist"
+
+chown -R root:wheel "$install" "$target/Library/LaunchDaemons/com.indiansassist.agent.plist" \
+    "$target/Library/LaunchAgents/com.indiansassist.desktop.plist"
+chmod 0755 "$install" "$install/ia-service" "$install/uninstall.sh"
+chmod 0644 "$target/Library/LaunchDaemons/com.indiansassist.agent.plist" \
+    "$target/Library/LaunchAgents/com.indiansassist.desktop.plist"
+mkdir -p "$state" "$target/Library/Logs/IndiansAssist"
+chown root:wheel "$state"
+chmod 0700 "$state"
+[ -f "$state/enroll.iaconfig" ] && chown root:wheel "$state/enroll.iaconfig" && chmod 0600 "$state/enroll.iaconfig"
+
+# Only a live system gets its jobs started (not an install onto another volume).
+[ -z "$target" ] || exit 0
+launchctl bootstrap system /Library/LaunchDaemons/com.indiansassist.agent.plist 2>/dev/null \
+    || launchctl kickstart -k system/com.indiansassist.agent 2>/dev/null || true
+for uid in $(ps -axo uid=,comm= | awk '$2 ~ /loginwindow$/ {print $1}' | sort -u); do
+    [ "$uid" -gt 0 ] 2>/dev/null || continue
+    launchctl bootstrap "gui/$uid" /Library/LaunchAgents/com.indiansassist.desktop.plist 2>/dev/null || true
+done
+exit 0

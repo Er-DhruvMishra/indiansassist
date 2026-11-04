@@ -1,0 +1,11 @@
+#!/bin/sh
+# Phase F section 17.3: run by Installer as root before the payload is laid down. An upgrade stops the
+# running daemon and every logged-in user's worker, so the new binaries are not replaced under them.
+# Never fails the install: a job that is not loaded is not an error.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+launchctl bootout system/com.indiansassist.agent 2>/dev/null || true
+for uid in $(ps -axo uid=,comm= | awk '$2 ~ /loginwindow$/ {print $1}' | sort -u); do
+    [ "$uid" -gt 0 ] 2>/dev/null || continue
+    launchctl bootout "gui/$uid/com.indiansassist.desktop" 2>/dev/null || true
+done
+exit 0
