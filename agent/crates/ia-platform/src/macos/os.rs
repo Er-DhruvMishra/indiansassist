@@ -258,7 +258,11 @@ impl SelfDelete for MacSelfDelete {
 
 /// The peer's uid and pid: `getpeereid` and `LOCAL_PEERPID`.
 pub fn peer_identity(s: &UnixStream) -> io::Result<(u32, i32)> {
-    let fd = s.as_raw_fd();
+    peer_identity_fd(s.as_raw_fd())
+}
+
+/// [`peer_identity`] of a connected `AF_UNIX` socket fd (the session-0 socketpair, §8.2).
+pub fn peer_identity_fd(fd: std::os::unix::io::RawFd) -> io::Result<(u32, i32)> {
     let (mut uid, mut gid) = (0 as libc::uid_t, 0 as libc::gid_t);
     // SAFETY: a connected Unix socket and two out-parameters.
     if unsafe { libc::getpeereid(fd, &mut uid, &mut gid) } != 0 {

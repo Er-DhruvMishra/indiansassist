@@ -117,11 +117,9 @@ pub fn peer_identity(fd: RawFd) -> io::Result<(u32, i32)> {
     #[cfg(target_os = "macos")]
     {
         // apple-owned: begin
-        // F §8.2 / §16.3: the macOS peer lookup (`getpeereid` + `getsockopt(LOCAL_PEERPID)`).
-        // Empty until the apple stream fills it; the stub returns `Unsupported` so the macOS
-        // P4 build compiles and macOS P4 end to end is reported blocked on this item.
-        let _ = fd;
-        Err(io::Error::from(io::ErrorKind::Unsupported))
+        // F §8.2 / §16.3: the macOS peer lookup, `getpeereid` for the uid and
+        // `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` for the pid.
+        ia_platform::macos::os::peer_identity_fd(fd)
         // apple-owned: end
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -147,10 +145,12 @@ pub fn peer_image(pid: i32) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         // apple-owned: begin
-        // F §8.2 / §16.3: the macOS `SecCode` designated-requirement check in place of Linux's
-        // `/proc/<pid>/exe` comparison. Empty until the apple stream fills it.
-        let _ = pid;
-        None
+        // F §8.2 / §16.3: the macOS `SecCode` check in place of Linux's `/proc/<pid>/exe`: the
+        // peer's image path (`proc_pidpath`) only when its signature is valid and satisfies this
+        // process's own signer (the same Developer ID Team ID; a valid signature for an ad hoc
+        // development build). Otherwise `None`, which the verdict refuses as `UnknownImage`.
+        ia_platform::macos::codesign::same_signer_image(pid)
+            .map(|p| p.to_string_lossy().into_owned())
         // apple-owned: end
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -360,6 +360,56 @@ mod tests {
             WorkerFrame::Alive
         );
     }
+
+    // apple-owned: begin
+    /// F §8.2 on macOS: a real socketpair reports this process as its peer (`getpeereid`,
+    /// `LOCAL_PEERPID`), `peer_image` returns this test binary (validly signed by our own, ad hoc,
+    /// signer), and the full verdict accepts it; a foreign pid and a wrong path are refused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_socketpair_reports_the_peer_and_its_signed_image() {
+        use std::os::unix::io::AsRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (service_end, worker_end) = UnixStream::pair().expect("socketpair");
+        set_cloexec(worker_end.as_raw_fd()).unwrap();
+        assert!(is_cloexec(worker_end.as_raw_fd()).unwrap());
+        // SAFETY: getpid / getuid have no preconditions.
+        let (me_pid, me_uid) = unsafe { (libc::getpid(), libc::getuid()) };
+        assert_eq!(
+            peer_identity(service_end.as_raw_fd()).unwrap(),
+            (me_uid, me_pid)
+        );
+        assert_eq!(
+            peer_identity(worker_end.as_raw_fd()).unwrap(),
+            (me_uid, me_pid)
+        );
+        assert!(peer_identity(-1).is_err());
+
+        let image = peer_image(me_pid).expect("our own signed image");
+        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert_eq!(image, exe.to_string_lossy());
+        let expected = UnixPeerExpectation {
+            pid: me_pid,
+            image: &image,
+        };
+        let observed = UnixPeerObservation {
+            pid: me_pid,
+            image: Some(&image),
+        };
+        assert_eq!(unix_peer_verdict(&expected, &observed), Ok(()));
+        let elsewhere = UnixPeerExpectation {
+            pid: me_pid,
+            image: "/Library/IndiansAssist/ia-desktop",
+        };
+        assert_eq!(
+            unix_peer_verdict(&elsewhere, &observed),
+            Err(UnixPeerRefusal::WrongImage)
+        );
+        // No such process: no image, so the verdict refuses it.
+        assert_eq!(peer_image(0), None);
+    }
+    // apple-owned: end
 
     #[cfg(target_os = "linux")]
     fn sample_blob() -> crate::blob::LaunchBlob {
