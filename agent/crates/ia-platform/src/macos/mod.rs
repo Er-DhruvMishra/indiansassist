@@ -13,6 +13,7 @@ pub mod os;
 pub mod paths;
 pub mod restart;
 pub mod selfdel;
+pub mod service;
 
 pub use os::{
     acquire_single_instance, apply_self_delete, InstanceOutcome, InstanceServer, MacElevation,

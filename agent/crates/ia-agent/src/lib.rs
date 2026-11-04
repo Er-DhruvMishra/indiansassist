@@ -45,3 +45,9 @@ pub mod voice;
 pub mod voice;
 #[cfg(feature = "media")]
 pub mod vp8;
+
+// apple-owned: begin
+/// Phase F §17.3: the macOS worker (ia-desktop) hosts the session UI on its main thread.
+#[cfg(all(target_os = "macos", feature = "gui"))]
+pub use ia_ui::app::{macos_main_thread_enable, macos_main_thread_host};
+// apple-owned: end

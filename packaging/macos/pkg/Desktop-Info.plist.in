@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Phase F section 17.3: the unattended worker's bundle, installed by the PKG at
+     /Library/IndiansAssist/IndiansAssist Desktop.app. The bundle gives the worker a name in System Settings, where
+     its Screen Recording and Accessibility grants are listed. launchd starts it (com.indiansassist.desktop) in every
+     GUI login session. @VERSION@ is filled by agent/scripts/macos-pkg.sh. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.indiansassist.desktop</string>
+	<key>CFBundleName</key>
+	<string>IndiansAssist Desktop</string>
+	<key>CFBundleDisplayName</key>
+	<string>IndiansAssist Desktop</string>
+	<key>CFBundleExecutable</key>
+	<string>ia-desktop</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.3</string>
+	<!-- No Dock icon: the pill and the session windows carry the UI. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>IndiansAssist</string>
+</dict>
+</plist>

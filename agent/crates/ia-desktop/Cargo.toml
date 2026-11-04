@@ -36,3 +36,4 @@ libc.workspace = true
 
 # Phase F §17.7: owned by the apple stream (the LaunchAgent worker's macOS-target dependencies).
 [target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true

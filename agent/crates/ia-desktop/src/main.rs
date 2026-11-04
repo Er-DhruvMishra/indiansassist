@@ -17,8 +17,13 @@
 //!
 //! It holds **no device key and no token**. Everything privileged is a request to the service.
 
-#[cfg(any(windows, target_os = "linux"))]
+// apple-owned: begin
+// (the channel is shared with the macOS worker, Phase F §17.3)
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod channel;
+#[cfg(target_os = "macos")]
+mod macos;
+// apple-owned: end
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -118,9 +123,11 @@ fn harden_dll_search() {
 fn harden_dll_search() {}
 
 // apple-owned: begin
-/// Phase F §17.3: the macOS worker entry (apple stream). Empty until then.
+/// Phase F §17.3: the macOS LaunchAgent worker ([`macos`]); it never returns.
 #[cfg(target_os = "macos")]
-fn macos_entry(_args: &[String]) {}
+fn macos_entry(args: &[String]) {
+    macos::main(args)
+}
 // apple-owned: end
 
 /// The two loader calls, declared here rather than pulling the whole `windows` crate into a

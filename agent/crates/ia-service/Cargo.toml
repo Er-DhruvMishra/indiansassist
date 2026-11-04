@@ -47,9 +47,16 @@ linux-service = [
 ]
 # Local-testing switches (`--data-dir`, `--console`, `--api-origin`), as C does with `dev`.
 dev = []
-# Phase F §17.3 / §17.7 (stream apple): the macOS LaunchDaemon half. Declared empty by F0;
-# the apple stream names its dependencies here. Compiles to nothing off macOS.
-macos-service = []
+# Phase F §17.3 / §17.7 (stream apple): the macOS LaunchDaemon half (the device socket, the
+# worker socket, the System-keychain sealer). The linux-service set without zbus and linux-os.
+# Compiles to nothing off macOS.
+macos-service = [
+    "dep:tokio",
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:ureq",
+    "ia-waker/net",
+]
 
 [dependencies]
 ia-core.workspace = true
@@ -102,6 +109,7 @@ libc.workspace = true
 
 # Phase F §17.7: owned by the apple stream (macOS-target dependencies of `macos-service`).
 [target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

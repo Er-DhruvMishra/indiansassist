@@ -172,7 +172,10 @@ where
 /// shredded, so the caller can log what it cleaned up.
 #[cfg(any(
     feature = "service",
-    all(target_os = "linux", feature = "linux-service")
+    all(target_os = "linux", feature = "linux-service"),
+    // apple-owned: begin
+    all(target_os = "macos", feature = "macos-service"),
+    // apple-owned: end
 ))]
 pub fn enroll_now(
     api_origin: &str,

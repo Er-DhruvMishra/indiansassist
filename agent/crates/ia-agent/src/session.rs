@@ -299,9 +299,16 @@ pub async fn run_handover_child_session(
 pub async fn run_worker_session(cli: &Cli, budget: Duration) -> Result<SignalOutcome, String> {
     let ctx = crate::svc::get().ok_or("run_worker_session needs a worker context")?;
     std::thread::spawn(crate::voice::voice_available);
+    // apple-owned: begin
+    // Phase F §17.3: the macOS worker reports its own OS version.
+    #[cfg(target_os = "macos")]
+    let os_version = crate::desk::os_version();
+    #[cfg(not(target_os = "macos"))]
+    // apple-owned: end
+    let os_version = "10.0".to_string();
     let id = AgentIdentity {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        os_version: "10.0".to_string(),
+        os_version,
         arch: arch().to_string(),
     };
     tracing::info!(
@@ -313,6 +320,13 @@ pub async fn run_worker_session(cli: &Cli, budget: Duration) -> Result<SignalOut
     );
     let mut client = SignalClient::connect(&ctx.signal_url, &id).await?;
     let has_voice = crate::voice::voice_available();
+    // apple-owned: begin
+    // Phase F §17.3: the macOS worker advertises the TCC-aware macOS set, which the daemon's
+    // `device.hello` features cover (the server refuses a worker that asks for more).
+    #[cfg(target_os = "macos")]
+    let caps = desk_capabilities(cli, has_voice);
+    #[cfg(not(target_os = "macos"))]
+    // apple-owned: end
     let caps = windows_capabilities(1, false, has_voice);
     client
         .desk_hello_worker(ctx.credential.expose(), &id, &caps)
