@@ -1133,11 +1133,40 @@ fn perform(shared: &Arc<MacShared>, req: &ActionRequest) -> crate::actions::Outc
             fetch_bytes,
         ),
         K::Print => crate::actions::run_print(&req.payload),
-        // The E §7.8 runner is not built for macOS yet (`actions::phase_c_runner` is gated to the
-        // Windows and Linux services); the action fails honestly rather than running elsewhere.
-        K::PlaybookRun => crate::actions::Outcome::failed(
-            "playbook runs are not available on macOS in this build",
-        ),
+        K::PlaybookRun => {
+            let Some(action) = ia_core::queue::playbook_action(&req.payload) else {
+                return crate::actions::Outcome::failed(
+                    "the action carries no runnable playbook body",
+                );
+            };
+            let device_id = shared.device_id().unwrap_or_default();
+            let injector = match ia_vault::Injector::open(
+                &req.secrets,
+                shared.identity.kex_secret(),
+                &device_id,
+            ) {
+                Ok(i) => i,
+                Err(e) => {
+                    return crate::actions::Outcome::failed(&format!(
+                        "the secrets did not open: {e}"
+                    ))
+                }
+            };
+            let manifest = shared.manifest_playbooks();
+            let run_dir = shared.paths.run_dir();
+            let timeout = Duration::from_secs(action.timeout_sec.clamp(1, 900) as u64);
+            // A `zsh` or `sh` device action runs in the daemon as root, with the E §7.8 runner
+            // rules (body on fd 3, stdin /dev/null, IA_PARAM_*, process-group kill), as on Linux.
+            crate::actions::run_playbook(
+                &action,
+                &ia_core::rnd::hex(16),
+                &manifest,
+                injector,
+                |request, secrets| {
+                    crate::actions::phase_c_runner(request, secrets, &run_dir, timeout)
+                },
+            )
+        }
     }
 }
 
