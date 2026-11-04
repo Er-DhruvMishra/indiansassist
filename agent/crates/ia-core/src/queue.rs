@@ -153,6 +153,9 @@ pub fn playbook_action(payload: &Value) -> Option<PlaybookAction> {
         "powershell" => PlaybookInterpreter::Powershell,
         "cmd" => PlaybookInterpreter::Cmd,
         "sh" => PlaybookInterpreter::Sh,
+        // Phase F §17.8: every wire interpreter parses; whether this platform may run it is the
+        // runner's decision, never the parser's (as `serve.rs` `parse_interpreter`).
+        "zsh" => PlaybookInterpreter::Zsh,
         _ => return None,
     };
     Some(PlaybookAction {
@@ -445,5 +448,31 @@ mod tests {
     #[test]
     fn a_queue_entry_without_a_body_is_not_a_runnable_playbook() {
         assert!(playbook_action(&json!({ "playbookId": "x", "args": {} })).is_none());
+    }
+
+    #[test]
+    fn every_wire_interpreter_parses_and_an_unknown_one_does_not() {
+        let with = |interp: &str| {
+            json!({
+                "playbookId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                "name": "Show the system version",
+                "args": {},
+                "requiresElevation": false,
+                "bodyHash": "00",
+                "body": "sw_vers\n",
+                "interpreter": interp,
+                "timeoutSec": 60,
+            })
+        };
+        for (wire, want) in [
+            ("powershell", PlaybookInterpreter::Powershell),
+            ("cmd", PlaybookInterpreter::Cmd),
+            ("sh", PlaybookInterpreter::Sh),
+            ("zsh", PlaybookInterpreter::Zsh),
+        ] {
+            let a = playbook_action(&with(wire)).unwrap_or_else(|| panic!("{wire} parses"));
+            assert_eq!(a.interpreter, want, "{wire}");
+        }
+        assert!(playbook_action(&with("bash")).is_none());
     }
 }
