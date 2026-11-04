@@ -56,6 +56,10 @@ pub enum WorkerFrame {
     SendSas { id: String },
     /// The worker's session ended; `reason` is the C teardown reason.
     Ended { reason: String },
+    /// F §8.7: the monitors the worker enumerated (at start and after a RandR change). The
+    /// service, which never connects to X, reports it in its next `device.hello` (a D §3.4
+    /// mutable fact; informational, it gates nothing). Wire shape `{ "t": "monitors", "count" }`.
+    Monitors { count: u32 },
     /// A heartbeat, so a worker that is wedged (rather than dead) is noticed.
     Alive,
 }
@@ -196,6 +200,7 @@ mod tests {
             state: InteractiveStateName::Active,
             idle_sec: Some(0),
             at: 1_762_000_000_000,
+            display: None,
         }
     }
 
@@ -306,6 +311,18 @@ mod tests {
         assert_eq!(
             read_frame::<_, WorkerFrame>(&mut r).unwrap(),
             WorkerFrame::Alive
+        );
+    }
+
+    #[test]
+    fn the_monitors_frame_is_the_contract_shape() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_frame(&mut buf, &WorkerFrame::Monitors { count: 2 }).unwrap();
+        assert_eq!(buf, b"{\"t\":\"monitors\",\"count\":2}\n");
+        let mut r = std::io::BufReader::new(buf.as_slice());
+        assert_eq!(
+            read_frame::<_, WorkerFrame>(&mut r).unwrap(),
+            WorkerFrame::Monitors { count: 2 }
         );
     }
 

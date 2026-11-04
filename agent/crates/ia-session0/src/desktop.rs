@@ -65,6 +65,7 @@ pub fn derive_interactive(f: &SessionFacts) -> InteractiveState {
             None
         },
         at: f.at,
+        display: None,
     }
 }
 

@@ -410,7 +410,9 @@ mod tests {
                 state: ia_core::policy::InteractiveStateName::None,
                 idle_sec: None,
                 at: 1_762_000_000_000,
+                display: None,
             },
+            os: None,
         }
     }
 

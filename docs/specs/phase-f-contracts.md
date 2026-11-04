@@ -591,6 +591,14 @@ The D architecture (D §1.4: service + bridge + desktop worker) on Linux. The se
 | `ia-platform` | `src/linux/service.rs` (new): `ServiceHost` over `sd_notify` and the systemd D-Bus API (`query_state` and `start` for its own unit; `set_failure_actions` and `register_task` answer `Ok` because the unit file carries them; `task_exists` → `true`), `DesktopBridge` over logind (§8.4) and the spawn of §8.5; `Waker` reuses `ia-waker` (UDP broadcast; no raw socket); `Amt` reports `present: false` (no MEI access in Phase F) |
 | `ia-watchdog` | not built on Linux: systemd `Restart=` and `WatchdogSec=` replace it (W110) |
 
+**Revision 3 corrections (linux-p4, binding):**
+- **(a) Peer checks on a socketpair.** `SO_PEERCRED` on a socketpair reports the process that created it (the service) on **both** ends, so the service cannot learn the worker's pid from it. The service checks the pid `fork` returned against the worker's `ready { pid }` frame and against `/proc/<pid>/exe`. The worker's own `SO_PEERCRED` check (the service pid and uid) stays as written.
+- **(b) `LaunchBlob.linux`** carries `servicePid` (required: the "pid in the blob" of §8.5) and an optional `sessionId` (the logind session, for the 8.4c scope lookup), in addition to the fields above.
+- **(c) Parent-death signal.** `PR_SET_PDEATHSIG` fires when the *thread* that forked exits, not the process. The service forks each worker from that worker's long-lived channel thread, never from a pool thread.
+- **(d) `LANG`.** logind exposes no locale, so the worker's `LANG` comes from `/etc/locale.conf` or `/etc/default/locale`, else `C.UTF-8`.
+- **(e) Where the D-Bus clients live.** The D-Bus clients (logind, systemd) live in `ia-service` behind the `ia-platform` seams `SystemdUnits` and `LogindSource`, so zbus is a dependency of `ia-service` only (as §10 says). The Windows-shaped `launch_worker` refuses on Linux; workers start through `spawn_worker`.
+- **(f) Enrollment.** `ia-service --enroll <file>` enrolls once and exits. An unenrolled service started without an enrollment file sends `READY=1` with a `STATUS=` line and waits, instead of exiting into a restart loop.
+
 ### 8.3 Enrollment and identity on Linux (binding)
 
 | # | Rule |

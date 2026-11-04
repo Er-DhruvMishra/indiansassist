@@ -34,6 +34,9 @@ pub trait ServiceOps: Send + Sync {
     fn report_protections(&self, input_lock: bool, privacy_screen: bool);
     /// Ask the service to re-evaluate §5.3 (a UAC prompt came up, the session locked).
     fn request_desktop_switch(&self, reason: &str);
+    /// F §8.7: the monitors this worker enumerated, so a Linux service (which never connects
+    /// to X) can report the count in its next `device.hello`. A no-op by default.
+    fn report_monitors(&self, _count: u32) {}
 }
 
 /// The settled consent an `auto_grant` worker applies without asking anybody (§6.2).

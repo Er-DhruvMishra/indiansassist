@@ -285,6 +285,11 @@ fn handle(
             tracing::info!(session = %session_id, pid, "the worker is serving")
         }
         WorkerAction::Alive => {}
+        WorkerAction::Monitors { count } => {
+            if let Ok(mut f) = shared.facts.lock() {
+                f.monitors = count;
+            }
+        }
         WorkerAction::Protections {
             input_lock,
             privacy_screen,

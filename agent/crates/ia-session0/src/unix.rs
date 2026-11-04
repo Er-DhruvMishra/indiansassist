@@ -12,9 +12,15 @@
 //! pid / image checks reduce to two decisions, both pure and tested here:
 //!
 //! * the **worker** checks that `getppid()` is the service pid the blob carries
-//!   ([`worker_parent_matches`]);
-//! * the **service** checks that the peer's `SO_PEERCRED.pid` is the child it spawned
-//!   ([`service_peer_matches`]).
+//!   ([`worker_parent_matches`]), and that `SO_PEERCRED` on fd 3 names that same pid;
+//! * the **service** checks that the peer is the child it spawned ([`service_peer_matches`]).
+//!
+//! One kernel fact shapes the service side: for a `socketpair(2)`, `SO_PEERCRED` returns the
+//! credentials in effect **when the pair was created** — the service's own — on both ends
+//! (unix(7)). It therefore cannot name the worker. The service compares the pid `fork` returned
+//! with the `ready { pid }` frame the worker sends and with `/proc/<pid>/exe`; the fd itself is
+//! unforgeable, because only that child inherited it (every other fd the service holds is
+//! `CLOEXEC`). The worker's `SO_PEERCRED` check is sound for the same reason in reverse.
 //!
 //! A richer verdict that also compares the peer's image ([`unix_peer_verdict`]) backs both: on
 //! Linux the image is read from `/proc/<pid>/exe`; the macOS code-signing check that replaces that
@@ -62,7 +68,9 @@ pub fn worker_parent_matches(blob_service_pid: i32, actual_ppid: i32) -> bool {
     blob_service_pid > 1 && actual_ppid == blob_service_pid
 }
 
-/// The service's rule (§8.2): the connected peer's `SO_PEERCRED.pid` must be the child it spawned.
+/// The service's rule (§8.2): the peer's pid — the `ready { pid }` the worker reports, checked
+/// against `/proc/<pid>/exe` — must be the child `fork` returned (see the module note on why
+/// `SO_PEERCRED` cannot be used on this side of a socketpair).
 pub fn service_peer_matches(spawned_child_pid: i32, peer_pid: i32) -> bool {
     spawned_child_pid > 1 && peer_pid == spawned_child_pid
 }
@@ -386,6 +394,8 @@ mod tests {
                 session_type: "x11".into(),
                 uid: 1000,
                 xdg_runtime_dir: "/run/user/1000".into(),
+                service_pid: 4321,
+                session_id: None,
             }),
         }
     }

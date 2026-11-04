@@ -40,8 +40,9 @@ pub mod session;
 #[cfg(all(windows, feature = "service"))]
 pub mod win;
 
-/// The Linux half (F §8.2, §8.3). Present today: the pure `FileModeSealer` mode check of §8.3b.
-/// Compiled on Linux only, so the Windows gate is untouched.
+/// The Linux half (F §8.2–§8.8). The pure parts compile on Linux always; the runtime, the D-Bus
+/// clients and the worker launch need the `linux-service` feature. Nothing here builds on
+/// Windows, so the Windows gate is untouched.
 #[cfg(target_os = "linux")]
 pub mod linux;
 
@@ -51,8 +52,13 @@ pub mod linux;
 pub mod macos;
 // apple-owned: end
 
-/// The service name the MSI registers and the watchdog watches (§4.1).
+/// The service name the MSI registers and the watchdog watches (§4.1); on Linux the systemd
+/// unit, `indiansassist-agent` (F §8.2, §8.8).
+#[cfg(not(target_os = "linux"))]
 pub const SERVICE_NAME: &str = "IndiansAssistAgent";
+/// The systemd unit name (F §8.2, `packaging/linux/indiansassist-agent.service`).
+#[cfg(target_os = "linux")]
+pub const SERVICE_NAME: &str = "indiansassist-agent";
 /// The display name shown in `services.msc`.
 pub const SERVICE_DISPLAY_NAME: &str = "IndiansAssist Agent";
 /// The watchdog service (§10.1).
@@ -68,8 +74,13 @@ pub const INTEGRITY_CHECK_SEC: u64 = 3600;
 /// own name so a server log can tell a service from a worker).
 pub fn user_agent() -> String {
     format!(
-        "IndiansAssist-Service/{} (Windows; {})",
+        "IndiansAssist-Service/{} ({}; {})",
         env!("CARGO_PKG_VERSION"),
+        if cfg!(target_os = "linux") {
+            "Linux"
+        } else {
+            "Windows"
+        },
         if cfg!(target_arch = "aarch64") {
             "arm64"
         } else {
@@ -92,16 +103,27 @@ mod tests {
     /// that crate is the one that depends on this one).
     #[test]
     fn the_service_names_are_the_ones_the_msi_uses() {
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(SERVICE_NAME, "IndiansAssistAgent");
+        // F §8.2: the systemd unit the deb and rpm install.
+        #[cfg(target_os = "linux")]
+        assert_eq!(SERVICE_NAME, "indiansassist-agent");
         assert_eq!(SERVICE_DISPLAY_NAME, "IndiansAssist Agent");
         assert_eq!(WATCHDOG_SERVICE_NAME, "IndiansAssistWatchdog");
         assert_eq!(WORKER_EXE, "ia-desktop.exe");
     }
 
     #[test]
-    fn the_user_agent_names_the_service_and_its_version() {
+    fn the_user_agent_names_the_service_its_platform_and_its_version() {
         let ua = user_agent();
         assert!(ua.starts_with("IndiansAssist-Service/"));
         assert!(ua.contains(version()));
+        // F §8.2: a Linux service says so; no personal data is ever in it.
+        assert!(ua.contains(if cfg!(target_os = "linux") {
+            "(Linux; "
+        } else {
+            "(Windows; "
+        }));
+        assert!(!ua.contains('@'));
     }
 }

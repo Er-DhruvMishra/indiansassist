@@ -16,6 +16,9 @@ path = "src/main.rs"
 default = ["ia-agent/media", "ia-agent/voice", "ia-agent/winapi", "ia-agent/gui", "ia-session0/winapi"]
 # `dev` passes the C local-testing switches through (`--synthetic-capture` for an automated run).
 dev = ["ia-agent/dev"]
+# Phase F §8.2: the Linux worker (built with `--no-default-features --features linux`): the E §7.2
+# seams (`media`, `x11`, `gui`, `linux-os`), no `voice` and no `winapi`.
+linux = ["ia-agent/media", "ia-agent/x11", "ia-agent/gui", "ia-agent/linux-os", "ia-platform/linux-os"]
 
 [dependencies]
 ia-agent = { workspace = true, default-features = false }
@@ -26,6 +29,10 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# Phase F §8.2: fd 3, FD_CLOEXEC, getppid, geteuid and the /proc reads of the Linux worker.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 
 # Phase F §17.7: owned by the apple stream (the LaunchAgent worker's macOS-target dependencies).
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -686,6 +686,9 @@ pub async fn run_live_session(
             None => (payload, None, None),
         }
     } else if let Some(ctx) = crate::svc::get() {
+        // F §8.7: tell the service how many monitors this session has (a Linux service never
+        // connects to X and learns the count only from its worker).
+        ctx.ops.report_monitors(all_monitors.len() as u32);
         worker_consent(ctx, ws, ws_rx, &info, &all_monitors).await?
     } else if let Some(level) = cli.auto_consent {
         // Give the freshly-navigated Assist console a moment to mount and subscribe to the
@@ -1940,12 +1943,22 @@ impl Live<'_> {
 
     async fn on_control(&mut self, text: &str) {
         let req = CtlReq::parse(text);
-        let Some((mut response, effect)) =
+        let Some((mut response, mut effect)) =
             self.control
                 .handle_text(text, &mut *self.input_sink, &mut *self.clipboard)
         else {
             return;
         };
+        // F §8.7 (the E 7.3d rule): a Linux worker runs as the signed-in user and has no
+        // privileged mode, so `elevation.request` answers `not_supported` and nothing is raised.
+        if linux_worker_refuses_elevation(
+            cfg!(target_os = "linux"),
+            crate::svc::is_worker(),
+            &effect,
+        ) {
+            response = refused_res(req.as_ref(), "not_supported");
+            effect = SessionEffect::None;
+        }
         // Effects whose answer depends on the Desk or on checks run before the reply.
         let mut deferred = false;
         let mut playbook: Option<PlaybookCheck> = None;
@@ -2578,6 +2591,13 @@ fn ctl_code(e: PlaybookError) -> &'static str {
 
 fn refused_res(req: Option<&CtlReq>, code: &str) -> Value {
     ia_core::ctl::error_response(req.map(|r| r.id.as_str()).unwrap_or(""), code, None)
+}
+
+/// F §8.7 / E 7.3d: whether this `elevation.request` must be answered `not_supported` — on a
+/// Linux service worker, which runs as the signed-in user and has no privileged mode. Pure (the
+/// platform and the worker role are arguments) so it is tested on every host.
+fn linux_worker_refuses_elevation(linux: bool, worker: bool, effect: &SessionEffect) -> bool {
+    linux && worker && matches!(effect, SessionEffect::ElevationRequest { .. })
 }
 
 /// A refusal with a `message` (§5.1: `not_supported { message }` names what is missing).
@@ -3652,6 +3672,23 @@ async fn next_stop_line(_stream: &mut StopStream) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_a_linux_service_worker_answers_elevation_not_supported() {
+        let elevate = SessionEffect::ElevationRequest {
+            reason: "install a driver".into(),
+        };
+        assert!(linux_worker_refuses_elevation(true, true, &elevate));
+        // A Windows worker raises privileged mode in place; a portable agent keeps its own path.
+        assert!(!linux_worker_refuses_elevation(false, true, &elevate));
+        assert!(!linux_worker_refuses_elevation(true, false, &elevate));
+        // Other ops are untouched.
+        assert!(!linux_worker_refuses_elevation(
+            true,
+            true,
+            &SessionEffect::None
+        ));
+    }
 
     #[test]
     fn level_wire_maps_every_level() {

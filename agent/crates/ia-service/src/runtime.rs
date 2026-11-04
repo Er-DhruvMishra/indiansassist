@@ -133,6 +133,8 @@ impl Shared {
             wake_mac,
             amt: facts.amt.clone(),
             interactive,
+            // Absent = windows (F §8.3e), so the Phase D wire is unchanged.
+            os: None,
         }
     }
 }
@@ -142,6 +144,7 @@ fn unknown_interactive() -> InteractiveState {
         state: ia_core::policy::InteractiveStateName::None,
         idle_sec: None,
         at: now_ms(),
+        display: None,
     }
 }
 

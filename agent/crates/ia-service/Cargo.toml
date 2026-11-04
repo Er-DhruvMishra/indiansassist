@@ -11,10 +11,11 @@ description = "Phase D installed service (contract D 11.1): device identity and 
 name = "ia_service"
 path = "src/lib.rs"
 
+# One binary name on both platforms: `service` builds the Windows SCM service, `linux-service` the
+# systemd one (F §8.2). Built with neither, `main` says so and exits.
 [[bin]]
 name = "ia-service"
 path = "src/main.rs"
-required-features = ["service"]
 
 [features]
 # Default: the pure half (paths, config, the manifest and integrity comparison, the machine
@@ -31,6 +32,18 @@ service = [
     "ia-session0/winapi",
     "ia-platform/winapi",
     "ia-waker/net",
+]
+# Phase F §8.2: the Linux systemd service (logind and systemd over the system bus through zbus,
+# the socketpair worker launch, sd_notify). Compiles to nothing off Linux, so the Windows
+# `--all-features` gates are unchanged.
+linux-service = [
+    "dep:tokio",
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:ureq",
+    "ia-platform/linux-os",
+    "ia-waker/net",
+    "dep:zbus",
 ]
 # Local-testing switches (`--data-dir`, `--console`, `--api-origin`), as C does with `dev`.
 dev = []
@@ -79,6 +92,13 @@ windows = { workspace = true, optional = true, features = [
     "Win32_System_Threading",
     "Win32_System_RemoteDesktop",
 ] }
+
+# Phase F §8.2 / §10: zbus at the version already locked through ksni (5.19.0), Linux only, with
+# the tokio backend ksni already uses (so nothing new enters Cargo.lock); libc for the key-file
+# modes, getuid and gethostname.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.19.0", optional = true, default-features = false, features = ["tokio"] }
+libc.workspace = true
 
 # Phase F §17.7: owned by the apple stream (macOS-target dependencies of `macos-service`).
 [target.'cfg(target_os = "macos")'.dependencies]

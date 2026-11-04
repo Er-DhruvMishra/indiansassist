@@ -194,8 +194,12 @@ pub fn run_playbook(
     }
 }
 
-/// The real playbook run (the Phase C runner).
-#[cfg(feature = "service")]
+/// The real playbook run (the Phase C runner: PowerShell / cmd on Windows, the E §7.8 `sh`
+/// runner on Linux, where a device action runs as root and reports `ranAs: 'admin'`, F §8.6).
+#[cfg(any(
+    feature = "service",
+    all(target_os = "linux", feature = "linux-service")
+))]
 pub fn phase_c_runner(
     request: &ia_core::playbook::RunRequest,
     secrets: Vec<(String, ia_core::fleet::Secret)>,

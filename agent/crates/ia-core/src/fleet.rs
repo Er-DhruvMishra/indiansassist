@@ -61,6 +61,10 @@ pub struct InteractiveState {
     pub state: InteractiveStateName,
     pub idle_sec: Option<u32>,
     pub at: i64,
+    /// F §8.3e: `x11` | `wayland` for a Linux device's target session (`None` otherwise, and
+    /// always on Windows, where the field is not sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 /// Rule 8.2a: org-salted hashes computed on the device; raw addresses never travel.
@@ -481,6 +485,10 @@ pub struct DeviceHelloClient {
     pub wake_mac: Option<String>,
     pub amt: Option<AmtInventory>,
     pub interactive: InteractiveState,
+    /// F §8.3e: `linux` on a Linux service; absent means `windows`, so a Phase D service is
+    /// unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
 }
 
 /// Every message a device may send on `/signal/device`. Nothing else is ever sent, and none of
@@ -695,6 +703,7 @@ mod tests {
                 state: InteractiveStateName::Active,
                 idle_sec: Some(3),
                 at: 1_762_000_000_000,
+                display: None,
             },
         };
         let text = serde_json::to_string(&m).unwrap();
@@ -702,6 +711,18 @@ mod tests {
             text,
             r#"{"t":"device.interactive","interactive":{"state":"active","idleSec":3,"at":1762000000000}}"#
         );
+        // F §8.3e: a Linux device names its display type.
+        let linux = DeviceClientMessage::Interactive {
+            interactive: InteractiveState {
+                state: InteractiveStateName::Locked,
+                idle_sec: None,
+                at: 1,
+                display: Some("x11".into()),
+            },
+        };
+        assert!(serde_json::to_string(&linux)
+            .unwrap()
+            .contains(r#""display":"x11""#));
     }
 
     #[test]

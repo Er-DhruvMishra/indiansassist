@@ -170,7 +170,10 @@ where
 
 /// The whole §3.1 sequence, with the HTTP transport. Returns the reply and the path that was
 /// shredded, so the caller can log what it cleaned up.
-#[cfg(feature = "service")]
+#[cfg(any(
+    feature = "service",
+    all(target_os = "linux", feature = "linux-service")
+))]
 pub fn enroll_now(
     api_origin: &str,
     identity: &Identity,
@@ -237,6 +240,7 @@ mod tests {
             state: ia_core::policy::InteractiveStateName::None,
             idle_sec: None,
             at: 1_762_000_000_000,
+            display: None,
         }
     }
 

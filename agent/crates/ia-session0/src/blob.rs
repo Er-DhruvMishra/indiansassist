@@ -40,6 +40,13 @@ pub struct LinuxLaunch {
     pub uid: u32,
     /// `/run/user/<uid>` in production, or the harness runtime dir in `--console` dev mode.
     pub xdg_runtime_dir: String,
+    /// The service's pid, captured before `fork`: the worker exits unless `getppid()` equals it
+    /// (§8.2 "the worker checking `getppid()` equals the pid in the blob").
+    pub service_pid: i32,
+    /// The logind session id (`2`, `c1`), so the worker can find its session's scope in the
+    /// cgroup tree for the 8.4c `XAUTHORITY` discovery. Absent in a dev run without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// The consent the server already settled (`auto_grant` only): the worker applies it rather
@@ -175,6 +182,9 @@ impl LaunchBlob {
                 return Err(BlobError::Invalid(
                     "linux.sessionType: one of x11 or wayland",
                 ));
+            }
+            if linux.service_pid <= 1 {
+                return Err(BlobError::Invalid("linux.servicePid: the service's pid"));
             }
         }
         Ok(())
@@ -312,6 +322,17 @@ mod tests {
         assert!(empty.validate().is_err());
     }
 
+    fn linux() -> LinuxLaunch {
+        LinuxLaunch {
+            display: ":0".into(),
+            session_type: "x11".into(),
+            uid: 1000,
+            xdg_runtime_dir: "/run/user/1000".into(),
+            service_pid: 4321,
+            session_id: Some("2".into()),
+        }
+    }
+
     #[test]
     fn the_linux_session_facts_round_trip_and_are_validated() {
         // Absent by default (Windows / macOS): the shape is unchanged.
@@ -319,30 +340,34 @@ mod tests {
         assert!(!text.contains("linux"), "absent linux must not serialise");
         // Present on a Linux service's blob.
         let b = LaunchBlob {
-            linux: Some(LinuxLaunch {
-                display: ":0".into(),
-                session_type: "x11".into(),
-                uid: 1000,
-                xdg_runtime_dir: "/run/user/1000".into(),
-            }),
+            linux: Some(linux()),
             ..blob()
         };
+        let text = String::from_utf8(b.to_bytes().unwrap().to_vec()).unwrap();
+        assert!(text.contains(r#""linux":{"display":":0","sessionType":"x11","uid":1000,"xdgRuntimeDir":"/run/user/1000","servicePid":4321,"sessionId":"2"}"#));
         let back = LaunchBlob::parse(&b.to_bytes().unwrap()).unwrap();
         let lx = back.linux.unwrap();
         assert_eq!(lx.display, ":0");
         assert_eq!(lx.session_type, "x11");
         assert_eq!(lx.uid, 1000);
-        // A bogus session type is refused.
-        let bad = LaunchBlob {
-            linux: Some(LinuxLaunch {
-                display: ":0".into(),
+        assert_eq!(lx.service_pid, 4321);
+        // A bogus session type, or no service pid, is refused.
+        for bad in [
+            LinuxLaunch {
                 session_type: "mir".into(),
-                uid: 1000,
-                xdg_runtime_dir: "/run/user/1000".into(),
-            }),
-            ..blob()
-        };
-        assert!(bad.validate().is_err());
+                ..linux()
+            },
+            LinuxLaunch {
+                service_pid: 0,
+                ..linux()
+            },
+        ] {
+            let b = LaunchBlob {
+                linux: Some(bad),
+                ..blob()
+            };
+            assert!(b.validate().is_err());
+        }
     }
 
     #[test]

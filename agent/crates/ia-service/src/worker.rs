@@ -94,6 +94,8 @@ pub enum WorkerAction {
     SendSas { id: String },
     /// The worker is alive (the supervision heartbeat).
     Alive,
+    /// F §8.7: the worker's monitor count, for the next `device.hello` (clamped to 1..=16).
+    Monitors { count: u8 },
 }
 
 /// A 6-digit SAS and two 64-hex fingerprints: the shape rule 3.5b signs. Checked before
@@ -124,6 +126,11 @@ pub fn answer_worker(frame: &WorkerFrame, session_id: &str, identity: &Identity)
             reason: reason.clone(),
         },
         WorkerFrame::SendSas { id } => WorkerAction::SendSas { id: id.clone() },
+        // F §8.7: clamp to the schema's 1..=16 so a confused worker cannot put a nonsense count
+        // into the next hello.
+        WorkerFrame::Monitors { count } => WorkerAction::Monitors {
+            count: (*count).clamp(1, 16) as u8,
+        },
         WorkerFrame::SignSas {
             id,
             gen,
@@ -435,6 +442,19 @@ mod tests {
         assert_eq!(
             answer_worker(&WorkerFrame::SendSas { id: "7".into() }, s, &id),
             WorkerAction::SendSas { id: "7".into() }
+        );
+        // F §8.7: the monitors frame is clamped to the schema's 1..=16.
+        assert_eq!(
+            answer_worker(&WorkerFrame::Monitors { count: 2 }, s, &id),
+            WorkerAction::Monitors { count: 2 }
+        );
+        assert_eq!(
+            answer_worker(&WorkerFrame::Monitors { count: 0 }, s, &id),
+            WorkerAction::Monitors { count: 1 }
+        );
+        assert_eq!(
+            answer_worker(&WorkerFrame::Monitors { count: 99 }, s, &id),
+            WorkerAction::Monitors { count: 16 }
         );
     }
 
