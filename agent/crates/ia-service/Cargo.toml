@@ -5,7 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Phase D installed service (contract D 11.1): device identity and DPAPI sealing, the enrollment client, the persistent /signal/device socket, interactive reporting, the action policy gate, worker supervision and the section 4.2 handoff, the offline-queue drain, waker and AMT execution, receipts and the watchdog registration."
+# The installed service of contract D 11.1 (Windows SCM) and F section 8 (Linux systemd): the device
+# identity and its sealing, the enrollment client, the persistent /signal/device socket, interactive
+# reporting, the action policy gate, worker supervision and the section 4.2 handoff, the offline-queue
+# drain, waker and AMT execution, receipts and the watchdog registration. The one-line description
+# below is also the Debian package synopsis (cargo-deb reads it), so it stays under 80 characters.
+description = "IndiansAssist agent service for unattended remote support"
 
 [lib]
 name = "ia_service"
@@ -106,3 +111,65 @@ libc.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 tempfile = "3.13.0"
+
+# Phase F §8.12: the fake `org.freedesktop.login1` that `agent/scripts/logind-fake.sh` serves on a
+# private dbus-daemon (never the real system bus). Linux only; a stub `main` elsewhere.
+[[example]]
+name = "logind_fake"
+required-features = ["linux-service"]
+
+# Phase F §8.9: the Linux packages. `pnpm linux:pkg` (packaging/linux/build.mjs) builds the two
+# release binaries with the E §7.9 zigbuild (glibc 2.35 floor), stages them with the installed-file
+# manifest the §8.8 integrity check reads in packaging/linux/out/stage/, and then runs cargo-deb
+# 3.8.0 and cargo-generate-rpm 0.21.1 with `--no-build` over that stage (cargo-deb also with
+# `--no-strip`, so the shipped bytes are the bytes the manifest hashes). Paths are relative to this
+# crate. The package name is the unit's and the Ansible role's: `indiansassist-agent`.
+[package.metadata.deb]
+name = "indiansassist-agent"
+revision = ""
+maintainer = "IndiansAssist <packaging@example.test>"
+copyright = "IndiansAssist"
+section = "admin"
+priority = "optional"
+extended-description = """\
+The IndiansAssist agent service for Linux: a systemd system service that holds the device \
+identity and attaches to the signed-in user's X11 session for unattended remote support. \
+Third-party licences are listed in docs/LICENSE-REGISTER.md of the source distribution."""
+depends = "libc6 (>= 2.35)"
+recommends = "systemd"
+maintainer-scripts = "../../../packaging/linux/debian/"
+assets = [
+    ["../../../packaging/linux/out/stage/ia-service", "usr/lib/indiansassist/ia-service", "755"],
+    ["../../../packaging/linux/out/stage/ia-desktop", "usr/lib/indiansassist/ia-desktop", "755"],
+    ["../../../packaging/linux/out/stage/manifest.json", "usr/lib/indiansassist/manifest.json", "644"],
+    ["../../../packaging/linux/indiansassist-agent.service", "usr/lib/systemd/system/indiansassist-agent.service", "644"],
+    ["../../../packaging/linux/copyright", "usr/share/doc/indiansassist-agent/copyright", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "indiansassist-agent"
+release = "1"
+summary = "IndiansAssist agent service for Linux (X11 unattended)"
+description = "The IndiansAssist agent service for Linux: a systemd system service that holds the device identity and attaches to the signed-in user's X11 session for unattended remote support. Third-party licences are listed in docs/LICENSE-REGISTER.md of the source distribution."
+vendor = "IndiansAssist"
+# Exactly the Requires below (no ldd discovery); `/bin/sh` stays because the scriptlets need it.
+auto-req = "no"
+post_install_script = "../../../packaging/linux/rpm/post.sh"
+post_install_script_prog = ["/bin/sh"]
+pre_uninstall_script = "../../../packaging/linux/rpm/preun.sh"
+pre_uninstall_script_prog = ["/bin/sh"]
+post_uninstall_script = "../../../packaging/linux/rpm/postun.sh"
+post_uninstall_script_prog = ["/bin/sh"]
+assets = [
+    { source = "../../../packaging/linux/out/stage/ia-service", dest = "/usr/lib/indiansassist/ia-service", mode = "755", user = "root", group = "root" },
+    { source = "../../../packaging/linux/out/stage/ia-desktop", dest = "/usr/lib/indiansassist/ia-desktop", mode = "755", user = "root", group = "root" },
+    { source = "../../../packaging/linux/out/stage/manifest.json", dest = "/usr/lib/indiansassist/manifest.json", mode = "644", user = "root", group = "root" },
+    { source = "../../../packaging/linux/indiansassist-agent.service", dest = "/usr/lib/systemd/system/indiansassist-agent.service", mode = "644", user = "root", group = "root" },
+    { source = "../../../packaging/linux/copyright", dest = "/usr/share/doc/indiansassist-agent/copyright", mode = "644", user = "root", group = "root", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = ">= 2.35"
+
+[package.metadata.generate-rpm.recommends]
+systemd = "*"

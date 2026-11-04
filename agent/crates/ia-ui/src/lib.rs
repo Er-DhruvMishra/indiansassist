@@ -13,6 +13,8 @@
 //! exclude-from-capture / re-dock on the eframe HWNDs).
 
 pub mod bridge;
+/// Phase F §6.1: the camera-link QR beside a technician's chat message (pure; drawn by `app`).
+pub mod camqr;
 pub mod model;
 
 #[cfg(feature = "gui")]

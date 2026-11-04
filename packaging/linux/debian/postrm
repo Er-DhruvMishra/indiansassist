@@ -1,0 +1,23 @@
+#!/bin/sh
+# indiansassist-agent postrm (Phase F contract section 8.9).
+# purge: remove the state (/var/lib/indiansassist: the device keys, config.json, the outbox) and the
+# config drop (/etc/indiansassist), and the runtime directory if one was left behind. systemd is
+# told about the removed unit only when it is running. Nothing is downloaded and no home directory
+# is touched.
+set -e
+
+case "$1" in
+  purge)
+    rm -rf /var/lib/indiansassist /etc/indiansassist /run/indiansassist
+    ;;
+esac
+
+case "$1" in
+  remove | purge)
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+exit 0

@@ -684,6 +684,14 @@ The service sends `READY=1` after enrollment state is loaded and `WATCHDOG=1` ev
 | Signing | unsigned in Phase F; the sha256 of each package is published in the installer manifest and shown by the console (W111) |
 | Names | `IndiansAssist-Agent-<version>-linux-x64.deb` / `.rpm` (`installerFileName(arch, version, format)`) |
 
+**Revision 3 corrections (linux-p4 L2, binding):**
+- **Contents** also include `/usr/lib/indiansassist/manifest.json` (0644): the installed file list and sha256 that the §8.8 integrity check reads. The copyright file is `/usr/share/doc/indiansassist-agent/copyright` (Debian policy and cargo-deb use the package name). In the rpm it is `%doc`, because cargo-generate-rpm 0.21.1 has no `%license`.
+- **rpm dependencies** also include `/bin/sh` (the scriptlets need it) and the automatic `rpmlib()` entries.
+- **Maintainer scripts:** an upgrade runs `systemctl try-restart`, so the integrity check never compares a running old binary with new files. Purge and erase also remove `/run/indiansassist`.
+- **Dev `--console`** gains `--home <dir>`, so the dev worker's `HOME` is a temporary directory and never the real home (S3).
+- **glibc floor and EL 9.** EL 9 ships glibc 2.34, so a 2.35 floor cannot install there. linux-p4 L3 builds both binaries at `x86_64-unknown-linux-gnu.2.34` if they link. If they do, the floor is 2.34 everywhere in §7.9 and §8.9, and the Depends/Requires lines follow. If not, §8.10 and §8.12 name EL 10 and Fedora 36+ instead of EL 9, and the reason is recorded.
+- Measured (§15.7): `systemd-analyze security --offline=yes` 9.1 ("UNSAFE", expected for the deliberately light hardening of §8.8); deb 6.82 MiB, rpm 7.40 MiB; ia-service 7.29 MiB (GLIBC 2.34), ia-desktop 17.00 MiB (GLIBC 2.35); NEEDED libc, libm, ld-linux.
+
 ### 8.10 Ansible role (binding; `packaging/linux/ansible/roles/indiansassist_agent/`)
 
 | Path | Content |

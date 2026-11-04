@@ -356,6 +356,50 @@ mod mac_host {
 }
 // apple-owned: end
 
+/// One chat line. A technician's message holding a camera link carries its QR code (Phase F
+/// §6.1, [`crate::camqr`]), computed once when the message arrives.
+struct ChatLine {
+    from_technician: bool,
+    text: String,
+    qr: Option<crate::camqr::QrMatrix>,
+}
+
+impl ChatLine {
+    fn mine(text: String) -> Self {
+        Self {
+            from_technician: false,
+            text,
+            qr: None,
+        }
+    }
+}
+
+/// Paint `qr` with a white quiet zone, each module a whole number of physical pixels so the
+/// edges stay sharp for a phone camera.
+fn paint_qr(ui: &mut egui::Ui, qr: &crate::camqr::QrMatrix) {
+    let ppp = ui.ctx().pixels_per_point();
+    let module = (4.0 * ppp).round().max(2.0) / ppp;
+    let quiet = crate::camqr::QUIET_ZONE;
+    let side = (qr.width() + 2 * quiet) as f32 * module;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let origin = egui::pos2(snap(rect.min.x), snap(rect.min.y));
+    let painter = ui.painter_at(rect.expand(1.0));
+    painter.rect_filled(
+        egui::Rect::from_min_size(origin, egui::vec2(side, side)),
+        0.0,
+        Color32::WHITE,
+    );
+    for (x, y, len) in qr.dark_runs() {
+        let min = origin + egui::vec2((x + quiet) as f32 * module, (y + quiet) as f32 * module);
+        painter.rect_filled(
+            egui::Rect::from_min_size(min, egui::vec2(len as f32 * module, module)),
+            0.0,
+            Color32::BLACK,
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Consent,
@@ -378,7 +422,7 @@ struct LiveState {
     /// The executable warning's first click happened (the second click accepts).
     file_confirm_armed: bool,
     level_prompt: Option<(String, Instant, u64)>,
-    chat: Vec<(bool, String)>,
+    chat: Vec<ChatLine>,
     unread: bool,
     chat_input: String,
     toast: Option<(String, Instant)>,
@@ -697,7 +741,13 @@ impl IaApp {
                             Some((format!("{}: {first}", self.live.technician), Instant::now()));
                         self.live.unread = true;
                     }
-                    self.live.chat.push((from_technician, text));
+                    // Phase F §6.1: a technician's camera link gets its QR, made once here.
+                    let qr = crate::camqr::for_chat(from_technician, &text, &self.req.api_host);
+                    self.live.chat.push(ChatLine {
+                        from_technician,
+                        text,
+                        qr,
+                    });
                     if self.live.chat.len() > 200 {
                         self.live.chat.remove(0);
                     }
@@ -1261,11 +1311,17 @@ impl IaApp {
             }
             ui.separator();
             ui.label(RichText::new("Chat").strong());
-            egui::ScrollArea::vertical().max_height(120.0).stick_to_bottom(true).show(ui, |ui| {
-                for (from_tech, text) in &self.live.chat {
-                    let who = if *from_tech { self.live.technician.as_str() } else { "You" };
+            // A camera-link QR needs room to be scanned whole, so the chat grows while one is shown.
+            let chat_height = if self.live.chat.iter().any(|c| c.qr.is_some()) { 320.0 } else { 120.0 };
+            egui::ScrollArea::vertical().max_height(chat_height).stick_to_bottom(true).show(ui, |ui| {
+                for line in &self.live.chat {
+                    let who = if line.from_technician { self.live.technician.as_str() } else { "You" };
                     // Text is drawn as text: egui interprets no markup (§6.2).
-                    ui.label(format!("{who}: {text}"));
+                    ui.label(format!("{who}: {}", line.text));
+                    if let Some(qr) = &line.qr {
+                        paint_qr(ui, qr);
+                        ui.label(RichText::new(crate::camqr::CAPTION).small());
+                    }
                 }
             });
             ui.horizontal(|ui| {
@@ -1313,7 +1369,7 @@ impl IaApp {
                 }
                 UiEvent::LevelDecision { .. } => self.live.level_prompt = None,
                 UiEvent::FileDecision { .. } => self.live.file_prompt = None,
-                UiEvent::ChatSend(t) => self.live.chat.push((false, t.clone())),
+                UiEvent::ChatSend(t) => self.live.chat.push(ChatLine::mine(t.clone())),
                 _ => {}
             }
             self.emit(e);
@@ -1607,7 +1663,9 @@ impl IaApp {
             "clipboard on" => self.emit(UiEvent::Clipboard(true)),
             "clipboard off" => self.emit(UiEvent::Clipboard(false)),
             "chat" => {
-                self.live.chat.push((false, "Hello from the Desk".into()));
+                self.live
+                    .chat
+                    .push(ChatLine::mine("Hello from the Desk".into()));
                 self.emit(UiEvent::ChatSend("Hello from the Desk".into()));
             }
             "stop" => {

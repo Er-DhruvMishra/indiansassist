@@ -28,6 +28,9 @@ eframe = { version = "0.29.1", optional = true, default-features = false, featur
 winit = { version = "0.30", optional = true, default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+# Phase F §6.1 / §10: the camera-link QR in the chat panel (`camqr`), Windows and Linux; the macOS
+# QR is the apple stream's. Pure Rust, no default features (no image or svg renderer).
+qrcode = { version = "=0.14.1", default-features = false }
 tray-icon = { version = "0.19.2", optional = true }
 windows = { workspace = true, optional = true, features = [
     "Win32_Foundation",
@@ -41,7 +44,8 @@ windows = { workspace = true, optional = true, features = [
 # Phase E §7.2: on Linux eframe / winit use the X11 backend only (libX11, libxkbcommon and libGL
 # are opened at run time, not linked), and the tray is ksni (pure-Rust D-Bus through zbus).
 [target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.29.1", optional = true, default-features = false, features = ["glow", "default_fonts", "x11"] }
+qrcode = { version = "=0.14.1", default-features = false }
+eframe ={ version = "0.29.1", optional = true, default-features = false, features = ["glow", "default_fonts", "x11"] }
 winit = { version = "0.30", optional = true, default-features = false, features = ["x11", "rwh_06"] }
 # The pill treatment over EWMH (utility type, above, skip-taskbar), pure-Rust X11.
 x11rb = { workspace = true, optional = true }

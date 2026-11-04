@@ -58,6 +58,10 @@ pub struct DevOverrides {
     pub system_bus: Option<String>,
     /// `--display`: the harness display (`:97`).
     pub display: Option<String>,
+    /// `--home`: the worker's `HOME` and working directory instead of the user's real home, so
+    /// what a dev worker writes (a received file, XDG data and config) stays in the harness's
+    /// temporary root (S3).
+    pub home: Option<PathBuf>,
 }
 
 /// What a launch needs beyond the session: who the worker runs as, and where.
@@ -104,7 +108,11 @@ pub fn plan_for(session: &LogindSession, f: &PlanFacts<'_>) -> SpawnPlan {
         uid: f.user.uid,
         gid: f.user.gid,
         supplementary_gids: f.groups.clone(),
-        home: f.user.home.clone(),
+        // `--home` is a dev `--console` override only; production always uses the user's home.
+        home: match &f.dev.home {
+            Some(h) if f.dev_console => h.to_string_lossy().into_owned(),
+            _ => f.user.home.clone(),
+        },
         user: f.user.name.clone(),
         shell: if f.user.shell.is_empty() {
             "/bin/sh".into()
@@ -466,6 +474,7 @@ mod tests {
             session_bus: Some("none".into()),
             system_bus: Some("unix:path=/tmp/ia-h/system_bus".into()),
             display: Some(":97".into()),
+            home: Some(PathBuf::from("/tmp/ia-h/home")),
         };
         let u = user();
         let plan = plan_for(&session("x11"), &facts(&dev, &u, true));
@@ -473,6 +482,12 @@ mod tests {
         assert_eq!(plan.env_value("DISPLAY"), Some(":97"));
         assert_eq!(plan.env_value("XDG_RUNTIME_DIR"), Some("/tmp/ia-h/run"));
         assert_eq!(plan.env_value("DBUS_SESSION_BUS_ADDRESS"), None);
+        // `--home` keeps what the worker writes under the harness root, not the real home.
+        assert_eq!(plan.env_value("HOME"), Some("/tmp/ia-h/home"));
+        assert_eq!(plan.cwd, "/tmp/ia-h/home");
+        // ... and it is never honoured outside dev `--console` mode.
+        let prod = plan_for(&session("x11"), &facts(&dev, &u, false));
+        assert_eq!(prod.env_value("HOME"), Some("/home/asha"));
         // Even without `--session-bus`, a dev run never names the user's real bus.
         let dev = DevOverrides {
             session_bus: None,

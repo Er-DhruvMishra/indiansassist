@@ -12,8 +12,9 @@
 //! * **`--console`** (`dev` feature only, never in a release build): the same service in the
 //!   foreground as the **current user**, everything under `--data-dir`, with `--runtime-dir`,
 //!   `--session-bus <address|none>`, `--system-bus <address>` (the logind fake) and
-//!   `--display <:n>` (the harness display), so an end-to-end run names no real runtime
-//!   directory, session bus, system bus or display (S3). `--worker-arg <arg>` (repeatable) is
+//!   `--display <:n>` (the harness display), and `--home <dir>` (the worker's `HOME` and working
+//!   directory), so an end-to-end run names no real runtime directory, session bus, system bus,
+//!   display or home (S3). `--worker-arg <arg>` (repeatable) is
 //!   passed to the worker (`--synthetic-capture`, `--no-self-delete`);
 //! * `--version`, `--help`.
 
@@ -437,6 +438,7 @@ fn run_console(args: &[String]) {
             session_bus: value(args, "--session-bus"),
             system_bus: value(args, "--system-bus"),
             display: value(args, "--display"),
+            home: value(args, "--home").map(PathBuf::from),
         },
         worker_args: values(args, "--worker-arg"),
     };

@@ -120,17 +120,24 @@ pub fn build_request(
     })
 }
 
-/// The token id the proof covers. The compact token's payload carries it (`jti`); a token this
-/// build cannot parse is still sent to the server, which is authoritative — but the proof
-/// needs the id, so an unparseable token is an error here rather than a `400` later.
+/// The token id the proof covers: the `tid` claim of the compact token
+/// `ia1.<kid>.<base64url payload>.<base64url signature>` (`packages/shared/src/token/codec.ts`,
+/// `ia_core::token`). The signature and expiry are left to the server, which is authoritative —
+/// but the proof needs the id, so a token without one is an error here rather than a `400` later.
 pub fn token_id_of(token: &str) -> Option<String> {
-    let payload = token.split('.').nth(1)?;
+    let parts: Vec<&str> = token.split('.').collect();
+    let [prefix, _kid, payload, _sig] = parts.as_slice() else {
+        return None;
+    };
+    if *prefix != "ia1" {
+        return None;
+    }
     let bytes =
         base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    v.get("jti")
-        .or_else(|| v.get("tokenId"))
+    v.get("tid")
         .and_then(|j| j.as_str())
+        .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 
@@ -394,17 +401,25 @@ mod tests {
 
     #[test]
     fn the_token_id_is_read_out_of_the_compact_token() {
-        let payload = serde_json::json!({ "jti": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "typ": "enrollment" });
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            serde_json::to_vec(&payload).unwrap(),
-        );
-        assert_eq!(
-            token_id_of(&format!("ia1.{b64}.sig")).as_deref(),
-            Some("9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")
-        );
+        // The real shape (codec.ts): `ia1.<16-hex kid>.<b64url payload>.<b64url sig>`, id in `tid`.
+        let b64 = |v: serde_json::Value| {
+            base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                serde_json::to_vec(&v).unwrap(),
+            )
+        };
+        let tid = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+        let payload = b64(serde_json::json!({ "tid": tid, "typ": "enrollment" }));
+        let token = format!("ia1.0123456789abcdef.{payload}.c2ln");
+        assert_eq!(token_id_of(&token).as_deref(), Some(tid));
+        // The old (wrong) three-segment shape, a `jti`-only payload, another prefix, and
+        // garbage all give no id.
+        assert!(token_id_of(&format!("ia1.{payload}.sig")).is_none());
+        let jti_only = b64(serde_json::json!({ "jti": tid }));
+        assert!(token_id_of(&format!("ia1.0123456789abcdef.{jti_only}.c2ln")).is_none());
+        assert!(token_id_of(&format!("ia2.0123456789abcdef.{payload}.c2ln")).is_none());
         assert!(token_id_of("not-a-token").is_none());
-        assert!(token_id_of("ia1.!!!.sig").is_none());
+        assert!(token_id_of("ia1.0123456789abcdef.!!!.c2ln").is_none());
     }
 
     #[test]

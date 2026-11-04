@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: IndiansAssist Agent
+Comment: The IndiansAssist agent service (ia-service) and desktop worker (ia-desktop) for Linux.
+ Every third-party component built into these two binaries, with its version and licence, is
+ listed in docs/LICENSE-REGISTER.md of the IndiansAssist source distribution.
+
+Files: *
+Copyright: IndiansAssist
+License: LicenseRef-IndiansAssist
+ See docs/LICENSE-REGISTER.md of the IndiansAssist source distribution.

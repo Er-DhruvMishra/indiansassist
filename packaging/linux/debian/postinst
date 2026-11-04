@@ -1,0 +1,25 @@
+#!/bin/sh
+# indiansassist-agent postinst (Phase F contract section 8.9).
+# The systemd steps run only when systemd is the running init (/run/systemd/system exists), so the
+# package also installs in a container or chroot without systemd; there the service is simply not
+# started. This script downloads nothing and never touches a home directory.
+set -e
+
+case "$1" in
+  configure)
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      # An upgrade ($2 = the previous version) restarts a running service onto the new binaries,
+      # so its integrity check (section 8.8) does not compare a running old image with new files.
+      if [ -n "$2" ]; then
+        systemctl try-restart indiansassist-agent >/dev/null 2>&1 || true
+      fi
+      systemctl enable --now indiansassist-agent || \
+        echo "indiansassist-agent: the service could not be started; see: journalctl -u indiansassist-agent" >&2
+    else
+      echo "indiansassist-agent: systemd is not running here; the service was installed but not started."
+    fi
+    ;;
+esac
+
+exit 0

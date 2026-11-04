@@ -68,6 +68,36 @@ fn the_service_reads_the_manifest_the_packaging_build_writes() {
     }
 }
 
+/// `packaging/linux/out/stage` once `pnpm linux:pkg` has staged it (F §8.9): the file the deb and
+/// the rpm install as `/usr/lib/indiansassist/manifest.json`.
+fn linux_staged() -> Option<PathBuf> {
+    let stage = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packaging/linux/out/stage");
+    stage.join("manifest.json").exists().then_some(stage)
+}
+
+#[test]
+fn the_linux_service_reads_the_manifest_the_linux_packages_install() {
+    let Some(stage) = linux_staged() else {
+        eprintln!("no staged Linux payload (run `pnpm linux:pkg`); skipping");
+        return;
+    };
+    let manifest = InstallManifest::load(&stage.join("manifest.json"))
+        .expect("the staged Linux manifest.json parses as the shape the service reads");
+    assert_eq!(manifest.v, 1);
+    assert_eq!(manifest.arch, "x64");
+    assert!(!manifest.placeholder);
+    // §8.9: the two binaries the package installs beside it, by their installed names.
+    let names: Vec<&str> = manifest.files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["ia-service", "ia-desktop"]);
+    // The §8.8 integrity check (the same function the Linux runtime calls against
+    // /usr/lib/indiansassist) passes against the staged bytes, which are the packaged bytes.
+    let report = check_binaries(&stage, &manifest);
+    assert!(report.binaries_ok(), "{}", report.summary());
+    for f in &manifest.files {
+        assert!(f.size <= 25 * 1024 * 1024, "{} is over 25 MiB", f.name);
+    }
+}
+
 #[test]
 fn a_changed_binary_in_the_staged_payload_would_be_detected() {
     let Some(stage) = staged() else {
