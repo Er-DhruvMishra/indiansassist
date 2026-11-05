@@ -33,7 +33,12 @@ export function wsl(args: string[], timeoutMs = 30_000): { status: number | null
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-export type LinuxMode = 'synthetic' | 'x11' | 'wayland';
+/**
+ * Phase F section 9.6: `portal` runs the X11 dev binary with `.ia-portal` beside it under the headless portal stack
+ * (agent/scripts/portal-test.sh: private bus, headless sway `ia-wl-<rand>`, PipeWire, the wlr portal); `portal-nopw` runs
+ * the same pair with `IA_TEST_NO_PIPEWIRE=1` (dev builds only), so the X11 binary stays.
+ */
+export type LinuxMode = 'synthetic' | 'x11' | 'wayland' | 'portal' | 'portal-nopw';
 
 export type LinuxAgentOptions = {
   mode: LinuxMode;
@@ -139,6 +144,12 @@ export class LinuxAgent {
     const r = wsl(['env', '-u', 'WAYLAND_DISPLAY', `DISPLAY=${this.display}`, 'xdotool', 'getmouselocation']);
     const m = /x:(\d+)\s+y:(\d+)/.exec(r.stdout);
     return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  }
+
+  /** Phase F section 9.6: the image a WSL process runs (`readlink /proc/<pid>/exe`), to prove the hand-over. */
+  exeOfPid(pid: number): string {
+    if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error(`refusing pid ${pid}`);
+    return wsl(['readlink', `/proc/${pid}/exe`]).stdout.trim();
   }
 
   /** Stop what this run started: the wsl.exe child, then the script's own pids and temporary root in WSL. */

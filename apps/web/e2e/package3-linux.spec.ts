@@ -2,7 +2,7 @@
  * `pnpm e2e:p3:linux` (docs/specs/phase-e-contracts.md sections 7.10, 15.7): a Windows Chromium Assist console
  * against the Linux portable agent built and run in WSL Ubuntu.
  *
- * Three sessions, each in its own org and token:
+ * Five sessions, each in its own org and token:
  *
  *  1. synthetic (the section 7.10 command: `--synthetic-capture --auto-consent control --no-self-delete`): knock and
  *     accept, `desk.hello` as `os: 'linux'` with the section 7.5 capabilities, the security code the console shows
@@ -15,7 +15,12 @@
  *     video advances, and a click on the remote screen moves the Xvfb pointer to the matching point (read back with
  *     xdotool on the harness display only);
  *  3. wayland: the agent sees a Wayland session (a WAYLAND_DISPLAY that names no compositor), shares no screen and
- *     says so; the console shows the no-screen state, and chat and a file still work.
+ *     says so; the console shows the no-screen state, and chat and a file still work;
+ *  4. portal (Phase F section 9.6): the X11 dev binary with `.ia-portal` beside it, started under the headless portal
+ *     stack (agent/scripts/portal-test.sh), hands over to the portal binary (its log and `/proc/<pid>/exe`) and joins:
+ *     the console shows video of the stack's known colour, Control is greyed with E's text, chat and a file work;
+ *  5. portal-nopw: the same pair with `IA_TEST_NO_PIPEWIRE=1` (dev builds only): the X11 binary stays and says that
+ *     screen sharing on Wayland needs PipeWire; the console shows the no-screen state.
  *
  * Nothing is sent to or captured from the user's desktop: see linux-agent-harness.ts and agent/scripts/e2e-agent.sh.
  */
@@ -265,6 +270,113 @@ test('Linux agent (Wayland session): no screen, honest no-screen state; chat and
     });
     await test.step('chat still works', async () => chat(assist, a, 'Hello Wayland'));
     await test.step('a file still arrives', async () => sendFile(assist, a, 'e2e-wayland-note.txt'));
+    await test.step('Stop from the agent ends the session', async () => stopFromAgent(assist, a));
+  } finally {
+    (agent as LinuxAgent | null)?.kill();
+    await ctx.close();
+  }
+});
+
+/** The mean colour of a patch of the remote video (drawn to a canvas in the page). */
+async function videoColour(page: Page): Promise<[number, number, number] | null> {
+  return page.evaluate(() => {
+    const v = [...document.querySelectorAll('video')].find(
+      (x) => x.srcObject instanceof MediaStream && x.getAttribute('aria-hidden') === 'true',
+    );
+    if (!v || !v.videoWidth || !v.videoHeight) return null;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(v, 0, 0);
+    const d = ctx.getImageData(Math.floor(c.width * 0.3), Math.floor(c.height * 0.3), 16, 16).data;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      r += d[i]!;
+      g += d[i + 1]!;
+      b += d[i + 2]!;
+    }
+    const n = d.length / 4;
+    return [r / n, g / n, b / n] as [number, number, number];
+  });
+}
+
+/** agent/scripts/portal-test.sh's solid background (`IA_PORTAL_TEST_COLOUR`, default 3366cc). */
+const PORTAL_COLOUR: [number, number, number] = [0x33, 0x66, 0xcc];
+
+test('Linux agent (Wayland with the portal companion): hand-over, view-only video, chat and files', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const assist = await newSide(ctx, 'assist');
+  let agent: LinuxAgent | null = null;
+  try {
+    const code = await setupOrg(assist, 'portal');
+    await test.step('the X11 binary hands over to .ia-portal, which joins with the portal capabilities', async () => {
+      ({ agent } = await joinAndSecure(assist, 'portal', code));
+      const a = agent as unknown as LinuxAgent;
+      await a.waitForLine(/handing over to the Wayland screen-sharing part: \S+\/\.ia-portal$/, 5_000);
+      const m = await a.waitForLine(/handed over from (\S+\/IndiansAssist): running (\S+) \(pid (\d+)\)/, 5_000);
+      expect(m[2]).toMatch(/\/\.ia-portal$/);
+      expect(a.exeOfPid(Number(m[3])), 'the process image is the portal binary').toMatch(/\/\.ia-portal$/);
+      await a.waitForLine(/linux capabilities.*mode=Portal.*"screen".*"recorder"/i, 5_000);
+      expect(a.lines.some((l) => /needs PipeWire/.test(l))).toBe(false);
+    });
+    const a = agent as unknown as LinuxAgent;
+    await test.step('the portal session starts without a dialog and the console shows video of the known colour', async () => {
+      await a.waitForLine(/portal: first frame/, 45_000);
+      await expect.poll(async () => (await probeRemoteVideo(assist))?.width ?? 0, { timeout: 30_000 }).toBeGreaterThan(0);
+      await expect
+        .poll(
+          async () => {
+            const c = await videoColour(assist);
+            return c ? Math.max(...c.map((v, i) => Math.abs(v - PORTAL_COLOUR[i]!))) : 999;
+          },
+          { timeout: 30_000 },
+        )
+        .toBeLessThan(28);
+      await shot(assist, 'linux-portal-video');
+    });
+    await test.step('Control stays off: the portal build advertises no input (E controlBlocker)', async () => {
+      // `controlBlocker` ("This Desk cannot take remote control") refuses the switch: after the security code is
+      // confirmed, asking for Control leaves the console in View.
+      await confirmSasAndTakeControl(assist);
+      await expect(assist.getByRole('button', { name: 'Control', exact: true })).toHaveAttribute('aria-pressed', 'false');
+      await expect(assist.getByRole('button', { name: 'View', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(assist.getByTestId('no-screen-state')).toHaveCount(0);
+      expect(a.lines.some((l) => /op=os\.pointer/.test(l))).toBe(false);
+    });
+    await test.step('chat still works', async () => chat(assist, a, 'Hello portal'));
+    await test.step('a file still arrives', async () => sendFile(assist, a, 'e2e-portal-note.txt'));
+    await test.step('Stop from the agent ends the session', async () => stopFromAgent(assist, a));
+  } finally {
+    (agent as LinuxAgent | null)?.kill();
+    await ctx.close();
+  }
+});
+
+test('Linux agent (Wayland, PipeWire missing): the X11 binary stays with the honest message', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const assist = await newSide(ctx, 'assist');
+  let agent: LinuxAgent | null = null;
+  try {
+    const code = await setupOrg(assist, 'nopw');
+    await test.step('no hand-over: the PipeWire line, the Wayland set', async () => {
+      ({ agent } = await joinAndSecure(assist, 'portal-nopw', code));
+      const a = agent as unknown as LinuxAgent;
+      await a.waitForLine(/Screen sharing on Wayland needs PipeWire, which was not found\./, 5_000);
+      await a.waitForLine(/linux capabilities.*mode=Wayland/i, 5_000);
+      expect(a.lines.some((l) => /handing over|handed over from/.test(l))).toBe(false);
+    });
+    const a = agent as unknown as LinuxAgent;
+    await test.step('the console shows the no-screen state', async () => {
+      await expect(assist.getByRole('heading', { name: 'The Desk cannot share its screen: Wayland session' })).toBeVisible({
+        timeout: 20_000,
+      });
+      await shot(assist, 'linux-portal-nopw-no-screen');
+    });
+    await test.step('chat still works', async () => chat(assist, a, 'Hello no PipeWire'));
     await test.step('Stop from the agent ends the session', async () => stopFromAgent(assist, a));
   } finally {
     console.log(`screenshots:\n${shots.join('\n')}`);

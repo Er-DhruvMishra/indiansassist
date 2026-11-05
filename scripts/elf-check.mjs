@@ -2,13 +2,16 @@
 /**
  * The Linux release gate (docs/specs/phase-e-contracts.md section 7.9): a pure Node ELF64 reader, no binutils.
  *
- *   node scripts/elf-check.mjs <path> [--max-glibc 2.35] [--max-size-mib 25]
+ *   node scripts/elf-check.mjs <path> [--max-glibc 2.35] [--max-size-mib 25] [--allow <soname>]...
+ *
+ * Phase F section 9.6: `--allow libpipewire-0.3.so.0` (repeatable) widens the NEEDED set by exactly that library, for the
+ * Wayland portal companion, which links libpipewire; the E set stays the default for every other binary.
  *
  * The release binary is stripped, so everything is found through the **program headers** (never the section
  * headers): `PT_DYNAMIC` gives the dynamic table; its `DT_STRTAB` (a virtual address, mapped to a file offset
  * through the `PT_LOAD` segments) is the `.dynstr` the `DT_NEEDED` names and the `DT_VERNEED` (`.gnu.version_r`)
  * chain point into. The check passes only when
- *   - every `DT_NEEDED` entry is one of the allowed glibc / libgcc libraries below,
+ *   - every `DT_NEEDED` entry is one of the allowed glibc / libgcc libraries below (plus each `--allow`),
  *   - the highest `GLIBC_x.y[.z]` version any `Vernaux` entry requires is at most `--max-glibc`, and
  *   - the file is at most `--max-size-mib` MiB.
  * It prints one line of JSON (stdout) either way, writes each failure to stderr and exits 1 on a failure (also
@@ -171,7 +174,8 @@ export function readElf(buf) {
 }
 
 /** Runs the section 7.9 gate on an image; never throws (a malformed file is a failure). */
-export function checkElf(buf, { maxGlibc = DEFAULT_MAX_GLIBC, maxSizeMib = DEFAULT_MAX_SIZE_MIB } = {}) {
+export function checkElf(buf, { maxGlibc = DEFAULT_MAX_GLIBC, maxSizeMib = DEFAULT_MAX_SIZE_MIB, allow = [] } = {}) {
+  const allowed = [...ALLOWED_NEEDED, ...allow];
   const failures = [];
   const max = parseGlibcVersion(maxGlibc);
   if (!max) throw new Error(`--max-glibc must look like 2.35, got "${maxGlibc}"`);
@@ -188,8 +192,8 @@ export function checkElf(buf, { maxGlibc = DEFAULT_MAX_GLIBC, maxSizeMib = DEFAU
   if (elf) {
     summary.needed = elf.needed;
     summary.interp = elf.interp;
-    const extra = elf.needed.filter((n) => !ALLOWED_NEEDED.includes(n));
-    if (extra.length > 0) failures.push(`DT_NEEDED has libraries outside the allowed set: ${extra.join(', ')} (allowed: ${ALLOWED_NEEDED.join(', ')})`);
+    const extra = elf.needed.filter((n) => !allowed.includes(n));
+    if (extra.length > 0) failures.push(`DT_NEEDED has libraries outside the allowed set: ${extra.join(', ')} (allowed: ${allowed.join(', ')})`);
     let highest = null;
     for (const v of elf.versions) {
       if (!v.name.startsWith('GLIBC_')) continue;
@@ -204,11 +208,17 @@ export function checkElf(buf, { maxGlibc = DEFAULT_MAX_GLIBC, maxSizeMib = DEFAU
 }
 
 function parseArgs(argv) {
-  const out = { path: null, maxGlibc: DEFAULT_MAX_GLIBC, maxSizeMib: DEFAULT_MAX_SIZE_MIB };
+  const out = { path: null, maxGlibc: DEFAULT_MAX_GLIBC, maxSizeMib: DEFAULT_MAX_SIZE_MIB, allow: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--max-glibc') out.maxGlibc = argv[++i];
     else if (a === '--max-size-mib') out.maxSizeMib = Number(argv[++i]);
+    else if (a === '--allow') {
+      const so = argv[++i];
+      // A shared-object name only (`libfoo.so.N`), never a path or a pattern.
+      if (!so || !/^lib[A-Za-z0-9_.+-]+\.so(?:\.\d+)*$/.test(so)) throw new Error('--allow wants a library soname such as libpipewire-0.3.so.0');
+      out.allow.push(so);
+    }
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else if (out.path === null) out.path = a;
     else throw new Error('one path only');
@@ -224,7 +234,7 @@ export function main(argv = process.argv.slice(2)) {
   try {
     args = parseArgs(argv);
   } catch (err) {
-    process.stderr.write(`elf-check: ${err.message}\nusage: node scripts/elf-check.mjs <path> [--max-glibc 2.35] [--max-size-mib 25]\n`);
+    process.stderr.write(`elf-check: ${err.message}\nusage: node scripts/elf-check.mjs <path> [--max-glibc 2.35] [--max-size-mib 25] [--allow <soname>]\n`);
     return 2;
   }
   let buf;
@@ -234,7 +244,7 @@ export function main(argv = process.argv.slice(2)) {
     process.stderr.write(`elf-check: cannot read ${args.path}: ${err.code ?? err.message}\n`);
     return 1;
   }
-  const res = checkElf(buf, { maxGlibc: args.maxGlibc, maxSizeMib: args.maxSizeMib });
+  const res = checkElf(buf, { maxGlibc: args.maxGlibc, maxSizeMib: args.maxSizeMib, allow: args.allow });
   process.stdout.write(`${JSON.stringify({ file: basename(args.path), ...res })}\n`);
   for (const f of res.failures) process.stderr.write(`elf-check: FAIL: ${f}\n`);
   return res.ok ? 0 : 1;

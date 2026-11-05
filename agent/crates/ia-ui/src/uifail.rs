@@ -66,6 +66,26 @@ pub const LINUX_UI_LIBRARIES: &[&[&str]] = &[
     &["libxkbcommon-x11.so.0", "libxkbcommon-x11.so"],
 ];
 
+/// Phase F §9.2: on a Wayland session the portal build's winit opens libwayland-client and
+/// libxkbcommon instead (no X11 keymap library).
+pub const WAYLAND_UI_LIBRARIES: &[&[&str]] = &[
+    &["libwayland-client.so.0", "libwayland-client.so"],
+    &["libxkbcommon.so.0", "libxkbcommon.so"],
+];
+
+/// The libraries the UI needs here: the Wayland set when this build has the Wayland backend and
+/// the session is Wayland (winit then prefers it), else the X11 set.
+pub fn ui_libraries(
+    wayland_backend: bool,
+    wayland_session: bool,
+) -> &'static [&'static [&'static str]] {
+    if wayland_backend && wayland_session {
+        WAYLAND_UI_LIBRARIES
+    } else {
+        LINUX_UI_LIBRARIES
+    }
+}
+
 /// The library groups none of whose names `loadable` can open, named by their first name.
 pub fn missing_libraries(
     groups: &[&[&'static str]],
@@ -91,7 +111,9 @@ pub fn preflight() -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let missing = missing_libraries(LINUX_UI_LIBRARIES, linux::loadable);
+        let wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let libs = ui_libraries(cfg!(feature = "wayland"), wayland_session);
+        let missing = missing_libraries(libs, linux::loadable);
         if !missing.is_empty() {
             return Err(format!(
                 "the UI cannot start: {} could not be loaded",
@@ -158,6 +180,23 @@ mod tests {
         assert_eq!(
             missing_libraries(LINUX_UI_LIBRARIES, only(&[])),
             vec!["libxkbcommon.so.0", "libxkbcommon-x11.so.0"]
+        );
+    }
+
+    #[test]
+    fn the_wayland_build_checks_the_wayland_libraries_on_wayland() {
+        assert_eq!(ui_libraries(true, true), WAYLAND_UI_LIBRARIES);
+        assert_eq!(ui_libraries(true, false), LINUX_UI_LIBRARIES);
+        assert_eq!(ui_libraries(false, true), LINUX_UI_LIBRARIES);
+        let only = |ok: &'static [&'static str]| move |n: &str| ok.contains(&n);
+        assert!(missing_libraries(
+            WAYLAND_UI_LIBRARIES,
+            only(&["libwayland-client.so.0", "libxkbcommon.so.0"])
+        )
+        .is_empty());
+        assert_eq!(
+            missing_libraries(WAYLAND_UI_LIBRARIES, only(&["libxkbcommon.so.0"])),
+            vec!["libwayland-client.so.0"]
         );
     }
 

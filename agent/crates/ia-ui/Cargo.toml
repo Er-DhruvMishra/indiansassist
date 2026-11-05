@@ -14,6 +14,10 @@ default = []
 # target-specific dependency, so `--all-features` on Windows never pulls GTK and the Linux build
 # never pulls tray-icon's GTK / libappindicator.
 gui = ["dep:egui", "dep:eframe", "dep:tray-icon", "dep:winit", "dep:windows", "dep:ksni", "dep:x11rb"]
+# Phase F §9.2: the portal build's UI on Wayland: eframe's Wayland backend (winit with
+# `wayland-dlopen`, so libwayland-client is opened at run time and nothing is linked). The window
+# backends are Linux-target dependencies, so this enables nothing on Windows or macOS.
+wayland = ["gui", "eframe?/wayland", "winit?/wayland", "winit?/wayland-dlopen"]
 # Dev builds only: honour IA_DEV_SHOW_INDICATOR_IN_CAPTURE=1 (skip WDA_EXCLUDEFROMCAPTURE so a
 # manual verification run can screenshot the pill and panel). Never in a release build.
 dev = []

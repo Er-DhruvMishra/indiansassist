@@ -1,0 +1,36 @@
+[package]
+name = "ia-capture-portal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Wayland screen capture through xdg-desktop-portal ScreenCast and PipeWire (Phase F contract §9.2): the portal session state machine, SPA format negotiation, stride and format conversion to BGRA and the capture cause mapping (pure, tested on every host), and the ashpd + pipewire capturer behind the `portal` feature on Linux."
+
+[features]
+default = []
+# The portal capturer. Its dependencies are Linux-target only, so the Windows `--all-features`
+# gates enable the feature and compile nothing for it (Phase E §7.4, Phase F §9.2).
+portal = ["dep:ashpd", "dep:pipewire", "dep:libspa", "dep:tokio", "dep:futures-util", "dep:libc"]
+
+[dependencies]
+ia-core.workspace = true
+ia-platform.workspace = true
+ia-frame.workspace = true
+tracing.workspace = true
+
+# Phase F §10: ashpd 0.13.13 (MIT; `screencast` + `tokio`, no default features), pipewire 0.10.1
+# and libspa 0.10.1 (MIT; link libpipewire-0.3, bindgen at build time). Linux-target only.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "=0.13.13", optional = true, default-features = false, features = ["screencast", "tokio"] }
+pipewire = { version = "=0.10.1", optional = true }
+libspa = { version = "=0.10.1", optional = true }
+tokio = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+# mmap of MemFd buffers (some producers mark them mappable but not readable, so PipeWire's own
+# mapping is not readable).
+libc = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc.workspace = true
+tracing-subscriber.workspace = true

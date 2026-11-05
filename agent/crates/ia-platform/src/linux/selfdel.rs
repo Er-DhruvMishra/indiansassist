@@ -28,6 +28,11 @@ pub struct SelfDeletePlan {
     pub unlink_exe: Option<PathBuf>,
     /// Keep (C §10 D5): copy the binary here and keep the handler, pointed at the copy.
     pub keep_copy: Option<(PathBuf, PathBuf)>,
+    /// Phase F §9.5: the Wayland portal companion `.ia-portal` beside the binary, removed with it
+    /// (only when it is the user's own regular file). The pair is one program.
+    pub companion: Option<PathBuf>,
+    /// Phase F §9.5: Keep copies the companion beside the kept binary too.
+    pub keep_companion: Option<(PathBuf, PathBuf)>,
 }
 
 /// `<dir>/<exe file name>.tar.gz`: the archive the binary was extracted from (§7.7).
@@ -87,6 +92,8 @@ pub fn plan(env: &XdgEnv, exe: &Path, kept: bool) -> SelfDeletePlan {
             } else {
                 paths::kept_binary(env).map(|to| (exe.to_path_buf(), to))
             },
+            companion: None,
+            keep_companion: None,
         };
     }
     if kept_copy {
@@ -106,6 +113,8 @@ pub fn plan(env: &XdgEnv, exe: &Path, kept: bool) -> SelfDeletePlan {
             restore_mimeapps: true,
             unlink_exe: None,
             keep_copy: None,
+            companion: None,
+            keep_companion: None,
         };
     }
     let mut remove_files = Vec::new();
@@ -122,7 +131,37 @@ pub fn plan(env: &XdgEnv, exe: &Path, kept: bool) -> SelfDeletePlan {
         restore_mimeapps: true,
         unlink_exe: Some(exe.to_path_buf()),
         keep_copy: None,
+        companion: None,
+        keep_companion: None,
     }
+}
+
+/// Phase F §9.5: the file name of the Wayland portal companion inside the Linux download.
+pub const COMPANION_NAME: &str = ".ia-portal";
+
+/// `<dir of main>/.ia-portal`.
+pub fn companion_of(main: &Path) -> PathBuf {
+    main.with_file_name(COMPANION_NAME)
+}
+
+/// Phase F §9.5: the plan when the X11 binary `main` and its portal companion are one program.
+/// Whichever of the two runs at exit applies it (the portal binary knows `main` from
+/// `--handed-from`): the plan is [`plan`] of `main` (its sidecar, its archive, its Keep copy),
+/// plus the companion removed with it, or copied beside the kept binary on Keep. Apply it with
+/// `main` as the executable.
+pub fn plan_pair(env: &XdgEnv, main: &Path, kept: bool) -> SelfDeletePlan {
+    let mut p = plan(env, main, kept);
+    if is_kept_copy(env, main) {
+        // The kept copy's directory holds the pair: removing it removes both; Keep keeps both.
+        return p;
+    }
+    if kept {
+        p.keep_companion =
+            paths::kept_binary(env).map(|to| (companion_of(main), companion_of(&to)));
+    } else {
+        p.companion = Some(companion_of(main));
+    }
+    p
 }
 
 /// A plan must never reach outside the agent's own files: every directory it removes ends in
@@ -144,7 +183,20 @@ pub fn plan_is_contained(plan: &SelfDeletePlan, exe: &Path) -> bool {
         .as_ref()
         .is_none_or(|a| Some(a.clone()) == archive_sibling(exe));
     let exe_ok = plan.unlink_exe.as_deref().is_none_or(|e| e == exe);
-    dirs_ok && files_ok && archive_ok && exe_ok
+    // Phase F §9.5: the companion is `.ia-portal` beside this binary, and its Keep copy goes
+    // beside the kept binary.
+    let companion_ok = plan
+        .companion
+        .as_ref()
+        .is_none_or(|c| *c == companion_of(exe));
+    let keep_companion_ok = plan.keep_companion.as_ref().is_none_or(|(from, to)| {
+        *from == companion_of(exe)
+            && plan
+                .keep_copy
+                .as_ref()
+                .is_some_and(|(_, kept)| *to == companion_of(kept))
+    });
+    dirs_ok && files_ok && archive_ok && exe_ok && companion_ok && keep_companion_ok
 }
 
 #[cfg(test)]
@@ -297,6 +349,47 @@ mod tests {
     }
 
     #[test]
+    fn the_pair_is_one_program() {
+        let main = Path::new(EXE);
+        let p = plan_pair(&env(), main, false);
+        assert_eq!(
+            p.companion,
+            Some(PathBuf::from("/home/asha/Downloads/.ia-portal"))
+        );
+        assert_eq!(p.unlink_exe, Some(PathBuf::from(EXE)));
+        assert_eq!(p.archive, Some(PathBuf::from(format!("{EXE}.tar.gz"))));
+        assert_eq!(p.keep_companion, None);
+        assert!(plan_is_contained(&p, main));
+
+        let k = plan_pair(&env(), main, true);
+        assert_eq!(k.companion, None);
+        assert_eq!(k.unlink_exe, None);
+        assert_eq!(
+            k.keep_companion,
+            Some((
+                PathBuf::from("/home/asha/Downloads/.ia-portal"),
+                PathBuf::from("/home/asha/.local/share/indiansassist/.ia-portal")
+            ))
+        );
+        assert!(plan_is_contained(&k, main));
+
+        // The kept pair's directory holds both: no extra entries.
+        let kept = plan_pair(&env(), Path::new(KEPT), false);
+        assert_eq!(kept.companion, None);
+        assert!(kept
+            .remove_dirs
+            .contains(&PathBuf::from("/home/asha/.local/share/indiansassist")));
+
+        // A companion anywhere else is refused.
+        let mut bad = plan_pair(&env(), main, false);
+        bad.companion = Some("/home/asha/.ia-portal".into());
+        assert!(!plan_is_contained(&bad, main));
+        let mut bad = plan_pair(&env(), main, true);
+        bad.keep_companion = Some((companion_of(main), "/usr/bin/.ia-portal".into()));
+        assert!(!plan_is_contained(&bad, main));
+    }
+
+    #[test]
     fn a_tampered_plan_is_not_contained() {
         let mut p = plan(&env(), Path::new(EXE), false);
         p.remove_dirs.push("/home/asha".into());
@@ -393,6 +486,52 @@ mod applied {
             exe.exists(),
             "the downloaded file is not the kept copy's to remove"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Phase F §9.5: the pair under a temporary root: Keep copies both, the clean exit removes
+    /// both and the archive; another user's or a non-regular `.ia-portal` is left alone.
+    #[test]
+    fn the_pair_is_kept_and_removed_together() {
+        let root = temp_root("pair");
+        let env = env_in(&root);
+        let dl = root.join("home/Downloads");
+        fs::create_dir_all(&dl).unwrap();
+        let main = dl.join("IndiansAssist-in-mum-4821-9365-7715");
+        fs::write(&main, b"\x7fELF x11").unwrap();
+        fs::write(companion_of(&main), b"\x7fELF portal").unwrap();
+        fs::write(dl.join("IndiansAssist-in-mum-4821-9365-7715.tar.gz"), b"gz").unwrap();
+        working_set(&env);
+
+        let report = apply_self_delete(&plan_pair(&env, &main, true), &env, &main).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        let kept = paths::kept_binary(&env).unwrap();
+        assert_eq!(fs::read(companion_of(&kept)).unwrap(), b"\x7fELF portal");
+        assert_eq!(
+            fs::metadata(companion_of(&kept))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert!(main.exists() && companion_of(&main).exists());
+
+        working_set(&env);
+        let report = apply_self_delete(&plan_pair(&env, &main, false), &env, &main).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert!(!main.exists());
+        assert!(!companion_of(&main).exists());
+        assert!(!dl
+            .join("IndiansAssist-in-mum-4821-9365-7715.tar.gz")
+            .exists());
+
+        // A `.ia-portal` that is a directory is not the companion: it stays.
+        fs::write(&main, b"\x7fELF x11").unwrap();
+        fs::create_dir_all(companion_of(&main)).unwrap();
+        let report = apply_self_delete(&plan_pair(&env, &main, false), &env, &main).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert!(companion_of(&main).is_dir());
         let _ = fs::remove_dir_all(&root);
     }
 }

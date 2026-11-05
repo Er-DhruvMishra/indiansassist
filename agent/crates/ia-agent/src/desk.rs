@@ -8,10 +8,14 @@
 //! | `Windows` | DXGI / GDI | `SendInput` | C §3.1 |
 //! | `X11` | `ia-capture-x11` | `ia-input-x11` | §7.5 X11 row, RandR monitor count |
 //! | `Wayland` | none, no video track | none | §7.5 Wayland row |
+//! | `Portal` | `ia-capture-portal` (Phase F §9) | none (view-only) | F §9.4 portal row |
 
 use std::sync::OnceLock;
 
-use ia_core::types::{linux_capabilities, AgentCapabilities, MonitorInfo};
+use ia_core::capture_decision::{portal_capture_change, PortalStatus};
+use ia_core::types::{
+    linux_capabilities, linux_portal_capabilities, AgentCapabilities, CapturePath, MonitorInfo,
+};
 use ia_platform::linux::{display_server, DisplayEnv, DisplayServer};
 
 /// The screen source of this Desk.
@@ -25,6 +29,9 @@ pub enum ScreenMode {
     X11 { display: String },
     /// A Linux Wayland session: the agent connects and shares nothing on screen (§7.4).
     Wayland,
+    /// Phase F §9: the portal build on a Wayland session whose desktop portal offers ScreenCast
+    /// of a monitor: the screen view-only through the portal, no input, no clipboard.
+    Portal,
     /// Linux with no graphical session: "No graphical session found" (§7.4).
     NoSession,
 }
@@ -33,6 +40,34 @@ impl ScreenMode {
     /// Whether this Desk offers a screen (a video track and the screen features).
     pub fn shares_screen(&self) -> bool {
         !matches!(self, ScreenMode::Wayland | ScreenMode::NoSession)
+    }
+}
+
+/// Phase F §9.4, pure: a Wayland session becomes the portal mode when the portal build found a
+/// ScreenCast portal on the session bus; every other mode is unchanged.
+pub fn with_portal(mode: ScreenMode, portal_available: bool) -> ScreenMode {
+    match mode {
+        ScreenMode::Wayland if portal_available => ScreenMode::Portal,
+        other => other,
+    }
+}
+
+/// Whether the portal build's probe finds a ScreenCast portal (no dialog). Dev builds honour
+/// `IA_TEST_NO_PORTAL=1` (the no-portal row of §9.4 without touching the session).
+#[cfg(all(target_os = "linux", feature = "portal"))]
+fn portal_available() -> bool {
+    if cfg!(feature = "dev") && std::env::var("IA_TEST_NO_PORTAL").is_ok_and(|v| v == "1") {
+        return false;
+    }
+    match ia_capture_portal::probe(std::time::Duration::from_secs(3)) {
+        Ok(()) => {
+            tracing::info!("portal: ScreenCast is available on the session bus");
+            true
+        }
+        Err(f) => {
+            tracing::info!(failure = ?f, "portal: no ScreenCast portal; the screen is not shared");
+            false
+        }
     }
 }
 
@@ -59,11 +94,16 @@ static MODE: OnceLock<ScreenMode> = OnceLock::new();
 /// The process's screen mode, decided once from the command line and the environment.
 pub fn detect(synthetic: bool) -> ScreenMode {
     MODE.get_or_init(|| {
-        decide(
+        let mode = decide(
             synthetic,
             cfg!(target_os = "linux"),
             &display_server(&DisplayEnv::from_process()),
-        )
+        );
+        #[cfg(all(target_os = "linux", feature = "portal"))]
+        if mode == ScreenMode::Wayland {
+            return with_portal(mode, portal_available());
+        }
+        mode
     })
     .clone()
 }
@@ -128,8 +168,12 @@ pub fn os_version() -> String {
     }
 }
 
-/// The capabilities of a Linux Desk in `mode` with `monitors` shared monitors (§7.5).
+/// The capabilities of a Linux Desk in `mode` with `monitors` shared monitors (§7.5; the
+/// portal mode is Phase F §9.4).
 pub fn linux_caps(mode: &ScreenMode, monitors: usize) -> AgentCapabilities {
+    if *mode == ScreenMode::Portal {
+        return linux_portal_capabilities();
+    }
     let wayland = !mode.shares_screen();
     linux_capabilities(monitors.clamp(1, 16) as u8, wayland)
 }
@@ -356,6 +400,301 @@ pub fn wayland_placeholder_monitor() -> MonitorInfo {
     }
 }
 
+/// Phase F §9.3: the one monitor of a portal session, before the stream reports its size (the
+/// pump follows the real size once frames arrive).
+pub fn portal_placeholder_monitor() -> MonitorInfo {
+    MonitorInfo {
+        id: 1,
+        name: "Wayland screen (portal)".into(),
+        primary: true,
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 720,
+        scale: 1.0,
+        mid: None,
+    }
+}
+
+/// The process's one portal session (Phase F §9.3): started by the first pump after consent and
+/// shared by every later pump of the session, so a pump restart never asks the user again.
+#[cfg(all(target_os = "linux", feature = "portal"))]
+static PORTAL: std::sync::Mutex<
+    Option<std::sync::Arc<std::sync::Mutex<ia_capture_portal::PortalCapturer>>>,
+> = std::sync::Mutex::new(None);
+
+/// The portal capturer, started on first use (this shows the compositor's source dialog).
+#[cfg(all(target_os = "linux", feature = "portal"))]
+pub fn portal_capturer() -> std::sync::Arc<std::sync::Mutex<ia_capture_portal::PortalCapturer>> {
+    let mut slot = PORTAL.lock().unwrap_or_else(|p| p.into_inner());
+    slot.get_or_insert_with(|| {
+        tracing::info!("portal: starting the screen cast session (the source dialog follows)");
+        std::sync::Arc::new(std::sync::Mutex::new(
+            ia_capture_portal::PortalCapturer::start(),
+        ))
+    })
+    .clone()
+}
+
+/// End the portal session, if one was started (the session's end).
+pub fn stop_portal() {
+    #[cfg(all(target_os = "linux", feature = "portal"))]
+    {
+        let taken = PORTAL.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(c) = taken {
+            if let Ok(mut c) = c.lock() {
+                c.stop();
+            }
+        }
+    }
+}
+
+/// Where the portal session stands, when one was started.
+pub fn portal_status() -> Option<PortalStatus> {
+    #[cfg(all(target_os = "linux", feature = "portal"))]
+    {
+        let c = PORTAL.lock().unwrap_or_else(|p| p.into_inner()).clone()?;
+        let s = c.lock().map(|c| c.status()).ok();
+        s
+    }
+    #[cfg(not(all(target_os = "linux", feature = "portal")))]
+    None
+}
+
+/// `ctl.event capture` for a portal status change (Phase F §9.3), each reported once; `None`
+/// when there is nothing new or no portal session.
+pub fn portal_capture_event(
+    reported: &mut Option<PortalStatus>,
+    monitor_id: u32,
+    ts: i64,
+) -> Option<serde_json::Value> {
+    let now = portal_status()?;
+    portal_event_for(reported, now, monitor_id, ts)
+}
+
+/// The pure half of [`portal_capture_event`].
+pub fn portal_event_for(
+    reported: &mut Option<PortalStatus>,
+    now: PortalStatus,
+    monitor_id: u32,
+    ts: i64,
+) -> Option<serde_json::Value> {
+    let (path, cause) = portal_capture_change(*reported, now)?;
+    *reported = Some(now);
+    let path = match path {
+        CapturePath::Portal => "portal",
+        _ => "none",
+    };
+    Some(capture_event(monitor_id, path, cause.as_str(), ts))
+}
+
+// ---- Phase F §9.5: the Wayland hand-over from the X11 binary to its portal companion ----------
+
+/// The switch the X11 binary adds when it hands over: `--handed-from <its own path>`. It is put
+/// **first**, so a `--url` tail (which takes every later argument) never swallows it.
+pub const HANDED_FROM: &str = "--handed-from";
+/// The inherited pipe the already-resolved token arrives on (never argv or the environment).
+pub const TOKEN_FD: i32 = 4;
+/// The companion's file name beside the X11 binary.
+pub const COMPANION_NAME: &str = ".ia-portal";
+/// The library the portal build links (checked with `dlopen` before handing over).
+pub const PIPEWIRE_LIB: &str = "libpipewire-0.3.so.0";
+/// Added to the E §7.4 Wayland message when only PipeWire is missing.
+pub const PIPEWIRE_MISSING_LINE: &str =
+    "Screen sharing on Wayland needs PipeWire, which was not found.";
+/// The most a hand-over token payload may be.
+const TOKEN_PAYLOAD_MAX: usize = 8192;
+
+/// Split a leading `--handed-from <path>` off the arguments (only in first position).
+pub fn take_handed_from(args: Vec<String>) -> (Option<std::path::PathBuf>, Vec<String>) {
+    if args.first().map(String::as_str) == Some(HANDED_FROM) && args.len() >= 2 {
+        let path = std::path::PathBuf::from(&args[1]);
+        return (Some(path), args[2..].to_vec());
+    }
+    (None, args)
+}
+
+/// What is known about `.ia-portal` beside the X11 binary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompanionFacts {
+    pub exists: bool,
+    /// A regular file, read with `lstat` (a symlink is not).
+    pub regular: bool,
+    /// Owned by the user running the agent.
+    pub owned: bool,
+    /// Its sha256 (hex), when it could be read.
+    pub sha256: Option<String>,
+}
+
+/// Why the X11 binary stays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stay {
+    /// Not a Wayland session: the X11 binary is the right one.
+    NotWayland,
+    /// This is the portal build already.
+    PortalBuild,
+    /// No `.ia-portal` beside the binary (an X11-only download).
+    NoCompanion,
+    /// `.ia-portal` is there but is not ours to run (not a regular file, someone else's, or its
+    /// sha256 is not the one this build embeds).
+    CompanionRefused(&'static str),
+    /// `libpipewire-0.3.so.0` cannot be opened: the honest PipeWire message.
+    NoPipeWire,
+}
+
+/// The hand-over decision, pure (§9.5): only on Wayland, only from the X11 build, only to a
+/// regular file the user owns whose sha256 is the embedded one (`expected_sha256 = None`: a dev
+/// build, which skips the check), and only when PipeWire opens.
+pub fn handover_decision(
+    mode: &ScreenMode,
+    portal_build: bool,
+    companion: &CompanionFacts,
+    expected_sha256: Option<&str>,
+    pipewire: bool,
+) -> Result<(), Stay> {
+    if portal_build {
+        return Err(Stay::PortalBuild);
+    }
+    if *mode != ScreenMode::Wayland {
+        return Err(Stay::NotWayland);
+    }
+    if !companion.exists {
+        return Err(Stay::NoCompanion);
+    }
+    if !companion.regular {
+        return Err(Stay::CompanionRefused("not a regular file"));
+    }
+    if !companion.owned {
+        return Err(Stay::CompanionRefused("not owned by this user"));
+    }
+    if let Some(want) = expected_sha256 {
+        if companion.sha256.as_deref() != Some(want) || want.is_empty() {
+            return Err(Stay::CompanionRefused(
+                "its sha256 is not the one this build expects",
+            ));
+        }
+    }
+    if !pipewire {
+        return Err(Stay::NoPipeWire);
+    }
+    Ok(())
+}
+
+/// The arguments the companion is started with: `--handed-from <self>` first, then the original
+/// arguments unchanged.
+pub fn handover_args(own_path: &std::path::Path, args: &[String]) -> Vec<String> {
+    let mut out = vec![
+        HANDED_FROM.to_string(),
+        own_path.to_string_lossy().into_owned(),
+    ];
+    out.extend(args.iter().cloned());
+    out
+}
+
+/// The token payload on [`TOKEN_FD`]: the carrier and the raw credential, one JSON object.
+pub fn encode_handover_token(
+    source: ia_core::types::TokenSource,
+    token: &ia_core::join_input::TokenInput,
+) -> String {
+    let raw = match token {
+        ia_core::join_input::TokenInput::Compact(s)
+        | ia_core::join_input::TokenInput::ShortCode(s) => s.as_str(),
+    };
+    serde_json::json!({ "source": source, "token": raw }).to_string()
+}
+
+/// Read back [`encode_handover_token`]; the credential is validated again.
+pub fn decode_handover_token(
+    payload: &[u8],
+) -> Option<(ia_core::types::TokenSource, ia_core::join_input::TokenInput)> {
+    if payload.len() > TOKEN_PAYLOAD_MAX {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let source = serde_json::from_value(v.get("source")?.clone()).ok()?;
+    let token = ia_core::join_input::normalise_token_input(v.get("token")?.as_str()?)?;
+    Some((source, token))
+}
+
+static HANDED: OnceLock<std::path::PathBuf> = OnceLock::new();
+static PIPEWIRE_MISSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// This process is the portal companion, started by the X11 binary at `main`.
+pub fn set_handed_from(main: std::path::PathBuf) {
+    let _ = HANDED.set(main);
+}
+
+/// The X11 binary that handed over to this process, if any (self-delete and Keep treat the pair
+/// as one program).
+pub fn handed_from() -> Option<std::path::PathBuf> {
+    HANDED.get().cloned()
+}
+
+/// Record that the hand-over stayed because PipeWire is missing (the consent window says so).
+pub fn set_pipewire_missing() {
+    PIPEWIRE_MISSING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn pipewire_missing() -> bool {
+    PIPEWIRE_MISSING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The facts about `path` (`lstat`, owner, sha256).
+#[cfg(target_os = "linux")]
+pub fn companion_facts(path: &std::path::Path) -> CompanionFacts {
+    use sha2::Digest;
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = std::fs::symlink_metadata(path) else {
+        return CompanionFacts::default();
+    };
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let me = unsafe { libc::getuid() };
+    let regular = m.file_type().is_file();
+    let sha256 = if regular {
+        std::fs::read(path)
+            .ok()
+            .map(|b| hex::encode(sha2::Sha256::digest(&b)))
+    } else {
+        None
+    };
+    CompanionFacts {
+        exists: true,
+        regular,
+        owned: m.uid() == me,
+        sha256,
+    }
+}
+
+/// Whether the dynamic loader can open libpipewire now (`RTLD_NOW`), closed again at once. Dev
+/// builds honour `IA_TEST_NO_PIPEWIRE=1` (the e2e's "PipeWire missing" case).
+#[cfg(target_os = "linux")]
+pub fn pipewire_loadable() -> bool {
+    if cfg!(feature = "dev") && std::env::var("IA_TEST_NO_PIPEWIRE").is_ok_and(|v| v == "1") {
+        tracing::info!("IA_TEST_NO_PIPEWIRE=1: treating {PIPEWIRE_LIB} as missing (dev build)");
+        return false;
+    }
+    let name = std::ffi::CString::new(PIPEWIRE_LIB).expect("no NUL");
+    // SAFETY: a valid NUL-terminated name; a non-null handle is closed exactly once.
+    unsafe {
+        let h = libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if h.is_null() {
+            return false;
+        }
+        libc::dlclose(h);
+    }
+    true
+}
+
+/// The companion sha256 a release X11 build embeds (`IA_PORTAL_SHA256` at build time, from the
+/// dist manifest); `None` in a dev build, which skips the check and logs it.
+pub fn expected_companion_sha256() -> Option<&'static str> {
+    if cfg!(feature = "dev") {
+        None
+    } else {
+        Some(option_env!("IA_PORTAL_SHA256").unwrap_or(""))
+    }
+}
+
 /// The `ctl.event capture` a Wayland Desk sends once the control channel opens (§7.4).
 pub fn wayland_capture_event(ts: i64) -> serde_json::Value {
     serde_json::json!({
@@ -402,6 +741,164 @@ mod tests {
         );
         assert!(!ScreenMode::Wayland.shares_screen());
         assert!(ScreenMode::Synthetic.shares_screen());
+    }
+
+    #[test]
+    fn the_portal_mode_and_its_capabilities_and_events() {
+        assert_eq!(with_portal(ScreenMode::Wayland, true), ScreenMode::Portal);
+        assert_eq!(with_portal(ScreenMode::Wayland, false), ScreenMode::Wayland);
+        let x11 = ScreenMode::X11 {
+            display: ":1".into(),
+        };
+        assert_eq!(with_portal(x11.clone(), true), x11);
+        assert_eq!(
+            with_portal(ScreenMode::NoSession, true),
+            ScreenMode::NoSession
+        );
+        assert!(ScreenMode::Portal.shares_screen());
+        let caps = linux_caps(&ScreenMode::Portal, 3);
+        assert_eq!(caps.monitors, 1);
+        assert_eq!(
+            caps.features,
+            vec!["screen", "files", "chat", "playbooks", "recorder"]
+        );
+        // §9.4 second row: no portal is the E Wayland set.
+        let no_portal = linux_caps(&ScreenMode::Wayland, 1);
+        assert!(!no_portal.features.contains(&"screen".to_string()));
+        assert_eq!(portal_placeholder_monitor().id, 1);
+
+        let mut reported = None;
+        assert!(portal_event_for(&mut reported, PortalStatus::Pending, 1, 1).is_none());
+        let ev = portal_event_for(&mut reported, PortalStatus::Streaming, 1, 2).unwrap();
+        assert_eq!(
+            (ev["path"].as_str(), ev["cause"].as_str()),
+            (Some("portal"), Some("start"))
+        );
+        assert!(portal_event_for(&mut reported, PortalStatus::Streaming, 1, 3).is_none());
+        let ev = portal_event_for(&mut reported, PortalStatus::Closed, 1, 4).unwrap();
+        assert_eq!(ev["kind"], "capture");
+        assert_eq!(ev["monitorId"], 1);
+        assert_eq!(
+            (ev["path"].as_str(), ev["cause"].as_str()),
+            (Some("none"), Some("portal_closed"))
+        );
+        assert!(portal_event_for(&mut reported, PortalStatus::Denied, 1, 5).is_none());
+        let mut fresh = None;
+        let ev = portal_event_for(&mut fresh, PortalStatus::Denied, 1, 6).unwrap();
+        assert_eq!(ev["cause"], "portal_denied");
+        // No portal session in this process: nothing to report.
+        assert!(portal_capture_event(&mut None, 1, 7).is_none());
+    }
+
+    #[test]
+    fn the_handed_from_switch_is_taken_only_in_first_position() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (h, rest) =
+            take_handed_from(a(&["--handed-from", "/d/IndiansAssist-x", "--code", "1"]));
+        assert_eq!(h, Some(std::path::PathBuf::from("/d/IndiansAssist-x")));
+        assert_eq!(rest, a(&["--code", "1"]));
+        let (h, rest) = take_handed_from(a(&[
+            "--url",
+            "indiansassist://join?c=1",
+            "--handed-from",
+            "/x",
+        ]));
+        assert_eq!(h, None, "inside a --url tail it is part of the URL");
+        assert_eq!(rest.len(), 4);
+        assert_eq!(take_handed_from(a(&["--handed-from"])).0, None);
+        let args = handover_args(std::path::Path::new("/d/main"), &a(&["--url", "x"]));
+        assert_eq!(args, a(&["--handed-from", "/d/main", "--url", "x"]));
+        assert_eq!(take_handed_from(args).1, a(&["--url", "x"]));
+    }
+
+    #[test]
+    fn the_hand_over_decision() {
+        let ok = CompanionFacts {
+            exists: true,
+            regular: true,
+            owned: true,
+            sha256: Some("ab".repeat(32)),
+        };
+        let want = "ab".repeat(32);
+        let w = ScreenMode::Wayland;
+        assert_eq!(handover_decision(&w, false, &ok, Some(&want), true), Ok(()));
+        assert_eq!(
+            handover_decision(&w, false, &ok, None, true),
+            Ok(()),
+            "dev: no hash check"
+        );
+        assert_eq!(
+            handover_decision(&w, false, &ok, Some(&want), false),
+            Err(Stay::NoPipeWire)
+        );
+        assert_eq!(
+            handover_decision(&w, true, &ok, None, true),
+            Err(Stay::PortalBuild)
+        );
+        let x11 = ScreenMode::X11 {
+            display: ":0".into(),
+        };
+        assert_eq!(
+            handover_decision(&x11, false, &ok, None, true),
+            Err(Stay::NotWayland)
+        );
+        assert_eq!(
+            handover_decision(&ScreenMode::NoSession, false, &ok, None, true),
+            Err(Stay::NotWayland)
+        );
+        assert_eq!(
+            handover_decision(&w, false, &CompanionFacts::default(), None, false),
+            Err(Stay::NoCompanion),
+            "an X11-only download stays without the PipeWire line"
+        );
+        for bad in [
+            CompanionFacts {
+                regular: false,
+                ..ok.clone()
+            },
+            CompanionFacts {
+                owned: false,
+                ..ok.clone()
+            },
+        ] {
+            assert!(matches!(
+                handover_decision(&w, false, &bad, None, true),
+                Err(Stay::CompanionRefused(_))
+            ));
+        }
+        let other = CompanionFacts {
+            sha256: Some("cd".repeat(32)),
+            ..ok.clone()
+        };
+        assert!(matches!(
+            handover_decision(&w, false, &other, Some(&want), true),
+            Err(Stay::CompanionRefused(_))
+        ));
+        // A release build without an embedded hash never runs a companion.
+        assert!(matches!(
+            handover_decision(&w, false, &ok, Some(""), true),
+            Err(Stay::CompanionRefused(_))
+        ));
+    }
+
+    #[test]
+    fn the_token_crosses_the_pipe_intact() {
+        use ia_core::join_input::TokenInput;
+        use ia_core::types::TokenSource;
+        let code = ia_core::download::make_desk_code();
+        let tok = ia_core::join_input::normalise_token_input(&code).unwrap();
+        let p = encode_handover_token(TokenSource::Filename, &tok);
+        assert_eq!(
+            decode_handover_token(p.as_bytes()),
+            Some((TokenSource::Filename, tok))
+        );
+        assert_eq!(
+            decode_handover_token(b"{\"source\":\"arg\",\"token\":\"nope\"}"),
+            None
+        );
+        assert_eq!(decode_handover_token(b"not json"), None);
+        assert_eq!(decode_handover_token(&vec![b' '; 9000]), None);
+        let _ = TokenInput::ShortCode(String::new());
     }
 
     #[test]

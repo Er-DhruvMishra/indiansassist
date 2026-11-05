@@ -253,6 +253,28 @@ pub const LINUX_X11_FEATURES: &[&str] = &[
 /// Phase E §7.4 / §7.5: a Wayland session shares no screen, so it advertises only these.
 pub const LINUX_WAYLAND_FEATURES: &[&str] = &["files", "chat", "playbooks"];
 
+/// Phase F §9.4: the portal build on a Wayland session with a ScreenCast portal: the screen
+/// view-only (no `input`, `input_text` or `clipboard`, W113 / W114), one stream (no
+/// `multi_monitor`), and the recorder.
+pub const LINUX_PORTAL_FEATURES: &[&str] = &["screen", "files", "chat", "playbooks", "recorder"];
+
+/// Phase F §9.4: the portal build's capabilities on a Wayland session whose portal offers
+/// ScreenCast: `monitors: 1` (the portal reports one stream), `elevation: 'user'`, VP8 / VP9, no
+/// hardware encoder, interpreter `sh`.
+pub fn linux_portal_capabilities() -> AgentCapabilities {
+    AgentCapabilities {
+        monitors: 1,
+        elevation: ElevationLevel::User,
+        features: LINUX_PORTAL_FEATURES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        encoders: vec![VideoEncoder::Vp8, VideoEncoder::Vp9],
+        hw_encoder: false,
+        interpreters: vec![PlaybookInterpreter::Sh],
+    }
+}
+
 /// Phase E §7.5: the Linux `desk.hello.client.capabilities`. `monitors` is the RandR count
 /// (clamped 1..16) in an X11 session and 1 (the schema minimum) on Wayland; `elevation: 'user'`,
 /// VP8 / VP9, no hardware encoder, interpreter `sh`.
@@ -610,6 +632,27 @@ mod tests {
         assert_eq!(w.features, vec!["files", "chat", "playbooks"]);
         for f in LINUX_X11_FEATURES.iter().chain(LINUX_WAYLAND_FEATURES) {
             assert!(AGENT_FEATURES.contains(f), "{f} is a shared feature name");
+        }
+    }
+
+    #[test]
+    fn portal_capabilities_follow_phase_f_section_9_4() {
+        let p = linux_portal_capabilities();
+        assert_eq!(p.monitors, 1);
+        assert_eq!(p.elevation, ElevationLevel::User);
+        assert_eq!(
+            p.features,
+            vec!["screen", "files", "chat", "playbooks", "recorder"]
+        );
+        for absent in ["input", "input_text", "clipboard", "multi_monitor", "voice"] {
+            assert!(!p.features.contains(&absent.to_string()), "{absent}");
+        }
+        assert_eq!(p.encoders, vec![VideoEncoder::Vp8, VideoEncoder::Vp9]);
+        assert!(!p.hw_encoder);
+        assert_eq!(p.interpreters, vec![PlaybookInterpreter::Sh]);
+        for f in LINUX_PORTAL_FEATURES {
+            assert!(AGENT_FEATURES.contains(f), "{f} is a shared feature name");
+            assert!(LINUX_X11_FEATURES.contains(f), "a subset of the X11 set");
         }
     }
 }

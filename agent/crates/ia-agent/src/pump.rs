@@ -166,6 +166,10 @@ pub enum CaptureSource {
     Dxgi(Box<ia_capture_win::dxgi::DxgiCapturer>),
     #[cfg(all(target_os = "linux", feature = "x11"))]
     X11(Box<ia_capture_x11::X11Capturer>),
+    /// Phase F §9.2: the desktop portal's ScreenCast over PipeWire (one session per process,
+    /// shared with any later pump, `crate::desk::portal_capturer`).
+    #[cfg(all(target_os = "linux", feature = "portal"))]
+    Portal(std::sync::Arc<std::sync::Mutex<ia_capture_portal::PortalCapturer>>),
     // apple-owned: begin
     // Phase F §17.2: the ScreenCaptureKit source (`ia-capture-mac`, feature `macos`).
     #[cfg(all(target_os = "macos", feature = "macos"))]
@@ -187,6 +191,11 @@ impl CaptureSource {
                     Err(e) => tracing::warn!("X11 capture could not start: {e}"),
                 }
             }
+        }
+        // Phase F §9.3: after the agent's own consent, the portal session (and its dialog).
+        #[cfg(all(target_os = "linux", feature = "portal"))]
+        if !synthetic && crate::desk::current() == Some(crate::desk::ScreenMode::Portal) {
+            return CaptureSource::Portal(crate::desk::portal_capturer());
         }
         // apple-owned: begin
         // Phase F §17.2: ScreenCaptureKit when Screen Recording is granted (checked without a
@@ -212,6 +221,8 @@ impl CaptureSource {
             CaptureSource::Dxgi(c) => c.next_frame(id),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.next_frame(id),
+            #[cfg(all(target_os = "linux", feature = "portal"))]
+            CaptureSource::Portal(c) => c.lock().ok()?.next_frame(id),
             // apple-owned: begin
             #[cfg(all(target_os = "macos", feature = "macos"))]
             CaptureSource::Sck(c) => c.next_frame(id),
@@ -233,6 +244,8 @@ impl CaptureSource {
             CaptureSource::Dxgi(c) => c.path(id),
             #[cfg(all(target_os = "linux", feature = "x11"))]
             CaptureSource::X11(c) => c.path(id),
+            #[cfg(all(target_os = "linux", feature = "portal"))]
+            CaptureSource::Portal(c) => c.lock().map(|c| c.path()).unwrap_or(CapturePath::None),
             // apple-owned: begin
             #[cfg(all(target_os = "macos", feature = "macos"))]
             CaptureSource::Sck(c) => c.path(id),
@@ -250,6 +263,16 @@ impl CaptureSource {
             CaptureSource::Sck(c) => c.lost(),
             // apple-owned: end
             _ => false,
+        }
+    }
+
+    /// Phase F §9.3: the size the source really captures, when it learns it only once frames
+    /// flow (the portal stream); the pump then encodes at that size.
+    pub fn native_size(&self) -> Option<(u32, u32)> {
+        match self {
+            #[cfg(all(target_os = "linux", feature = "portal"))]
+            CaptureSource::Portal(c) => c.lock().ok()?.native_size(),
+            _ => None,
         }
     }
 }
@@ -390,13 +413,16 @@ pub async fn run_pump(
     stop: Arc<tokio::sync::Notify>,
     path: Arc<AtomicU8>,
 ) {
-    let (w, h) = (spec.native_w.max(2), spec.native_h.max(2));
+    let (mut w, mut h) = (spec.native_w.max(2), spec.native_h.max(2));
     let mut assist: Option<Stream> = None;
     let mut recorder: Option<Stream> = None;
     let mut next_tick = tokio::time::Instant::now();
     let mut next_rec = Instant::now();
     let mut prev_shared = false;
     loop {
+        if let Some((nw, nh)) = source.native_size() {
+            (w, h) = ((nw & !1).max(2), (nh & !1).max(2));
+        }
         let rung = ctl.rung();
         let target = ctl.target_kbps();
         let want = encode_params(rung, ctl.preset(), w, h, target);

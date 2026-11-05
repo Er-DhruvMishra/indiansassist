@@ -207,6 +207,8 @@ pub(super) fn running_kept_copy() -> bool {
     #[cfg(all(target_os = "linux", feature = "linux-os"))]
     {
         let env = ia_platform::linux::XdgEnv::from_process();
+        // Phase F §9.5: the portal companion of a kept copy runs beside it.
+        let exe = crate::desk::handed_from().unwrap_or(exe);
         ia_platform::linux::selfdel::is_kept_copy(&env, &exe)
     }
     // apple-owned: begin
@@ -277,7 +279,10 @@ pub(super) fn perform_keep(first: bool) {
         return;
     };
     let env = XdgEnv::from_process();
-    let plan = selfdel::plan(&env, &exe, true);
+    // Phase F §9.5: the X11 binary and its portal companion are one program; the portal
+    // companion knows the X11 binary from `--handed-from`.
+    let exe = crate::desk::handed_from().unwrap_or(exe);
+    let plan = selfdel::plan_pair(&env, &exe, true);
     match os::apply_self_delete(&plan, &env, &exe) {
         Ok(r) => tracing::info!(kept = ?r.kept_copy, failures = ?r.failures, "keep: done"),
         Err(e) => {
@@ -478,7 +483,9 @@ pub(super) fn perform_self_delete() {
         return;
     };
     let env = XdgEnv::from_process();
-    let plan = selfdel::plan(&env, &exe, false);
+    // Phase F §9.5: whichever of the pair runs at exit removes both and the archive.
+    let exe = crate::desk::handed_from().unwrap_or(exe);
+    let plan = selfdel::plan_pair(&env, &exe, false);
     match os::apply_self_delete(&plan, &env, &exe) {
         Ok(r) if r.failures.is_empty() => {
             tracing::info!(removed = r.removed.len(), "self-delete: done")

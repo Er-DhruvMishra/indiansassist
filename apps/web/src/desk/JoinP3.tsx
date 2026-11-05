@@ -5,7 +5,9 @@
  * link; sha256 / version and the signed line; **Download again** after a `410`; deep link only after Keep (L3) or on
  * **I already have IndiansAssist**. Android: the App Link, then **Get the app**, **Copy token** and a QR. iOS: text.
  * Linux (Phase E section 7.6): **Download for Linux (x86-64, X11)** of the per-download `.tar.gz`, the X11 line, a
- * copy button for the exact `cd ~/Downloads && tar -xzf ... && ./...` line, and the ELF's sha256 from the build.
+ * copy button for the exact `cd ~/Downloads && tar -xzf ... && ./...` line, and the ELF's sha256 from the build. Phase F
+ * section 9.5: one download, **Download for Linux (x86-64)**, that works on X11 and Wayland (the portal companion
+ * `.ia-portal` rides in the same archive), with the companion's sha256 on a second line when the build has one.
  * Nothing is stored for the room and the page never navigates to /room for this tier.
  */
 import { useEffect, useRef, useState } from 'react';
@@ -33,8 +35,11 @@ import {
 export const P3_INTRO = 'This session uses the IndiansAssist support client. It runs without installing anything and removes itself when you close it.';
 export const P3_UNAVAILABLE = 'The support client is not available on this server; ask your technician for a browser screen-share link instead.';
 export const P3_IOS = 'Android only for now; ask your technician for a browser screen-share link.';
-export const P3_LINUX_DOWNLOAD = 'Download for Linux (x86-64, X11)';
-export const P3_LINUX_X11 = 'Needs an X11 (Xorg) session to share the screen';
+export const P3_LINUX_DOWNLOAD = 'Download for Linux (x86-64)';
+/** Phase F section 9.5: the line under the single Linux button when the build carries the Wayland portal companion. */
+export const P3_LINUX_BOTH = 'Works on X11 and Wayland desktops. On Wayland the technician can see your screen but cannot control it.';
+/** A Linux build without the companion (a server that ships only the X11 binary): the Phase E line. */
+export const P3_LINUX_X11 = 'Needs an X11 (Xorg) session to share the screen.';
 
 export type JoinP3Env = {
   nav: { userAgent: string; userAgentData?: { platform?: string } };
@@ -84,6 +89,8 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
   const tried = useRef(false);
   /** Linux only: true / false once the manifest answered, null before (or when it could not be read: prepare decides). */
   const [linuxAvailable, setLinuxAvailable] = useState<boolean | null>(null);
+  /** Phase F section 9.5: the portal companion of the Linux build (sha256, size), when the manifest names one. */
+  const [companion, setCompanion] = useState<{ sha256: string; size: number } | null>(null);
   const joinLink = joinLinkFor(env.origin, code);
 
   const openApp = async () => {
@@ -103,7 +110,10 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
     let live = true;
     env.manifest().then(
       (m) => {
-        if (live) setLinuxAvailable(m.builds.some((b) => b.platform === 'linux' && b.arch === 'x64'));
+        if (!live) return;
+        const linux = m.builds.find((b) => b.platform === 'linux' && b.arch === 'x64');
+        setLinuxAvailable(Boolean(linux));
+        setCompanion(linux?.companion ?? null);
       },
       () => undefined,
     );
@@ -179,6 +189,7 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
   if (platform === 'linux') {
     const command = prep ? linuxRunCommand(prep.filename) : null;
     const inner = prep ? prep.filename.replace(/\.tar\.gz$/, '') : '';
+    const sessionLine = companion ? P3_LINUX_BOTH : P3_LINUX_X11;
     return (
       <div className="flex flex-col gap-3" data-testid="join-p3-linux">
         <p className="text-sm">{P3_INTRO}</p>
@@ -193,7 +204,9 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
             <Button size="lg" onClick={() => start('x64', 'linux')} disabled={busy || expired} style={!expired ? { backgroundColor: accent } : undefined}>
               {busy ? 'Preparing your download...' : P3_LINUX_DOWNLOAD}
             </Button>
-            <p className="text-xs text-slate-600 dark:text-slate-400">{P3_LINUX_X11}.</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400" data-testid="p3-linux-line">
+              {sessionLine}
+            </p>
             {!seen && (
               <Button variant="secondary" onClick={() => void openApp()} disabled={expired}>
                 I already have IndiansAssist
@@ -218,7 +231,7 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
                 </div>
               </>
             )}
-            <p className="text-xs">{P3_LINUX_X11}.</p>
+            <p className="text-xs">{sessionLine}</p>
             <div className="flex flex-wrap items-center gap-2">
               <CopyButton text={prep.deskCode} label="Copy support code" againLabel="Copy support code again" variant="secondary" size="sm" />
               <span className="font-mono text-xs">{groupCode(prep.deskCode)}</span>
@@ -228,9 +241,16 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
               Version {prep.version}, sha256 of the program <span className="break-all font-mono">{inner}</span>:{' '}
               <span className="break-all font-mono">{prep.sha256}</span>
             </p>
+            {companion && (
+              <p className="text-xs" data-testid="p3-sha-portal">
+                sha256 of <span className="font-mono">.ia-portal</span>, the part that shares a Wayland screen:{' '}
+                <span className="break-all font-mono">{companion.sha256}</span>
+              </p>
+            )}
             <Alert tone="amber">
-              The Linux client is not code-signed. To verify it, run <span className="break-all font-mono">sha256sum {inner}</span> after unpacking: it must print the
-              value above.
+              The Linux client is not code-signed. To verify it, run{' '}
+              <span className="break-all font-mono">{companion ? `sha256sum ${inner} .ia-portal` : `sha256sum ${inner}`}</span> after unpacking: it must print
+              {companion ? ' the values above.' : ' the value above.'}
             </Alert>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" disabled={busy || expired} onClick={() => void again()}>

@@ -189,6 +189,13 @@ pub fn apply_self_delete(
         LinuxProtocolHandler { env: env.clone() }.register(&to.to_string_lossy())?;
         report.kept_copy = Some(to.clone());
     }
+    // Phase F §9.5: the portal companion is kept beside the kept binary (when it is there).
+    if let Some((from, to)) = &plan.keep_companion {
+        if archive_facts(from).is_some_and(|f| f.regular_file && f.owner_uid == uid()) {
+            fs::copy(from, to)?;
+            fs::set_permissions(to, fs::Permissions::from_mode(0o755))?;
+        }
+    }
     if plan.restore_mimeapps {
         if let Err(e) = (LinuxProtocolHandler { env: env.clone() }).unregister() {
             report.failures.push(format!("handler: {e}"));
@@ -213,6 +220,15 @@ pub fn apply_self_delete(
             match fs::remove_file(a) {
                 Ok(()) => report.removed.push(a.clone()),
                 Err(e) => report.failures.push(format!("{}: {e}", a.display())),
+            }
+        }
+    }
+    // Phase F §9.5: the companion goes with the binary, when it is the user's own regular file.
+    if let Some(c) = &plan.companion {
+        if archive_facts(c).is_some_and(|f| f.regular_file && f.owner_uid == uid()) {
+            match fs::remove_file(c) {
+                Ok(()) => report.removed.push(c.clone()),
+                Err(e) => report.failures.push(format!("{}: {e}", c.display())),
             }
         }
     }

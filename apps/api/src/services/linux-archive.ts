@@ -18,8 +18,15 @@ export const LINUX_ARCHIVE_CONTENT_TYPE = 'application/gzip';
 const BLOCK = 512;
 const DEFLATE_LEVEL = 6;
 
-/** The cached second member of a build: the compressed ELF body and the ELF's size (for the tar header). */
-export type LinuxArchiveBody = { member: Buffer; elfSize: number };
+/**
+ * The cached members of a build: the compressed ELF body and the ELF's size (for the tar header), and (Phase F section
+ * 9.5) the portal companion's fixed header and body members.
+ */
+export type LinuxArchiveBody = {
+  member: Buffer;
+  elfSize: number;
+  companion?: { head: Buffer; member: Buffer; size: number };
+};
 
 /** The served archive name: `IndiansAssist-in-mum-4821-9365-7715.tar.gz`. */
 export function linuxArchiveName(region: Region, deskCode: string): string {
@@ -99,14 +106,36 @@ export function ustarHeader(name: string, size: number): Buffer {
   return h;
 }
 
-// ---------- the two members ----------
+// ---------- the members ----------
 
-/** Member 2, built once per loaded build: the ELF padded to a 512 multiple, then two zero blocks, compressed. */
-export function linuxArchiveBody(elf: Uint8Array): LinuxArchiveBody {
-  const padded = Math.ceil(elf.length / BLOCK) * BLOCK;
-  const raw = Buffer.alloc(padded + 2 * BLOCK, 0);
-  raw.set(elf, 0);
-  return { member: gzipMember(raw), elfSize: elf.length };
+/**
+ * Phase F section 9.5: the portal companion's name inside the archive. A dot name, so a file manager shows one program,
+ * and a name the Phase E filename grammar never matches.
+ */
+export const PORTAL_MEMBER_NAME = '.ia-portal';
+
+/**
+ * Members 2-4 of a build, built once per load: the ELF padded to a 512 multiple (member 2), and, when the build has a
+ * portal companion, the fixed ustar header of `.ia-portal` (member 3) and the companion padded (member 4). The two zero
+ * end-of-archive blocks close the last member.
+ */
+export function linuxArchiveBody(elf: Uint8Array, portal?: Uint8Array): LinuxArchiveBody {
+  const pad = (data: Uint8Array, endBlocks: boolean): Buffer => {
+    const padded = Math.ceil(data.length / BLOCK) * BLOCK;
+    const raw = Buffer.alloc(padded + (endBlocks ? 2 * BLOCK : 0), 0);
+    raw.set(data, 0);
+    return raw;
+  };
+  if (!portal) return { member: gzipMember(pad(elf, true)), elfSize: elf.length };
+  return {
+    member: gzipMember(pad(elf, false)),
+    elfSize: elf.length,
+    companion: {
+      head: gzipMember(ustarHeader(PORTAL_MEMBER_NAME, portal.length)),
+      member: gzipMember(pad(portal, true)),
+      size: portal.length,
+    },
+  };
 }
 
 /** Member 1, per request: the ustar header for the per-download inner name. */
@@ -114,11 +143,12 @@ export function linuxArchiveHead(innerName: string, elfSize: number): Buffer {
   return gzipMember(ustarHeader(innerName, elfSize));
 }
 
-/** The archive of one grant as its two members (concatenated on the wire). */
+/** The archive of one grant as its members (concatenated on the wire): two, or four with the portal companion. */
 export function linuxArchiveParts(region: Region, deskCode: string, body: LinuxArchiveBody): Buffer[] {
-  return [linuxArchiveHead(agentLinuxFileName(region, deskCode), body.elfSize), body.member];
+  const parts = [linuxArchiveHead(agentLinuxFileName(region, deskCode), body.elfSize), body.member];
+  if (body.companion) parts.push(body.companion.head, body.companion.member);
+  return parts;
 }
-
 export function partsLength(parts: readonly Buffer[]): number {
   return parts.reduce((n, p) => n + p.length, 0);
 }

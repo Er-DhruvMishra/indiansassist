@@ -236,6 +236,22 @@ describe('elf-check: the CLI', () => {
     expect(size.stderr).toMatch(/FAIL: the file is .* MiB/);
   });
 
+  it('--allow widens NEEDED by exactly the named library (Phase F section 9.6, the portal companion)', () => {
+    const img = makeElf({ ...GOOD, needed: [...GOOD.needed, 'libpipewire-0.3.so.0'] });
+    expect(cli(img).code).toBe(1);
+    const ok = cli(img, '--allow', 'libpipewire-0.3.so.0');
+    expect(ok.code).toBe(0);
+    expect(ok.json.needed).toContain('libpipewire-0.3.so.0');
+    // Anything else outside the E set still fails.
+    const other = cli(makeElf({ ...GOOD, needed: [...GOOD.needed, 'libpipewire-0.3.so.0', 'libX11.so.6'] }), '--allow', 'libpipewire-0.3.so.0');
+    expect(other.code).toBe(1);
+    expect(other.stderr).toMatch(/libX11\.so\.6/);
+    expect(checkElf(img, { allow: ['libpipewire-0.3.so.0'] }).ok).toBe(true);
+    // A path or a pattern is a usage error.
+    expect(spawnSync(process.execPath, [SCRIPT, 'x', '--allow', '/usr/lib/libpipewire-0.3.so.0'], { encoding: 'utf8' }).status).toBe(2);
+    expect(spawnSync(process.execPath, [SCRIPT, 'x', '--allow'], { encoding: 'utf8' }).status).toBe(2);
+  });
+
   it('exit 2 on a usage error; exit 1 on a missing file', () => {
     expect(spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' }).status).toBe(2);
     expect(spawnSync(process.execPath, [SCRIPT, 'x', '--max-glibc', 'two'], { encoding: 'utf8' }).status).toBe(2);

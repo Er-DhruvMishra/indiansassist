@@ -7,6 +7,9 @@
 #   e2e-agent.sh synthetic --code ... --api-origin http://<gw>:<port> --synthetic-capture ...
 #   e2e-agent.sh x11       --code ... --api-origin ...   # real X11 capture/input on a harness Xvfb
 #   e2e-agent.sh wayland   --code ... --api-origin ...   # a Wayland session (no screen shared)
+#   e2e-agent.sh portal    --code ... --api-origin ...   # Phase F §9.6: the X11 binary with .ia-portal beside it
+#                                                       # under the headless portal stack (scripts/portal-test.sh)
+#   e2e-agent.sh portal-nopw ...                         # the same pair with IA_TEST_NO_PIPEWIRE=1 (dev builds)
 #   e2e-agent.sh cleanup <root>            # stop what a run left behind (only its own pids)
 #
 # Isolation (binding): WAYLAND_DISPLAY is unset (wayland mode sets a name that names no real
@@ -26,10 +29,20 @@ bin="${IA_AGENT_BIN:-$CARGO_TARGET_DIR/release/IndiansAssist}"
 mode="${1:-}"
 shift || true
 
+# Phase F §9.6: the pair of the single Linux download, side by side as the archive extracts it:
+# the X11 dev binary and the portal dev binary as `.ia-portal`. Hard links into the build's own
+# target dir (nothing is copied, nothing outside it is written).
+pair_dir="$CARGO_TARGET_DIR/ia-pair"
+
 if [ "$mode" = "build" ]; then
   cd "$agent_dir" || exit 1
+  # The portal build first (same name, so it is linked aside before the X11 build replaces it).
+  cargo build --release -p ia-agent --no-default-features --features "ia-agent/portal,ia-agent/dev" || exit $?
+  mkdir -p "$pair_dir"
+  ln -f "$CARGO_TARGET_DIR/release/IndiansAssist" "$pair_dir/.ia-portal" || exit $?
   cargo build --release -p ia-agent --no-default-features --features "$FEATS" \
-    && cargo build --release -p ia-capture-x11 --features x11 --example xvfb_monitors
+    && cargo build --release -p ia-capture-x11 --features x11 --example xvfb_monitors \
+    && ln -f "$CARGO_TARGET_DIR/release/IndiansAssist" "$pair_dir/IndiansAssist"
   exit $?
 fi
 
@@ -49,8 +62,17 @@ if [ "$mode" = "cleanup" ]; then
 fi
 
 case "$mode" in
-  synthetic | x11 | wayland) ;;
-  *) echo "e2e-agent: mode must be build, synthetic, x11, wayland or cleanup" >&2; exit 2 ;;
+  synthetic | x11 | wayland | portal | portal-nopw) ;;
+  *) echo "e2e-agent: mode must be build, synthetic, x11, wayland, portal, portal-nopw or cleanup" >&2; exit 2 ;;
+esac
+case "$mode" in
+  portal | portal-nopw)
+    bin="$pair_dir/IndiansAssist"
+    if [ ! -f "$pair_dir/.ia-portal" ]; then
+      echo "e2e-agent: no .ia-portal beside $bin; run '$0 build' first" >&2
+      exit 1
+    fi
+    ;;
 esac
 case " $* " in
   *" --no-self-delete "*) ;;
@@ -116,6 +138,27 @@ elif [ "$mode" = "wayland" ]; then
   env_args=(-u DISPLAY WAYLAND_DISPLAY=ia-e2e-no-such-compositor XDG_SESSION_TYPE=wayland)
 else
   env_args=(-u WAYLAND_DISPLAY -u DISPLAY)
+fi
+
+if [ "$mode" = "portal" ] || [ "$mode" = "portal-nopw" ]; then
+  # Phase F §9.6: the pair runs under the headless portal stack, which owns the session bus, the
+  # runtime dir, WAYLAND_DISPLAY=ia-wl-<rand>, PipeWire and the portal; this run's own temporary
+  # root holds the agent's data, config (the download folder) and state.
+  nopw=()
+  [ "$mode" = "portal-nopw" ] && nopw=(IA_TEST_NO_PIPEWIRE=1)
+  bash "$here/portal-test.sh" run -- env -u DISPLAY "${nopw[@]}" \
+    XDG_DATA_HOME="$root/data" \
+    XDG_CONFIG_HOME="$root/config" \
+    XDG_STATE_HOME="$root/state" \
+    RUST_LOG="${RUST_LOG:-ia_agent=info,ia_capture_portal=info,info,dtls=error,webrtc_ice=error,webrtc_sctp=error,webrtc_mdns=error,zbus=error}" \
+    "$bin" "$@" <&0 &
+  agent_pid=$!
+  echo "$agent_pid" >>"$root/pids"
+  wait "$agent_pid"
+  status=$?
+  agent_pid=""
+  echo "E2E_AGENT_EXIT=$status"
+  exit "$status"
 fi
 
 env "${env_args[@]}" \

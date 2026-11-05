@@ -20,6 +20,7 @@ import type { GetUserMedia } from '../../../lib/sessionBase';
 import { AgentControllerCore, type AgentControllerDeps } from './agentController';
 import { TextBuffer, modifiersOf, norm, type KeyLike } from './agentInput';
 import { addRun, applyOpError, runErrorText } from './agentPlaybooks';
+import { captureNoticeFor } from './captureNotice';
 import { controlBlocker, hasFeature, levelAllows, type ElevationUiState } from './agentState';
 import { SAS_GATE_INITIAL, checkSas, type SasCheck, type SasGateState } from './sasGate';
 import { registerLiveConsole } from '../../summary/liveConsoles';
@@ -84,18 +85,9 @@ export class AgentConsoleController extends AgentControllerCore {
         const cause = typeof e['cause'] === 'string' ? (e['cause'] as string) : undefined;
         return this.set({ elevation: { opId: String(e['opId']), state, ...(cause ? { cause } : {}) } });
       }
-      case 'capture': {
-        const cause = e['cause'];
-        const text =
-          cause === 'secure_desktop'
-            ? 'Waiting for the user to answer Windows.'
-            : e['path'] === 'gdi'
-              ? 'Compatibility capture (slower).'
-              : cause === 'recovered'
-                ? null
-                : this.snap.captureNotice;
-        return this.set({ captureNotice: text });
-      }
+      case 'capture':
+        // Phase F section 9.3: the portal causes have their own wording (`captureNotice.ts`).
+        return this.set({ captureNotice: captureNoticeFor(e, this.snap.captureNotice) });
       case 'input_blocked': {
         const cause = e['cause'];
         const text =

@@ -183,6 +183,12 @@ fn run_consent_app(
                         use winit::platform::x11::EventLoopBuilderExtX11;
                         b.with_any_thread(true);
                     }
+                    // Phase F §9.2: the portal build may run on the Wayland backend instead.
+                    #[cfg(all(target_os = "linux", feature = "wayland"))]
+                    {
+                        use winit::platform::wayland::EventLoopBuilderExtWayland;
+                        EventLoopBuilderExtWayland::with_any_thread(b, true);
+                    }
                     // apple-owned: begin
                     // Phase F §17.2: the AppKit event loop (apple stream); nothing yet.
                     #[cfg(target_os = "macos")]

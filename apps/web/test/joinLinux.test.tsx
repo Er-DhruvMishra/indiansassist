@@ -1,6 +1,6 @@
 /**
  * Join page, Linux branch (Phase E section 7.6): Linux detection from low-entropy signals, **Download for Linux
- * (x86-64, X11)** through prepare with platform `linux`, the X11 line, the copy button for the exact
+ * (x86-64)** (Phase F section 9.5 wording; a build without the portal companion keeps the X11 line) through prepare with platform `linux`, the X11 line, the copy button for the exact
  * `cd ~/Downloads && tar -xzf ... && ./...` line, the ELF sha256, Download again after a 410, and the unavailable text
  * when the server has no Linux build (manifest) or answers `503 download_unavailable`.
  */
@@ -106,7 +106,7 @@ describe('JoinP3 (Linux)', () => {
     render(<JoinP3 info={token()} code={CODE} accent="#0f766e" expired={false} env={e} />);
     expect(screen.getByTestId('join-p3-linux')).toBeTruthy();
     expect(screen.getByText(P3_INTRO)).toBeTruthy();
-    expect(screen.getByText(`${P3_LINUX_X11}.`)).toBeTruthy();
+    expect(screen.getByText(P3_LINUX_X11)).toBeTruthy();
     // No Windows wording on a Linux page.
     expect(screen.queryByRole('button', { name: 'Download IndiansAssist' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ARM64 version' })).toBeNull();

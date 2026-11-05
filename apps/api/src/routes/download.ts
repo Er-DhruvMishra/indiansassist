@@ -4,7 +4,8 @@
  * `public-lookup`), mints a desk code for the filename (section 2.3) and a 120 s grant; `GET /download/:grant` streams
  * the build to the same IP at most 3 times (`HEAD` free), honours `Range`, refuses another region, and chains
  * `download.served` once per grant. Linux (Phase E section 7.6) serves the per-download `.tar.gz` of
- * `services/linux-archive.ts`, whose bytes are a pure function of the grant, under the same rules.
+ * `services/linux-archive.ts`, whose bytes are a pure function of the grant, under the same rules; Phase F section 9.5:
+ * with the Wayland portal companion as `.ia-portal` beside the X11 binary when the build has one.
  */
 import { createReadStream } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -51,6 +52,9 @@ type Grant = {
   arch: AgentArch;
   version: string;
   sha256: string;
+  /** Phase F section 9.5: the portal companion's sha256 when the Linux archive carries it (a grant serves the bytes it was
+   * prepared for). Absent on grants minted before the companion existed. */
+  companion?: string | null;
   ip: string;
 };
 
@@ -151,6 +155,7 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
       arch: build.arch,
       version: build.version,
       sha256: build.sha256,
+      companion: build.companion?.sha256 ?? null,
       ip: req.ip,
     };
     await ctx.presence.setKey(grantKey(sha256Hex(grant)), JSON.stringify(g), LIMITS.downloadGrantTtlSec);
@@ -175,7 +180,8 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
     if (g.ip !== req.ip || !isRegionServed(g.region, ctx.config.servedRegions))
       fail('link_expired', 'this download link has expired; start the download again');
     const build = ctx.agentDist.find(g.platform, g.arch);
-    if (!build || build.sha256 !== g.sha256) fail('link_expired', 'this build is no longer served');
+    if (!build || build.sha256 !== g.sha256 || (build.companion?.sha256 ?? null) !== (g.companion ?? null))
+      fail('link_expired', 'this build is no longer served');
     let uses = 0;
     if (!head) {
       uses = await ctx.presence.incr(`${grantKey(hash)}:uses`, LIMITS.downloadGrantTtlSec);
@@ -224,7 +230,15 @@ export async function downloadRoutes(app: FastifyInstance, ctx: AppContext): Pro
           sessionId: null,
           actor: systemActor,
           action: 'download.served',
-          data: { tokenId: g.tokenId, platform: g.platform, arch: g.arch, version: g.version, sha256: g.sha256 },
+          data: {
+            tokenId: g.tokenId,
+            platform: g.platform,
+            arch: g.arch,
+            version: g.version,
+            sha256: g.sha256,
+            // Phase F section 9.5: the Linux archive carried the portal companion.
+            ...(g.platform === 'linux' ? { companion: Boolean(g.companion) } : {}),
+          },
         });
     }
     const start = range?.start ?? 0;

@@ -34,6 +34,11 @@ fn main() {
     #[cfg(target_os = "macos")]
     let args = macos_resume_args(args);
     // apple-owned: end
+    // Phase F §9.5: the portal companion started by the X11 binary on Wayland (`--handed-from
+    // <X11 binary>` first; the token follows on fd 4).
+    let (handed_from, args) = ia_agent::desk::take_handed_from(args);
+    #[cfg(target_os = "linux")]
+    let raw_args = args.clone();
 
     let cli = match Cli::parse(&args) {
         Ok(c) => c,
@@ -70,7 +75,24 @@ fn main() {
     // Phase E §7.6 / §7.7 (Linux): the start-up checks, the filename and clipboard carriers,
     // the deep-link handler and the single instance.
     #[cfg(target_os = "linux")]
-    linux_start(&cli, &mut candidates);
+    if let Some(main) = &handed_from {
+        ia_agent::desk::set_handed_from(main.clone());
+        println!(
+            "handed over from {}: running {} (pid {})",
+            main.display(),
+            std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            std::process::id()
+        );
+        if let Some((source, tok)) = read_handover_token() {
+            candidates.arg = Some((source, tok));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = handed_from;
+    #[cfg(target_os = "linux")]
+    linux_start(&cli, &mut candidates, &raw_args);
     // apple-owned: begin
     // Phase F §17.2: the macOS start-up (the `.iaconfig` sidecar beside `IndiansAssist.app`, the
     // `CFBundleURLTypes` deep link, the single instance); empty until the apple stream fills it.
@@ -347,7 +369,7 @@ fn macos_start(cli: &Cli, candidates: &mut Candidates) {
 /// read). §7.7: the deep-link handler is registered under the XDG roots, and a second start of
 /// this image forwards its link to the running instance and exits.
 #[cfg(target_os = "linux")]
-fn linux_start(cli: &Cli, candidates: &mut Candidates) {
+fn linux_start(cli: &Cli, candidates: &mut Candidates, args: &[String]) {
     use ia_platform::linux::display::NO_SESSION_MESSAGE;
     // SAFETY: geteuid has no preconditions and cannot fail.
     if unsafe { libc::geteuid() } == 0 {
@@ -383,6 +405,11 @@ fn linux_start(cli: &Cli, candidates: &mut Candidates) {
             }
         }
     }
+    // Phase F §9.5: on Wayland the X11 binary hands over to `.ia-portal` beside it (never returns
+    // when it does), or stays with the honest message. Before the single-instance server starts:
+    // its thread blocks in `accept`, which holds the next free descriptor reserved, and that could
+    // be fd 4.
+    linux_wayland_handover(cli, args, resolve(candidates).as_ref());
     #[cfg(feature = "linux-os")]
     {
         use ia_platform::linux::{os, XdgEnv};
@@ -413,12 +440,152 @@ fn linux_start(cli: &Cli, candidates: &mut Candidates) {
             }
             Err(e) => eprintln!("single instance unavailable: {e}"),
         }
-        if let Some(exe) = &exe {
+        // Phase F §9.5: the portal companion points the link handler at the X11 binary, which
+        // decides again (and hands over again) on the next start.
+        let handler_exe = ia_agent::desk::handed_from().or_else(|| exe.clone());
+        if let Some(exe) = &handler_exe {
             if let Err(e) = (os::LinuxProtocolHandler { env }).register(&exe.to_string_lossy()) {
                 eprintln!("the indiansassist:// link handler could not be registered: {e}");
             }
         }
     }
+}
+
+/// Phase F §9.5, in the portal companion: the token the X11 binary already resolved, read from the
+/// inherited pipe on fd 4, which is closed afterwards (nothing this process spawns inherits it).
+#[cfg(target_os = "linux")]
+fn read_handover_token() -> Option<(ia_core::types::TokenSource, ia_core::join_input::TokenInput)> {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    let fd = ia_agent::desk::TOKEN_FD;
+    // SAFETY: F_GETFD only reads the descriptor flags; -1 means fd 4 is not open.
+    if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+        eprintln!("handed over without a token pipe; resolving the carriers here");
+        return None;
+    }
+    // SAFETY: fd 4 is open (checked above) and is the pipe the X11 binary passed to this
+    // process; the File takes ownership and closes it.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut buf = Vec::new();
+    let _ = file.take(8193).read_to_end(&mut buf);
+    let got = ia_agent::desk::decode_handover_token(&buf);
+    if got.is_none() {
+        eprintln!("the hand-over token could not be read; resolving the carriers here");
+    }
+    got
+}
+
+/// Phase F §9.5, in the X11 binary on a Wayland session: when `.ia-portal` beside it is ours (a
+/// regular file the user owns with the embedded sha256; a dev build skips the hash and logs it)
+/// and `libpipewire-0.3.so.0` opens, `execve` it with `--handed-from <own path>` first and the
+/// same arguments, and the resolved token on fd 4. Otherwise stay: E's honest Wayland message,
+/// plus the PipeWire line when only the library is missing.
+#[cfg(target_os = "linux")]
+fn linux_wayland_handover(
+    cli: &Cli,
+    args: &[String],
+    resolved: Option<&ia_agent::tokensource::Resolved>,
+) {
+    use ia_agent::desk::{self, Stay};
+    let mode = desk::detect(cli.synthetic_capture);
+    let portal_build = cfg!(feature = "portal");
+    if portal_build || mode != desk::ScreenMode::Wayland {
+        return;
+    }
+    let Ok(own) = std::env::current_exe() else {
+        return;
+    };
+    let companion = own.with_file_name(desk::COMPANION_NAME);
+    let facts = desk::companion_facts(&companion);
+    let expected = desk::expected_companion_sha256();
+    if facts.exists && expected.is_none() {
+        eprintln!("development build: the companion's sha256 is not checked");
+    }
+    let pipewire = facts.exists && desk::pipewire_loadable();
+    match desk::handover_decision(&mode, portal_build, &facts, expected, pipewire) {
+        Ok(()) => {}
+        Err(Stay::NoPipeWire) => {
+            desk::set_pipewire_missing();
+            eprintln!(
+                "{} {}",
+                ia_platform::linux::display::WAYLAND_NOTICE,
+                desk::PIPEWIRE_MISSING_LINE
+            );
+            return;
+        }
+        Err(Stay::CompanionRefused(why)) => {
+            eprintln!("{} is not used: {why}", companion.display());
+            eprintln!("{}", ia_platform::linux::display::WAYLAND_NOTICE);
+            return;
+        }
+        Err(_) => {
+            eprintln!("{}", ia_platform::linux::display::WAYLAND_NOTICE);
+            return;
+        }
+    }
+    // The token travels on an inherited pipe: write it, keep only the read end, put it on fd 4.
+    let mut fds = [0i32; 2];
+    // SAFETY: pipe2 writes two descriptors into `fds`.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        eprintln!("the hand-over pipe could not be made; staying");
+        return;
+    }
+    let (rd, wr) = (fds[0], fds[1]);
+    if let Some(r) = resolved {
+        let payload = desk::encode_handover_token(r.source, &r.token);
+        // SAFETY: `wr` is the open write end; the payload is far below the pipe's capacity.
+        let n = unsafe { libc::write(wr, payload.as_ptr().cast(), payload.len()) };
+        if n != payload.len() as isize {
+            eprintln!("the hand-over token could not be written; staying");
+            // SAFETY: both ends are open and closed once.
+            unsafe {
+                libc::close(rd);
+                libc::close(wr);
+            }
+            return;
+        }
+    }
+    // SAFETY: the write end is closed once; the companion reads to EOF.
+    unsafe {
+        libc::close(wr);
+    }
+    println!(
+        "handing over to the Wayland screen-sharing part: {}",
+        companion.display()
+    );
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new(&companion);
+    cmd.args(desk::handover_args(&own, args));
+    // SAFETY: only async-signal-safe calls between fork and exec: dup2 onto fd 4 (which clears
+    // CLOEXEC on the copy), then close the original when it is not already fd 4.
+    unsafe {
+        cmd.pre_exec(move || {
+            if rd != desk::TOKEN_FD {
+                // `exec` runs in this (multi-threaded) process: dup2 answers EBUSY while another
+                // thread is mid-way through allocating fd 4, so it is retried.
+                let mut tries = 0;
+                while libc::dup2(rd, desk::TOKEN_FD) < 0 {
+                    let err = std::io::Error::last_os_error();
+                    tries += 1;
+                    if err.raw_os_error() != Some(libc::EBUSY) || tries > 100 {
+                        return Err(err);
+                    }
+                }
+                libc::close(rd);
+            } else {
+                libc::fcntl(rd, libc::F_SETFD, 0);
+            }
+            Ok(())
+        });
+    }
+    let err = cmd.exec();
+    // Only reached when exec failed: stay with the honest message.
+    // SAFETY: `rd` is still open in this process and closed once.
+    unsafe {
+        libc::close(rd);
+    }
+    eprintln!("the hand-over to {} failed: {err}", companion.display());
+    eprintln!("{}", ia_platform::linux::display::WAYLAND_NOTICE);
 }
 
 /// §7.3 step 4: read the blob, check this image is the one the parent hashed and that it is

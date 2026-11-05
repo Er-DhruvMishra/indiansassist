@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router';
 import type { AssistHelloOk, AssistKnock, SessionCreated, SignalError } from '@indiansassist/shared';
 import { ASSIST_SIGNAL_URL } from '../../config';
 import { SignalClient, type SignalStatus } from '../../lib/signal';
+import { rememberLateConsent } from './lateConsent';
 
 export type Presence = { waiting: boolean; held: boolean };
 
@@ -85,6 +86,11 @@ export function AssistSignalProvider({
         created.current.set(m.sessionId, m);
         setKnocks((list) => list.filter((k) => k.sessionId !== m.sessionId));
         if (pendingAccept.current.delete(m.sessionId)) navRef.current(`/app/sessions/${m.sessionId}`);
+      }),
+      // A native console may mount after the Desk consented: keep the latest consent for it (`lateConsent.ts`).
+      c.on('consent.changed', (m) => {
+        const cached = created.current.get(m.sessionId);
+        if (cached) rememberLateConsent(cached, m);
       }),
       c.on('session.ended', (m) => {
         created.current.delete(m.sessionId);

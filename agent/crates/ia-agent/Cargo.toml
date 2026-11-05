@@ -51,6 +51,18 @@ x11 = ["ia-capture-x11/x11", "ia-input-x11/x11"]
 linux-os = ["ia-platform/linux-os"]
 # The egui/eframe consent window, pill, panel and tray icon.
 gui = ["ia-ui/gui"]
+# Phase F §9.2: the Wayland portal build (the companion binary `.ia-portal`): everything the X11
+# build has, plus screen capture through xdg-desktop-portal ScreenCast and PipeWire, and the UI on
+# Wayland. Its dependencies are Linux-target only, so it compiles nothing extra on Windows.
+portal = [
+    "media",
+    "x11",
+    "gui",
+    "linux-os",
+    "dep:ia-capture-portal",
+    "ia-capture-portal/portal",
+    "ia-ui/wayland",
+]
 # apple-owned: begin
 # Phase F §17.2 / §17.7: the macOS agent (ScreenCaptureKit capture, CGEvent input). The macOS
 # build is `--no-default-features --features ia-agent/media,ia-agent/macos,ia-agent/gui,ia-agent/dev`
@@ -68,6 +80,7 @@ ia-frame.workspace = true
 ia-capture-x11.workspace = true
 ia-input-x11.workspace = true
 ia-ui.workspace = true
+ia-capture-portal = { workspace = true, optional = true }
 # The §7.2 / D §4.2 blobs are serde types, and the hand-over errors are `thiserror` ones.
 serde.workspace = true
 thiserror.workspace = true

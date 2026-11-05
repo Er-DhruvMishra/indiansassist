@@ -14,6 +14,7 @@
  */
 import { type AgentCapabilities, type SessionCreated, type SessionEnded, type SecFailReason, type StopSharingReason } from '@indiansassist/shared';
 import { errorMessage } from '../../../lib/api';
+import { lateConsentFor, type ConsentChangedLike } from '../../signal/lateConsent';
 import { agentPolicyApi, p3Event } from '../../../lib/agentApi';
 import { sessionsApi } from '../../../lib/endpoints';
 import { uuid } from '../../../lib/ids';
@@ -130,19 +131,7 @@ export class AgentControllerCore {
     this.offs.push(
       s.on('assist.hello.ok', () => this.resume()),
       s.on('session.created', mine((m: SessionCreated) => this.onCreated(m))),
-      s.on('consent.changed', mine((m) => {
-        if (m.state === 'revoked') {
-          this.endingBy ??= 'consent_revoked';
-          this.teardown();
-          return this.set({ notice: 'The Desk revoked consent.' });
-        }
-        if (m.state !== 'granted') return;
-        const level = m.level === 'view' || m.level === 'control' || m.level === 'elevated' ? m.level : this.snap.consent.level;
-        const consent = { level, monitors: m.monitors ?? this.snap.consent.monitors, clipboard: m.clipboard ?? this.snap.consent.clipboard };
-        const lower = level === 'view' && this.snap.inputMode === 'control';
-        const elevation = level === 'elevated' && this.snap.elevation ? { ...this.snap.elevation, state: 'granted' as const } : this.snap.elevation;
-        this.set({ consent, elevation, ...(lower ? { inputMode: 'view' as const } : {}), ...(this.snap.phase === 'waiting_consent' ? { phase: 'connecting' as const } : {}) });
-      })),
+      s.on('consent.changed', mine((m) => this.onConsentChanged(m))),
       s.on('webrtc.offer', mine((m) => this.onOffer(m.sdp, m.restart === true, m.gen))),
       s.on('webrtc.answer', mine((m) => void this.link?.handleSignal({ t: 'webrtc.answer', sdp: m.sdp }))),
       s.on('webrtc.ice', mine((m) => void this.link?.handleSignal({ t: 'webrtc.ice', candidate: m.candidate }))),
@@ -174,6 +163,23 @@ export class AgentControllerCore {
       .catch(() => undefined);
     if (cached) this.onCreated(cached);
     else if (helloReady) this.resume();
+    // A `consent.changed` that arrived before this controller subscribed (`lateConsent.ts`).
+    const late = lateConsentFor(cached);
+    if (late && late.sessionId === this.id) this.onConsentChanged(late);
+  }
+
+  private onConsentChanged(m: ConsentChangedLike): void {
+    if (m.state === 'revoked') {
+      this.endingBy ??= 'consent_revoked';
+      this.teardown();
+      return this.set({ notice: 'The Desk revoked consent.' });
+    }
+    if (m.state !== 'granted') return;
+    const level = m.level === 'view' || m.level === 'control' || m.level === 'elevated' ? m.level : this.snap.consent.level;
+    const consent = { level, monitors: m.monitors ?? this.snap.consent.monitors, clipboard: m.clipboard ?? this.snap.consent.clipboard };
+    const lower = level === 'view' && this.snap.inputMode === 'control';
+    const elevation = level === 'elevated' && this.snap.elevation ? { ...this.snap.elevation, state: 'granted' as const } : this.snap.elevation;
+    this.set({ consent, elevation, ...(lower ? { inputMode: 'view' as const } : {}), ...(this.snap.phase === 'waiting_consent' ? { phase: 'connecting' as const } : {}) });
   }
 
   private resume(): void {

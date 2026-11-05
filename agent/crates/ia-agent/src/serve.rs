@@ -272,6 +272,10 @@ fn capture_monitors(cli: &Cli) -> Vec<MonitorInfo> {
         crate::desk::ScreenMode::Wayland | crate::desk::ScreenMode::NoSession => {
             return vec![crate::desk::wayland_placeholder_monitor()];
         }
+        // Phase F §9.3: the portal reports one stream; its size is known once frames flow.
+        crate::desk::ScreenMode::Portal => {
+            return vec![crate::desk::portal_placeholder_monitor()];
+        }
         _ => {}
     }
     SyntheticCapturer::single(1280, 720).enumerate()
@@ -774,6 +778,10 @@ pub async fn run_live_session(
         // cannot be shared and what still works.
         if crate::desk::current().is_some_and(|m| !m.shares_screen()) {
             warnings.push(ia_platform::linux::display::WAYLAND_NOTICE.into());
+            // Phase F §9.5: the portal companion is here but PipeWire is not.
+            if crate::desk::pipewire_missing() {
+                warnings.push(crate::desk::PIPEWIRE_MISSING_LINE.into());
+            }
         }
         let req = ConsentRequest {
             technician: info.technician.clone(),
@@ -2956,6 +2964,8 @@ async fn serve(
     let mut last_target = ctl.target_kbps();
     // Phase E §7.2 / §16.2: the X11 capture path last reported in a `ctl.event capture`.
     let mut reported_path: Option<CapturePath> = None;
+    // Phase F §9.3: the portal status last reported (`start`, `portal_denied`, `portal_closed`).
+    let mut reported_portal: Option<ia_core::capture_decision::PortalStatus> = None;
 
     // The server-recorder leg (contract §9 R2): a second PC answering the recorder's offer.
     let mut rec = RecorderLegs::new(
@@ -3069,6 +3079,9 @@ async fn serve(
                 let path_now = path_from_u8(capture_path.load(Ordering::Relaxed));
                 if let Some(ev) = x11_capture_change(reported_path, path_now, viewed, now_ms()) {
                     reported_path = Some(path_now);
+                    live.seal("ia.control", &ev.to_string()).await;
+                }
+                if let Some(ev) = crate::desk::portal_capture_event(&mut reported_portal, viewed, now_ms()) {
                     live.seal("ia.control", &ev.to_string()).await;
                 }
                 let s = build_stats(&monitors, viewed, path_now, &interval, &decision, ctl.has_recorder());

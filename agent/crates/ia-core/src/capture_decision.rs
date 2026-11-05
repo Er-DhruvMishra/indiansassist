@@ -65,6 +65,71 @@ impl CaptureCause {
     }
 }
 
+/// Phase F §9.3: where a portal capture stands, as the serve loop sees it. `Pending` until the
+/// portal's source dialog is answered; the last three are final for the session (re-asking is
+/// not automatic).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PortalStatus {
+    /// The session is being set up, or the source dialog is open.
+    Pending = 0,
+    /// Frames are flowing from PipeWire.
+    Streaming = 1,
+    /// The user cancelled the source dialog (or the portal refused the request).
+    Denied = 2,
+    /// The user stopped sharing from the compositor, or the stream ended.
+    Closed = 3,
+    /// No portal on the session bus, no ScreenCast interface, or no monitor source.
+    Unavailable = 4,
+}
+
+impl PortalStatus {
+    pub const ALL: [Self; 5] = [
+        Self::Pending,
+        Self::Streaming,
+        Self::Denied,
+        Self::Closed,
+        Self::Unavailable,
+    ];
+
+    pub fn from_u8(v: u8) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|s| *s as u8 == v)
+            .unwrap_or(Self::Pending)
+    }
+
+    /// Whether nothing more happens in this session (no frames, no re-ask).
+    pub fn is_final(self) -> bool {
+        matches!(self, Self::Denied | Self::Closed | Self::Unavailable)
+    }
+}
+
+/// Phase F §9.3: the `ctl.event capture { path, cause }` a portal status change means, given the
+/// status last reported. Each state is reported once; nothing follows a final state.
+///
+/// | now | event |
+/// |---|---|
+/// | `Streaming` | `portal` / `start` |
+/// | `Denied` | `none` / `portal_denied` |
+/// | `Closed` | `none` / `portal_closed` |
+/// | `Unavailable` | `none` / `wayland_unsupported` |
+pub fn portal_capture_change(
+    reported: Option<PortalStatus>,
+    now: PortalStatus,
+) -> Option<(CapturePath, CaptureCause)> {
+    if reported == Some(now) || reported.is_some_and(PortalStatus::is_final) {
+        return None;
+    }
+    match now {
+        PortalStatus::Pending => None,
+        PortalStatus::Streaming => Some((CapturePath::Portal, CaptureCause::Start)),
+        PortalStatus::Denied => Some((CapturePath::None, CaptureCause::PortalDenied)),
+        PortalStatus::Closed => Some((CapturePath::None, CaptureCause::PortalClosed)),
+        PortalStatus::Unavailable => Some((CapturePath::None, CaptureCause::WaylandUnsupported)),
+    }
+}
+
 /// Per-monitor DDA health. Feed it failure timestamps (monotonic ms) from the capture
 /// thread; it decides when to drop to GDI and keeps the current path.
 #[derive(Debug, Clone)]
@@ -164,6 +229,54 @@ mod tests {
         // Only one failure left after the success reset => no trip.
         assert!(h.record_failure(2500).is_none());
         assert!(!h.is_fallback());
+    }
+
+    #[test]
+    fn portal_status_changes_are_reported_once_and_final_states_end_it() {
+        use PortalStatus::*;
+        assert_eq!(portal_capture_change(None, Pending), None);
+        assert_eq!(
+            portal_capture_change(None, Streaming),
+            Some((CapturePath::Portal, CaptureCause::Start))
+        );
+        assert_eq!(
+            portal_capture_change(Some(Pending), Streaming),
+            Some((CapturePath::Portal, CaptureCause::Start))
+        );
+        assert_eq!(portal_capture_change(Some(Streaming), Streaming), None);
+        assert_eq!(
+            portal_capture_change(Some(Streaming), Closed),
+            Some((CapturePath::None, CaptureCause::PortalClosed))
+        );
+        assert_eq!(
+            portal_capture_change(None, Denied),
+            Some((CapturePath::None, CaptureCause::PortalDenied))
+        );
+        assert_eq!(
+            portal_capture_change(None, Unavailable),
+            Some((CapturePath::None, CaptureCause::WaylandUnsupported))
+        );
+        // A stream that ends before its first frame is still `portal_closed`.
+        assert_eq!(
+            portal_capture_change(Some(Pending), Closed),
+            Some((CapturePath::None, CaptureCause::PortalClosed))
+        );
+        for last in [Denied, Closed, Unavailable] {
+            assert!(last.is_final());
+            for now in PortalStatus::ALL {
+                assert_eq!(
+                    portal_capture_change(Some(last), now),
+                    None,
+                    "{last:?} {now:?}"
+                );
+            }
+        }
+        for s in PortalStatus::ALL {
+            assert_eq!(PortalStatus::from_u8(s as u8), s);
+        }
+        assert_eq!(PortalStatus::from_u8(99), Pending);
+        assert_eq!(CaptureCause::PortalDenied.as_str(), "portal_denied");
+        assert_eq!(CaptureCause::PortalClosed.as_str(), "portal_closed");
     }
 
     #[test]

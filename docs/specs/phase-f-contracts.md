@@ -786,6 +786,16 @@ The console needs no new code for the view-only case: `controlBlocker` already s
 | End to end | `pnpm e2e:p3:linux` gains a fourth case: the **X11 dev binary with `.ia-portal` beside it**, started under the stack above, hands over to the portal binary (asserted in its log and by the process image) and joins a `p3_portable` session; a fifth case runs the pair with `IA_TEST_NO_PIPEWIRE=1` (honoured only by dev builds: it makes the `dlopen` check fail) and expects the X11 binary to stay with the honest message; in the fourth case the console shows video of the known colour, Control greyed with E's text, chat and a file work |
 | Windows gates | unchanged and green (`--all-features` enables `portal`, which compiles nothing on Windows) |
 
+**Revision 3 corrections (wayland, binding):**
+- **Release link.** The §9.6 command does not link as written. The portal artefact is built with `SYSTEM_DEPS_LIBPIPEWIRE_SEARCH_NATIVE` pointing at a directory holding only libpipewire, and the final link as `cargo-zigbuild rustc … --bin IndiansAssist -- -C link-arg=-Wl,--allow-shlib-undefined`. The build host's libpipewire refers to newer GLIBC symbols; the Desk supplies its own at run time.
+  - Measured: NEEDED `libpipewire-0.3.so.0`, `libm.so.6`, `libc.so.6`, `ld-linux-x86-64.so.2`; highest `GLIBC_` **2.34** (the same floor as the installed agent, §8.9); 17.42 MiB. No fallback was needed.
+  - A Desk needs libpipewire-0.3 (any 0.3.x or later; tested 1.6.2) and xdg-desktop-portal ScreenCast v1 or later (cursor mode used when offered (v2), "never remember" sent (v4)). Tested with xdg-desktop-portal 1.21.1 and -wlr 0.8.1.
+- **Build order.** The X11 release build embeds the companion's sha256 (`IA_PORTAL_SHA256`), so the portal binary is built first.
+- **Buffer mapping.** xdg-desktop-portal-wlr marks its memfd buffers mappable but not readable, so the capturer maps them read-only itself instead of relying on PipeWire's `MAP_BUFFERS`.
+- **Harness socket.** sway cannot be given a socket name; `ia-wl-<rand>` is a symlink to its socket in the temp runtime dir, and the guard checks that name.
+- **Hand-over order.** The hand-over runs before the single-instance server starts. That server's `accept` thread can hold fd 4 and make the `dup2` fail.
+- **§9.4 console text.** The statement that the console needs no new code was wrong: "This Desk cannot take remote control" was never rendered. Fixed in the Phase F close-out: the console shows it for a Desk without `input`.
+
 **One-time WSL install for wayland** (the user runs it; no test does): `sudo apt install --no-install-recommends sway swaybg xdg-desktop-portal xdg-desktop-portal-wlr pipewire pipewire-bin wireplumber libpipewire-0.3-dev libspa-0.2-dev clang libclang-dev` (all available on 2 Nov 2026 in Ubuntu 26.04.1: sway 1.11, swaybg 1.2.1, xdg-desktop-portal 1.21.1, xdg-desktop-portal-wlr 0.8.1, pipewire 1.6.2, wireplumber 0.5.13, clang 21). `--no-install-recommends` keeps out `slurp` and friends. Side effects the user should know: the pipewire and wireplumber packages add per-user socket-activated units and xdg-desktop-portal becomes D-Bus-activatable on the user's own session bus in the main distro; the harness never uses either (it runs its own on a temp runtime directory and private bus), and they start only when something on the user's session asks for them.
 
 ---

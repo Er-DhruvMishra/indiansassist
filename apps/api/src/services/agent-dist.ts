@@ -4,7 +4,8 @@
  * `503 download_unavailable` on prepare. Outside production a placeholder file (`AGENT_DEV_STUB`, created on demand)
  * stands in for every Windows build so the join page and `smoke:p3` work on a dev machine; it is never signed and
  * never served in production. A Linux build (Phase E section 7.6) is the raw ELF; its archive body (the second gzip
- * member of `services/linux-archive.ts`) is compressed here, once per load, and cached on the served build.
+ * member of `services/linux-archive.ts`) is compressed here, once per load, and cached on the served build. Phase F
+ * section 9.5: the Wayland portal companion (`IndiansAssist-linux-portal-x64-<v>`) beside it adds members 3 and 4.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -12,6 +13,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   agentDistFileName,
   agentDistManifestSchema,
+  agentPortalDistFileName,
   type AgentArch,
   type AgentBuild,
   type AgentPlatform,
@@ -73,7 +75,20 @@ export class AgentDist {
           // apple-owned: end
           if (build.platform === 'linux') {
             const elf = readFileSync(path);
-            out.push({ ...build, size: elf.length, path, file, archive: linuxArchiveBody(elf) });
+            // Phase F section 9.5: the portal companion beside it (`agentPortalDistFileName`), when present, rides in
+            // the same archive as `.ia-portal`; its sha256 and size are read from the file. A manifest row whose
+            // companion does not match the file serves the archive without it.
+            const portal = this.loadCompanion(distDir, build.version, build.companion);
+            const { companion: _c, ...rest } = build;
+            void _c;
+            out.push({
+              ...rest,
+              ...(portal ? { companion: portal.info } : {}),
+              size: elf.length,
+              path,
+              file,
+              archive: linuxArchiveBody(elf, portal?.bytes),
+            });
           } else out.push({ ...build, size: statSync(path).size, path, file });
         }
         this.builds = out;
@@ -107,6 +122,26 @@ export class AgentDist {
       path: devStub,
       file,
     }));
+  }
+
+  /** Phase F section 9.5: the portal companion of a Linux build, if its file exists (and matches the row, when given). */
+  private loadCompanion(
+    distDir: string,
+    version: string,
+    row: { sha256: string; size: number } | undefined,
+  ): { bytes: Buffer; info: { sha256: string; size: number } } | null {
+    const path = resolve(distDir, agentPortalDistFileName(version));
+    if (!existsSync(path)) {
+      if (row) this.lastError = `${agentPortalDistFileName(version)} is missing; the Linux download is served without it`;
+      return null;
+    }
+    const bytes = readFileSync(path);
+    const info = { sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+    if (row && (row.sha256 !== info.sha256 || row.size !== info.size)) {
+      this.lastError = `${agentPortalDistFileName(version)} does not match manifest.json; the Linux download is served without it`;
+      return null;
+    }
+    return { bytes, info };
   }
 
   /** The wire manifest (`GET /download/manifest`). */
