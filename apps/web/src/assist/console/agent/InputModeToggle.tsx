@@ -3,8 +3,12 @@
  * before any compare (section 3.4, `levelAllows`). Control is greyed until the user granted `control` (with
  * **Ask the user** -> `level.request`) and the security code of the current generation is confirmed; **Elevated**
  * opens the elevation dialog. The chip reads the level back from `consent.changed` / `agent_level`.
+ *
+ * Phase F section 9.4 (close-out): a Desk without `input` (`deskUnavailable`, "This Desk cannot take remote
+ * control") greys Control and Elevated and says why in visible text that is also the Control button's accessible
+ * description, in the desktop and the mobile layouts alike.
  */
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { PackageTier } from '@indiansassist/shared';
 import { Dialog } from '../../../components/Dialog';
 import { Badge, Button, Field, Input } from '../../../components/ui';
@@ -22,6 +26,7 @@ export function InputModeToggle({
   onAskControl,
   onElevate,
   onConfirmSas,
+  deskUnavailable = null,
 }: {
   tier: PackageTier;
   level: string | null;
@@ -34,18 +39,28 @@ export function InputModeToggle({
   onAskControl: (reason: string) => void;
   onElevate: () => void;
   onConfirmSas: () => void;
+  /** Why this Desk can never be controlled (`deskControlBlocker`), or null. */
+  deskUnavailable?: string | null;
 }) {
   const [askOpen, setAskOpen] = useState(false);
   const [reason, setReason] = useState('');
+  const unavailableId = useId();
   const levelOk = levelAllows(tier, level, 'control');
-  const controlReady = secured && levelOk && sasConfirmed;
+  const controlReady = secured && levelOk && sasConfirmed && !deskUnavailable;
   const elevated = levelAllows(tier, level, 'elevated');
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Input mode">
       <Button size="sm" variant={mode === 'view' ? 'primary' : 'secondary'} aria-pressed={mode === 'view'} onClick={() => onMode('view')}>
         View
       </Button>
-      <Button size="sm" variant={mode === 'control' ? 'primary' : 'secondary'} aria-pressed={mode === 'control'} disabled={!controlReady} onClick={() => onMode('control')}>
+      <Button
+        size="sm"
+        variant={mode === 'control' ? 'primary' : 'secondary'}
+        aria-pressed={mode === 'control'}
+        aria-describedby={deskUnavailable ? unavailableId : undefined}
+        disabled={!controlReady}
+        onClick={() => onMode('control')}
+      >
         Control
       </Button>
       <Button size="sm" variant="secondary" disabled={!controlReady || !canElevate || elevated} onClick={onElevate}>
@@ -63,6 +78,11 @@ export function InputModeToggle({
         </Button>
       )}
       {!secured && <span className="text-xs text-slate-600 dark:text-slate-400">Securing the connection</span>}
+      {deskUnavailable && (
+        <span id={unavailableId} className="text-sm text-slate-700 dark:text-slate-300" data-testid="control-unavailable">
+          {deskUnavailable}
+        </span>
+      )}
       <Dialog open={askOpen} title="Ask to control the mouse and keyboard" onClose={() => setAskOpen(false)}>
         <form
           className="flex flex-col gap-3"

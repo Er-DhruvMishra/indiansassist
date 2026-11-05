@@ -105,6 +105,11 @@ async function joinAndSecure(assist: Page, mode: LinuxMode, code: string): Promi
 }
 
 async function confirmSasAndTakeControl(assist: Page): Promise<void> {
+  await confirmSas(assist);
+  await assist.getByRole('button', { name: 'Control', exact: true }).click();
+}
+
+async function confirmSas(assist: Page): Promise<void> {
   await assist.getByRole('button', { name: 'Confirm security code' }).click();
   const confirm = assist.getByRole('dialog', { name: /confirm the security code/i });
   await expect(confirm).toBeVisible();
@@ -112,7 +117,7 @@ async function confirmSasAndTakeControl(assist: Page): Promise<void> {
   const digits = (header.match(/(\d{3})\s?(\d{3})/) ?? []).slice(1).join('');
   await confirm.getByLabel(/security code the user reads out/i).fill(digits);
   await confirm.getByRole('button', { name: 'Confirm code' }).click();
-  await assist.getByRole('button', { name: 'Control', exact: true }).click();
+  await expect(confirm).toBeHidden();
 }
 
 async function sendFile(assist: Page, agent: LinuxAgent, name: string): Promise<void> {
@@ -338,12 +343,18 @@ test('Linux agent (Wayland with the portal companion): hand-over, view-only vide
         .toBeLessThan(28);
       await shot(assist, 'linux-portal-video');
     });
-    await test.step('Control stays off: the portal build advertises no input (E controlBlocker)', async () => {
-      // `controlBlocker` ("This Desk cannot take remote control") refuses the switch: after the security code is
-      // confirmed, asking for Control leaves the console in View.
-      await confirmSasAndTakeControl(assist);
-      await expect(assist.getByRole('button', { name: 'Control', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await test.step('Control stays off and the console says why: the portal build advertises no input', async () => {
+      // Section 9.4 (close-out): "This Desk cannot take remote control" is visible and is the greyed Control
+      // button's accessible description; even with the security code confirmed the console stays in View.
+      await confirmSas(assist);
+      const control = assist.getByRole('button', { name: 'Control', exact: true });
+      await expect(assist.getByTestId('control-unavailable')).toHaveText('This Desk cannot take remote control');
+      await expect(assist.getByTestId('control-unavailable')).toBeVisible();
+      await expect(control).toBeDisabled();
+      await expect(control).toHaveAccessibleDescription('This Desk cannot take remote control');
+      await expect(control).toHaveAttribute('aria-pressed', 'false');
       await expect(assist.getByRole('button', { name: 'View', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await shot(assist, 'linux-portal-control-unavailable');
       await expect(assist.getByTestId('no-screen-state')).toHaveCount(0);
       expect(a.lines.some((l) => /op=os\.pointer/.test(l))).toBe(false);
     });

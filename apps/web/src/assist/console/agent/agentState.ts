@@ -138,11 +138,23 @@ export function hasFeature(s: Pick<AgentSnapshot, 'capabilities'>, f: AgentCapab
   return s.capabilities?.features.includes(f) ?? false;
 }
 
+/** The Desk advertises no `input` (a Wayland portal Desk, a Linux Desk without a screen, any view-only Desk). */
+export const NO_INPUT_TEXT = 'This Desk cannot take remote control';
+
+/**
+ * Phase F section 9.4 (close-out): the reason Control can never work on this Desk, shown beside the Control button
+ * as its accessible description; null while the capabilities are unknown or include `input`.
+ */
+export function deskControlBlocker(s: Pick<AgentSnapshot, 'capabilities'>): string | null {
+  return s.capabilities && !hasFeature(s, 'input') ? NO_INPUT_TEXT : null;
+}
+
 /** Why Control is greyed, or null when the technician may switch to Control (section 13.4 InputModeToggle). */
 export function controlBlocker(s: AgentSnapshot): string | null {
   const tier = s.created?.tier ?? 'p3_portable';
   if (s.sec.state !== 'established') return 'Securing the connection';
-  if (s.capabilities && !hasFeature(s, 'input')) return 'This Desk cannot take remote control';
+  const desk = deskControlBlocker(s);
+  if (desk) return desk;
   if (!levelAllows(tier, s.consent.level, 'control')) return 'The user allows viewing only';
   if (!sasOk(s)) return 'Confirm the security code first';
   return null;

@@ -11,6 +11,10 @@
  *   IndiansAssist-windows-x64-<version>.exe
  *   IndiansAssist-windows-arm64-<version>.exe
  *   IndiansAssist-android-universal-<version>.apk
+ *   IndiansAssist-macos-<arm64|x64>-<version>.app.zip   (Phase F §17.8, agent/scripts/macos-zip.sh)
+ *
+ * The Linux row is written by `pnpm agent:release:linux` (packaging/linux/agent-release.mjs), because it carries the
+ * portal companion's hash; this script keeps every existing `platform: 'linux'` row as it is.
  *
  * `signed` is left false here: per §2.6 the signed exe's sha256 is computed by CI *after* Authenticode, so CI
  * runs this step on the already-signed artifacts and marks them signed via `manifest.signed.json` (a JSON array
@@ -38,10 +42,12 @@ const distDir = resolve(root, opt('--dist', process.env.AGENT_DIST_DIR || 'data/
 const check = flag('--check');
 const signedAll = flag('--signed-all');
 
-const NAME_RE = /^IndiansAssist-(windows|android)-(x64|arm64|universal)-(.+?)\.(exe|apk)$/;
+const NAME_RE = /^IndiansAssist-(windows|android|macos)-(x64|arm64|universal)-(.+?)\.(exe|apk|app\.zip)$/;
+const EXT = { windows: 'exe', android: 'apk', macos: 'app.zip' };
 const MIN_OS = {
   windows: process.env.IA_MIN_OS_WINDOWS || '10.0.17763',
   android: process.env.IA_MIN_OS_ANDROID || '29',
+  macos: process.env.IA_MIN_OS_MACOS || '12.3',
 };
 
 if (!existsSync(distDir)) {
@@ -69,8 +75,8 @@ for (const name of readdirSync(distDir).sort()) {
   const m = NAME_RE.exec(name);
   if (!m) continue;
   const [, platform, arch, version, ext] = m;
-  if (platform === 'windows' && ext !== 'exe') continue;
-  if (platform === 'android' && ext !== 'apk') continue;
+  if (EXT[platform] !== ext) continue;
+  if (platform === 'android' ? arch !== 'universal' : arch === 'universal') continue;
   const file = join(distDir, name);
   if (!statSync(file).isFile()) continue;
   builds.push({
@@ -84,8 +90,17 @@ for (const name of readdirSync(distDir).sort()) {
   });
 }
 
-const manifest = { v: 1, builds };
 const out = join(distDir, 'manifest.json');
+// Keep the Linux rows of `pnpm agent:release:linux` (the X11 agent and its portal companion's hash).
+if (existsSync(out)) {
+  try {
+    const prior = JSON.parse(readFileSync(out, 'utf8'));
+    if (Array.isArray(prior?.builds)) builds.push(...prior.builds.filter((b) => b?.platform === 'linux'));
+  } catch {
+    console.error(`agent-manifest: ${out} is not JSON; its Linux rows (if any) are not kept.`);
+  }
+}
+const manifest = { v: 1, builds };
 const text = `${JSON.stringify(manifest, null, 2)}\n`;
 
 if (check) {

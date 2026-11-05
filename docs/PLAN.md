@@ -245,35 +245,62 @@ broadcast extension (view only; Apple allows no remote input on iOS).
 Still outside this machine: a run against a real Linux window manager and session bus; the
 manual checks on a disposable machine; the full-size 2,000-device load run.
 
-### 8.1 Status (3 Nov 2026): wave 1 and the apple stream integrated
+### 8.1 Status (5 Nov 2026): Phase F built
 
-Done: F0; fixes, mail, erasure, camera and mobile; the apple stream's macOS P3 agent, macOS
-packaging, iOS app and broadcast extension, verified on a Mac with real ScreenCaptureKit capture
-and control (25 fps, 21 ms glass to glass on loopback), with a permissions window that runs
-before the agent connects; the coordinator's integration (contract revision 3).
-Every gate is green on this machine: build, typecheck, lint, unit tests, `test:scripts`,
-`license:check`, both fixture checks, `validate:infra`, `recorder:test`, Rust fmt, clippy and
-tests (646 passed), every smoke (`smoke:e` 47, `smoke:f` 27 in all four flows), `e2e:e`, the F
-specs (`pnpm e2e:f` now runs each against its own api settings), `e2e:mobile` and `e2e:p3`.
+Everything planned for Phase F is built and on `master`:
 
-Four defects found by the streams are fixed: an installed worker could delete itself; a missing
-or unknown playbook interpreter ran as PowerShell (now refused `not_allowed`); the Android agent
-lacked `os.sas`; the hourly audit checkpoints stopped at an erased org.
+- **Wave 1:** the Phase E fixes, email invites and password reset, org erasure, the phone camera
+  and the touch-first mobile console.
+- **apple (the Mac session):**
+  - the macOS P3 agent, with download, Keep and self-delete;
+  - **macOS unattended (P4):** a root daemon and a per-user LaunchAgent worker over a checked
+    local socket; keys in the System keychain; a `.pkg`;
+  - the iOS app with a broadcast extension and file receive.
 
-Open after wave 1:
+  Verified on a real Mac: capture and control at 25–30 fps, about 21 ms glass to glass.
+- **Wave 2, linux-p4:**
+  - the systemd service and the user-session worker;
+  - `.deb` and `.rpm` at glibc 2.34, so EL 9 and Ubuntu 22.04 or later;
+  - the Ansible role and the bubblewrap sandbox install test;
+  - one installer route for msi, deb, rpm and pkg; Linux and macOS tabs in the enroll dialog;
+  - `e2e:p4:linux`.
+- **Fix round:**
+  - a playbook created or changed while a device is connected reaches it at once (`device.playbooks`);
+  - a session UI that cannot run ends the session cleanly instead of crashing;
+  - the lock text shows in the live console.
+- **Wave 3, wayland:** a second Linux binary shipped in the same download, which shares a
+  Wayland screen view only through xdg-desktop-portal and PipeWire; the X11 agent hands over to
+  it on Wayland.
 
-- The Jira, ServiceNow, Freshdesk and Zoho request shapes were checked against vendor
-  documentation only; all four stay `verified: false` until a run against a vendor sandbox.
-- A phone camera that reconnects through a different api node cannot resume (§15.10).
-- The Android emulator specs are unstable on this machine (a software-rendered emulator with
-  about 4 GB free): `mobile-emulator.spec.ts` passed on 3 Nov, `camera-emulator.spec.ts` did not
-  (the launcher stopped responding, then Android closed Chrome). The harness now bounds the Chrome
-  launch and serves a production build. Touch and the camera on a real Android phone are
-  unverified.
-- A Desk that dies and reconnects at once with the same token gets `token_busy` for about 10 s,
-  and the Assist keeps the old knock (wave 2, api).
-- The agent prints a Tokio shutdown panic after a session ends (pre-existing; wave 2).
-- Manual: iPhone and iPad Safari, a real iPhone broadcast, Keep on a real desktop.
-- apple: iOS file receive; macOS unattended waits on linux-p4's `ia-session0` unix half.
+Defects found and fixed across all platforms on the way:
+- Real installed-service enrollment never worked (the token id was read from the wrong segment).
+- `zsh` device actions were always refused.
+- Every P4 worker knocked after hello, which ended its session.
+- Linux and macOS workers advertised the Windows capabilities.
+- A console that attached late, or reconnected, showed "View only" after an auto_grant (the
+  server now replays the current consent).
+- A dead Desk blocked its token for about 10 s.
+- The agent printed a Tokio panic after every session.
 
-Next: linux-p4 (wave 2), then wayland (wave 3), then macOS unattended on the linux-p4 base.
+Last full gate run (5 Nov 2026, wave 3 merged):
+- build, typecheck, lint, all unit tests, `test:scripts`, `license:check`, both fixture checks,
+  `validate:infra`, `packaging:test`;
+- Rust fmt, clippy and tests (703 passed);
+- `e2e:p3` 2/2, `e2e:p3:linux` 5/5, `e2e:p4:linux` 2/2.
+
+Open after Phase F:
+- **Signing (needs the owner):** an Apple Developer ID Application and Installer certificate
+  with notarization, and a Windows code-signing certificate. Until then artefacts are marked
+  not signed; the Linux packages are unsigned by design, with published sha256.
+- **Manual checks on real machines:**
+  - iPhone and iPad Safari, and a real iPhone broadcast (waits on the owner's Xcode update);
+  - Keep on a real desktop;
+  - an installed Linux machine with Xorg (reboot, lock, removal), and EL 9 or Fedora;
+  - GNOME and KDE for the Wayland portal build;
+  - touch and the camera on a real Android phone (the emulator specs are unstable on this
+    machine).
+- **Ticketing:** the Jira, ServiceNow, Freshdesk and Zoho request shapes are checked against
+  vendor documentation only; all stay `verified: false` until a run against a vendor sandbox.
+- **Phone camera:** a phone that reconnects through a different api node cannot resume (§15.10).
+- **Not run here:** the opt-in T2 throwaway-distro install (`IA_THROWAWAY_WSL=1 pnpm
+  linux:throwaway`) and the full-size 2,000-device load run.

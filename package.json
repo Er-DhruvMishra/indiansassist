@@ -38,6 +38,7 @@
     "packaging:msi": "node packaging/windows/build.mjs",
     "packaging:msi:placeholder": "node packaging/windows/build.mjs --placeholder",
     "linux:pkg": "node packaging/linux/build.mjs",
+    "agent:release:linux": "node packaging/linux/agent-release.mjs",
     "linux:throwaway": "powershell -NoProfile -ExecutionPolicy Bypass -File agent/scripts/throwaway-wsl.ps1",
     "packaging:test": "node --test packaging/windows/tools/enroll-config.test.mjs && cargo test --manifest-path packaging/windows/ca/Cargo.toml --locked",
     "test:scripts": "vitest run --config scripts/vitest.config.mjs",

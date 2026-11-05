@@ -139,6 +139,22 @@ signing (Azure Trusted Signing / EV HSM), and the `WinVerifyTrust` self-check. `
 is applied only in the release profile (§11.3). `docs/release.md` is the home for these
 CI-only steps. (The `aarch64` prebuilt libvpx is a CI prerequisite; this host builds `x64`.)
 
+### Release commands, every platform (`docs/release.md` has the numbered steps)
+
+Set `IA_TOKEN_PUBKEYS` and `IA_API_ORIGIN` first; every release build compiles them in.
+
+| Artifact | Command (from the repo root) | Goes to |
+|---|---|---|
+| Windows portable agent | `cargo build --release --locked --target <x86_64\|aarch64>-pc-windows-msvc -p ia-agent`, Authenticode, `pnpm agent:manifest` | `AGENT_DIST_DIR` |
+| Windows MSI | the three `-msvc` release exes, Authenticode, `node packaging/windows/build.mjs --arch <x64\|arm64>`, sign the MSI | `AGENT_MSI_DIST_DIR` |
+| Linux deb and rpm | `pnpm linux:pkg` (WSL; `--sandbox` adds the T1 install) | `packaging/linux/out/dist/*` to `AGENT_MSI_DIST_DIR/linux/` |
+| Linux portable pair | `pnpm agent:release:linux --dist <AGENT_DIST_DIR>` (WSL; the portal companion first, then X11) | `AGENT_DIST_DIR` |
+| macOS app | `agent/scripts/macos-bundle.sh`, `agent/scripts/macos-zip.sh`, `pnpm agent:manifest` (on a Mac) | `AGENT_DIST_DIR` |
+| macOS PKG | `agent/scripts/macos-pkg.sh` (on a Mac) | `agent/target/macos-pkg/*` to `AGENT_MSI_DIST_DIR/macos/` |
+
+Linux artifacts are unsigned (their sha256 is published); macOS artifacts are signed ad hoc until a Developer ID and
+notarization exist (`docs/release.md` section 1.9).
+
 ## Running
 
 Build a console (dev) exe you can drive from a terminal (also `pnpm agent:build:dev` from the repo root):
@@ -268,19 +284,17 @@ server on exit. Each X11 test calls `ia_platform::linux::testguard::x11_test_dis
 unless the display is the harness's Xvfb: never the session's display, never `:0`, which WSLg uses for the real
 desktop.
 
-**Release build (glibc 2.35 floor, §7.9).** This needs Zig 0.15.2 unpacked under `~/.local/zig` and
-`cargo install cargo-zigbuild --locked` (0.24.0), both user-level:
+**Release build (glibc 2.34 floor since Phase F §8.9 and §9.6).** This needs Zig 0.15.2 unpacked under `~/.local/zig`
+and `cargo install cargo-zigbuild --locked` (0.24.0), both user-level; the portal companion also needs clang, libclang,
+`libpipewire-0.3-dev` and `libspa-0.2-dev`. Do not run the commands by hand: from Windows, **`pnpm
+agent:release:linux --dist <AGENT_DIST_DIR>`** (`packaging/linux/agent-release.mjs`) builds the Wayland portal
+companion first, then the X11 agent with the companion's sha256 embedded (`IA_PORTAL_SHA256`), elf-checks both at
+2.34 and writes the dist files and the manifest row with `companion`. `docs/release.md` section 1.8 has the steps.
 
-```sh
-LIBVPX_TARGET=ubuntu-22.04_x86_64 cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.35 \
-  -p ia-agent --no-default-features --features "$FEATS_RELEASE"
-node ../scripts/elf-check.mjs "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/IndiansAssist" --max-glibc 2.35 --max-size-mib 25
-```
+Measured on 5 Nov 2026 (`pnpm agent:release:linux`, version 0.3.0):
 
-Measured on 2 Nov 2026:
-
-- the ELF needs only `libc.so.6`, `libm.so.6` and `ld-linux-x86-64.so.2`, and nothing above `GLIBC_2.35`;
-- it is 16.8 MiB stripped.
+- the X11 agent needs only `libc.so.6`, `libm.so.6` and `ld-linux-x86-64.so.2`, nothing above `GLIBC_2.34`; 16.89 MiB;
+- the portal companion needs those and `libpipewire-0.3.so.0`, nothing above `GLIBC_2.34`; 17.42 MiB.
 
 A plain `cargo build --release` on this host links against glibc 2.43 and must not be served.
 
@@ -290,18 +304,29 @@ against the dev agent in WSL through `agent/scripts/e2e-agent.sh`:
 - the api listens on `0.0.0.0:4115` with `API_ORIGIN=http://<WSL gateway>:4115`, and the web app on `5285`;
 - every agent runs with `--no-self-delete`, under a temporary XDG root, with `WAYLAND_DISPLAY` unset.
 
-It covers three sessions:
+It covers five sessions:
 
 - **synthetic capture** (the §7.10 command);
 - **X11**: a harness-owned Xvfb with two RandR monitors, real MIT-SHM capture, and XTEST clicks read back with xdotool on that display;
-- **Wayland**: the no-screen state, with chat and files still working.
+- **Wayland**: the no-screen state, with chat and files still working;
+- **Wayland with the portal companion** (F §9.6, under the `scripts/portal-test.sh` stack): the hand-over to
+  `.ia-portal`, video of the known colour, Control greyed with "This Desk cannot take remote control", chat and a file;
+- **Wayland without PipeWire** (`IA_TEST_NO_PIPEWIRE=1`, dev builds only): no hand-over, the honest message.
+
+### Built in Phase F
+
+- the Wayland **portal** companion (`--features portal`, `ia-capture-portal`; F §9): view, chat, files, playbooks and
+  the recorder on Wayland, shipped beside the X11 agent in the one Linux download; tests through
+  `scripts/portal-test.sh`;
+- **unattended** mode for X11 (`ia-service --features linux-service`, `ia-desktop`; F §8) with the deb and rpm
+  packages (`pnpm linux:pkg`, `docs/release.md` section 1.7).
 
 ### Not built on Linux
 
-- the `portal` Wayland capture (W77; `ashpd` is not added);
-- unattended mode, deb / rpm packaging, arm64 and elevation (W81, W82, 7.3d);
+- arm64 and elevation (W81, W82, 7.3d);
 - voice;
-- the Keep (D5) control in the panel. `selfdel::plan(.., kept = true)` and its applier exist, but no UI sets Keep, as on Windows.
+- input and clipboard on Wayland (the portal shares the screen only; the console says "This Desk cannot take remote
+  control").
 
 On Linux the self-delete has been exercised only on files in a temporary directory, never on the built binary.
 

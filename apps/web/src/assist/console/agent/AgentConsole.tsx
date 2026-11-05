@@ -30,7 +30,7 @@ import { InputModeToggle } from './InputModeToggle';
 import { MonitorPicker } from './MonitorPicker';
 import { PlaybookPanel } from './PlaybookPanel';
 import { SasConfirmDialog, SAS_STOP_TEXT } from './SasConfirmDialog';
-import { controlBlocker, hasFeature, levelAllows, levelChip, sasOk } from './agentState';
+import { controlBlocker, deskControlBlocker, hasFeature, levelAllows, levelChip, sasOk } from './agentState';
 import { NoScreenSlot, useEnterpriseLiveHooks } from '../EnterpriseSlots';
 import { CameraSlot, DeskKeepSlot } from '../PhaseFSlots';
 import { PolicyState, ScreenLockedNotice, UnattendedBanner, type UnattendedSessionInfo } from './UnattendedBanner';
@@ -211,6 +211,7 @@ export function AgentConsoleView({
       onAskControl={(r) => void ctrl.requestControl(r)}
       onElevate={() => setElevOpen(true)}
       onConfirmSas={() => ctrl.openSasPrompt(true)}
+      deskUnavailable={deskControlBlocker(snap)}
     />
   );
   const monitorPicker = <MonitorPicker monitors={snap.monitors} selected={snap.selected} viewed={snap.viewed} floorMode={snap.agentStats?.floorMode ?? false} disabled={!secured} onView={(v) => void ctrl.view(v)} />;
@@ -251,7 +252,7 @@ export function AgentConsoleView({
   );
   const keysBar = (
     <>
-      {!controlling && <p className="text-sm text-slate-700 dark:text-slate-300">Take control to type on the remote computer.</p>}
+      {!controlling && <p className="text-sm text-slate-700 dark:text-slate-300">{deskControlBlocker(snap) ?? 'Take control to type on the remote computer.'}</p>}
       <KeysBar actions={keyActions} disabled={!controlling} focusSignal={keysFocus} />
     </>
   );

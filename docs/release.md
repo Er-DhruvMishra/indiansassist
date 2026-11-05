@@ -1,9 +1,25 @@
 # Signed-release process
 
 How the shippable artifacts of IndiansAssist are built, signed and published: the **Windows portable agent** (`agent/`,
-Phase C), the **installed agent MSI** (`packaging/windows/`, Phase D, section 1.6) and the **self-hosted server images** (`apps/api`, `apps/web`, `services/recorder`). This document describes the
-CI steps; it does not implement them. It is the companion to the Phase C contract
-(`docs/specs/phase-c-contracts.md`, sections 2.2, 2.6, 7, 11.3, 15.5) and to `infra/HARDENING.md`.
+Phase C), the **installed agent MSI** (`packaging/windows/`, Phase D, section 1.6), the **Linux installed agent** (deb
+and rpm, section 1.7), the **Linux portable pair** (the X11 agent and its Wayland portal companion, section 1.8), the
+**macOS** app and PKG (section 1.9) and the **self-hosted server images** (`apps/api`, `apps/web`, `services/recorder`).
+It is the companion to the Phase C contract (`docs/specs/phase-c-contracts.md`, sections 2.2, 2.6, 7, 11.3, 15.5), the
+Phase F contract (`docs/specs/phase-f-contracts.md`, sections 8.9, 8.12, 9.6, 17.1) and `infra/HARDENING.md`.
+
+Where each artifact goes on every api node of the region (both directories are read at boot and on `SIGHUP`):
+
+| Directory | Holds |
+|---|---|
+| `AGENT_DIST_DIR` | the portable agents and `manifest.json`: Windows `.exe`, Android `.apk`, the Linux pair, the macOS `.app.zip` |
+| `AGENT_MSI_DIST_DIR` | the Windows MSI and its `manifest.json` at the top |
+| `AGENT_MSI_DIST_DIR/linux/` | the deb, the rpm, their `.sha256` files and `manifest.json` (section 1.7) |
+| `AGENT_MSI_DIST_DIR/macos/` | the PKG and its `manifest.json` (section 1.9) |
+
+Every release build compiles in the region's keys: set `IA_TOKEN_PUBKEYS` (comma-separated base64url Ed25519 public
+keys, the ones `/.well-known/indiansassist.json` lists) and `IA_API_ORIGIN` (the release default origin) before building.
+A WSL build started from Windows sees them only through `WSLENV`; `pnpm agent:release:linux` sets that itself, and for
+`pnpm linux:pkg` run `$env:WSLENV = 'IA_TOKEN_PUBKEYS/u:IA_API_ORIGIN/u'` first.
 
 Two rules sit over everything below:
 
@@ -15,9 +31,9 @@ Two rules sit over everything below:
 
 ---
 
-## 1. Windows portable agent
+## 1. The agents (Windows in 1.1 to 1.6, Linux in 1.7 and 1.8, macOS in 1.9)
 
-### 1.1 Build targets
+### 1.1 Build targets (Windows portable agent)
 
 | Toolchain         | Target                    | Role                                                                                                                                                                                  |
 | ----------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -66,6 +82,11 @@ The signing identity's subject (the certificate's CN) is **compiled into the age
 compiles their own `IA_EXPECTED_SIGNER` and signs with their own certificate, so the configured signer is always the expected
 one for that build.
 
+**As built (checked in the Phase F close-out):** `IA_EXPECTED_SIGNER` is shown on the elevation prompt card as the
+publisher to look for in the Windows dialog. The subject *compare* below is not implemented yet: the self-check verdict is
+the `WinVerifyTrust` chain only (`ia-platform/src/trust.rs`, `agent/README.md`). The rest of this section describes the
+target.
+
 The agent verifies its own signature at startup with `WinVerifyTrust` (`WINTRUST_ACTION_GENERIC_VERIFY_V2`) plus a subject
 compare against `IA_EXPECTED_SIGNER`:
 
@@ -88,8 +109,9 @@ After signing:
 
 1. Lay the signed files out under `AGENT_DIST_DIR` with their canonical names:
    `IndiansAssist-windows-x64-<version>.exe`, `IndiansAssist-windows-arm64-<version>.exe`,
-   and (from the Android pipeline, section 2) `IndiansAssist-android-universal-<version>.apk`.
-2. Run **`node scripts/agent-manifest.mjs`** to write `AGENT_DIST_DIR/manifest.json`
+   (from the Android pipeline, section 2) `IndiansAssist-android-universal-<version>.apk`, and (section 1.9)
+   `IndiansAssist-macos-arm64-<version>.app.zip`. The Linux pair is written by its own script (section 1.8).
+2. Run **`node scripts/agent-manifest.mjs`** (`pnpm agent:manifest`; it keeps the Linux row of section 1.8) to write `AGENT_DIST_DIR/manifest.json`
    (`{ v: 1, builds: AgentBuild[] }`, each build `{ platform, arch, version, size, sha256, signed, minOs }`). Because the
    `sha256` must cover the **signed** bytes, this step runs here, after signing. CI marks the signed builds by listing their
    file names in `AGENT_DIST_DIR/manifest.signed.json` (or by passing `--signed-all`); a dev dist dir leaves `signed: false`.
@@ -136,8 +158,11 @@ CI order (the install manifest and the MSI must cover **signed** bytes):
    - runs `wix build` and then **`wix msi validate`** (the full ICE suite; any ICE error fails the build);
    - records `build-info.json`.
 4. Authenticode-sign the MSI (`signtool sign /fd SHA256 /tr <rfc3161> /td SHA256 ...`, or `AzureSignTool`), then
-   `signtool verify /pa` it. Publish the MSI and its sha256 to `AGENT_MSI_DIST_DIR` on the region's api nodes. From there
-   the tokens page serves the branded download (section 13.4).
+   `signtool verify /pa` it. Publish the MSI to `AGENT_MSI_DIST_DIR` on the region's api nodes with a `manifest.json`
+   beside it: `{ "v": 1, "builds": [{ "arch": "x64", "version": "<v>", "size": <bytes>, "sha256": "<hex>", "signed": true,
+   "minOs": "10.0.17763" }] }` (one row per arch; `platform` and `format` default to `windows` and `msi`). Take the size
+   and sha256 of the **signed** MSI: the sha256 in `packaging/windows/out/<arch>/build-info.json` is from before signing.
+   From there the tokens page serves the branded download (section 13.4).
 5. The org transform is created per enrollment config: by the api for the tokens page, or by an admin with
    `packaging/windows/tools/New-EnrollTransform.ps1`. It is not signed. It only sets Property rows (`IA_ENROLL`,
    branding) and the ARP icon, and the enroll config it carries is itself region-signed (section 12.3).
@@ -158,6 +183,110 @@ CI order (the install manifest and the MSI must cover **signed** bytes):
 
 Until the `ia-service` crate exists, `pnpm packaging:msi:placeholder` stands the Phase C agent in for the three exes. It
 validates the authoring only. The result is named `...-placeholder.msi` and refuses to install (launch condition).
+
+### 1.7 Linux installed agent: deb and rpm (Phase F sections 8.9 and 8.12)
+
+One-time setup in the WSL build distro (user-level, the operator runs these once; no script installs anything): Zig
+0.15.2 under `~/.local/zig`, `cargo install cargo-zigbuild --locked` (0.24.0), `cargo install cargo-deb --version 3.8.0
+--locked`, `cargo install cargo-generate-rpm --version 0.21.1 --locked`; for the package checks
+`sudo apt install --no-install-recommends rpm ansible-core ansible-lint`.
+
+1. On Windows, with the region keys set (see the top of this document), run **`pnpm linux:pkg`**. It builds `ia-service`
+   and `ia-desktop` at the **glibc 2.34** floor, gates both with `scripts/elf-check.mjs` (NEEDED within libc, libm and
+   ld-linux; `GLIBC_` at most 2.34; at most 25 MiB), builds the packages and runs the read-only package checks. Add
+   `--sandbox` to also install and purge the deb in the offline Ubuntu Base 22.04 sandbox (T1).
+2. The result is in `packaging/linux/out/dist/`: `IndiansAssist-Agent-<v>-linux-x64.deb` and `.rpm`, a `.sha256` file for
+   each, and `manifest.json` (one row per package, `platform: 'linux'`, `signed: false`). `out/build-info.json` records
+   the elf-check results.
+3. The packages are **not signed** (W111). Their sha256 is the check: it is in `manifest.json`, shown by the console's
+   enroll dialog, and published in the `.sha256` files (`sha256sum -c`).
+4. Copy everything in `packaging/linux/out/dist/` to `AGENT_MSI_DIST_DIR/linux/` on every api node of the region, then
+   reload the api (`SIGHUP` or restart). The console's **Linux** tab then offers both packages.
+5. Supported: x86-64 with glibc 2.34 or later, so **Ubuntu 22.04 or later, Debian 12, EL 9 (RHEL, Rocky, Alma) and
+   Fedora**. The deb depends on `libc6 (>= 2.34)`, the rpm on `glibc >= 2.34`; systemd is recommended, not required.
+   The unit runs unconfined: there is no SELinux or AppArmor policy module (section 8.13).
+6. Manual checks before a release, on disposable real machines (never a developer machine), section 8.12 "Manual":
+   - install on Ubuntu 22.04 or 24.04 with an Xorg session, and on EL 9 or Fedora with an Xorg session;
+   - enroll with an enroll config from the console (`sudo install -D -m 0600 enroll.iaconfig
+     /etc/indiansassist/enroll.iaconfig`, then install the package);
+   - an unattended session with input on a real X server and window manager;
+   - a locked session (the console shows "The Desk's screen is locked");
+   - a Wayland session (no screen: chat, files and device actions only);
+   - a reboot (the device comes back online);
+   - the Ansible role (`packaging/linux/ansible/roles/indiansassist_agent/`) against the machine, twice (the second run
+     changes nothing);
+   - removal and purge (`apt purge` / `dnf remove`): the device shows as uninstalled and `/var/lib/indiansassist`,
+     `/etc/indiansassist` and `/run/indiansassist` are gone.
+
+### 1.8 Linux portable pair: the X11 agent and its Wayland portal companion (Phase F sections 9.5 and 9.6)
+
+The Linux download is one archive holding two programs: the X11 agent and, beside it as `.ia-portal`, the portal
+companion that shares the screen on Wayland through xdg-desktop-portal and PipeWire (view only, no control). The X11
+agent embeds the companion's sha256 and hands over to it only when the hash matches, so **the companion is built
+first**.
+
+One-time setup in the WSL build distro: Zig and cargo-zigbuild as in section 1.7, and
+`sudo apt install --no-install-recommends clang libclang-dev libpipewire-0.3-dev libspa-0.2-dev`.
+
+1. On Windows, with the region keys set, run **`pnpm agent:release:linux --dist <AGENT_DIST_DIR>`** (without `--dist`
+   it uses the `AGENT_DIST_DIR` environment variable, else `./data/agent-dist`). It:
+   1. builds the portal companion (`--features portal`, linked against libpipewire with `--allow-shlib-undefined`,
+      glibc 2.34 floor) and gates it: NEEDED within libc, libm, ld-linux and `libpipewire-0.3.so.0`; `GLIBC_` at most
+      2.34; at most 25 MiB;
+   2. builds the X11 agent with the companion's sha256 embedded (`IA_PORTAL_SHA256`) and gates it the same way without
+      libpipewire, then checks the hash is really inside it;
+   3. copies `IndiansAssist-linux-portal-x64-<v>` and `IndiansAssist-linux-x64-<v>` into the dist directory and
+      replaces the Linux row of its `manifest.json` with one row carrying `companion: { sha256, size }`. Rows of other
+      platforms are kept; `pnpm agent:manifest` keeps this row too.
+   `packaging/linux/out/agent-release-info.json` records both elf-check results.
+2. Both files are **not signed**; the join page prints the X11 agent's sha256 and the companion's on a second line.
+3. Copy the dist directory to every api node of the region and reload the api. If the companion file is missing or does
+   not match its row, the api serves the X11 agent alone and logs why.
+4. What a Desk needs: x86-64 with glibc 2.34 or later. On X11 nothing more. On Wayland, for screen sharing:
+   **PipeWire 0.3 or later** (`libpipewire-0.3.so.0`) and **xdg-desktop-portal with ScreenCast version 1 or later** plus
+   the desktop's portal backend (GNOME, KDE or wlroots). Without PipeWire the agent stays and says "Screen sharing on
+   Wayland needs PipeWire, which was not found."; chat and files still work.
+5. Manual checks before a release, on disposable real machines:
+   - **GNOME on Wayland** (Ubuntu 22.04 or 24.04, or Fedora): download from the join page, extract, run. The agent
+     hands over to `.ia-portal`; after the agent's own consent GNOME asks which screen to share, every session. The
+     console shows video, Control is greyed with "This Desk cannot take remote control", chat and a file work.
+     GNOME's **Stop sharing** makes the console say "The user stopped screen sharing"; cancelling GNOME's dialog
+     gives the no-screen state. On exit both files and the archive are removed (or both kept with Keep).
+   - **KDE Plasma on Wayland** (Fedora KDE or Kubuntu 24.04): the same, with KDE's portal dialog and its screencast
+     indicator.
+   - **An X11 session**: no hand-over; video and full control as before.
+   - **Wayland without PipeWire** (or with the library removed in a throwaway VM): the honest message, no hand-over.
+
+### 1.9 macOS: the portable app and the unattended PKG (Phase F section 17)
+
+Built on a Mac with Xcode and its command-line tools, Rust (`aarch64-apple-darwin`) and the region keys set.
+
+1. Portable app: `agent/scripts/macos-bundle.sh` writes `agent/target/macos/IndiansAssist.app`; then
+   `agent/scripts/macos-zip.sh agent/target/macos/IndiansAssist.app IndiansAssist-macos-arm64-<v>.app.zip`. Copy the
+   zip into `AGENT_DIST_DIR` and run `pnpm agent:manifest` (section 1.4), which adds the macOS row.
+2. Unattended PKG: `agent/scripts/macos-pkg.sh` writes `agent/target/macos-pkg/IndiansAssist-Agent-<v>-macos-arm64.pkg`
+   and `manifest.json`. Copy both into `AGENT_MSI_DIST_DIR/macos/` and reload the api; the console then shows a macOS
+   tab. MDM admins also get `packaging/macos/IndiansAssist-PPPC.mobileconfig` (Accessibility pre-granted; Screen
+   Recording can only be approved by a person, once per Mac).
+3. **Release prerequisites the operator must supply** (section 17.1). Until all exist, every macOS artifact is signed
+   ad hoc, its row says `signed: false`, and it must not be presented as signed:
+   - an Apple Developer Program membership;
+   - a **Developer ID Application** certificate (signs the app, `ia-service` and the worker app);
+   - a **Developer ID Installer** certificate (signs the PKG);
+   - notarization credentials for `notarytool` (an App Store Connect API key or an app-specific password, saved with
+     `xcrun notarytool store-credentials <profile>`).
+4. With them, the signing steps are: sign each binary and app with the Developer ID Application identity and the
+   hardened runtime (`codesign --force --options runtime --timestamp --sign "Developer ID Application: <name> (<team>)"`)
+   in place of the ad hoc `codesign --sign -` in `macos-bundle.sh` and `macos-pkg.sh` (the scripts sign ad hoc today;
+   pass the identity there); sign the PKG with `productsign --sign "Developer ID Installer: <name> (<team>)"`; submit
+   the zip and the PKG with `xcrun notarytool submit <file> --keychain-profile <profile> --wait`; staple with
+   `xcrun stapler staple` (the app before zipping it, and the PKG); check with `spctl --assess -vv` and
+   `pkgutil --check-signature`. Then mark the zip signed in `AGENT_DIST_DIR/manifest.signed.json` and set
+   `"signed": true` in the macOS PKG row.
+5. TCC grants follow the signing identity: after re-signing, grant Screen Recording and Accessibility again, then run
+   the manual checks on a Mac that is not a developer machine: a real capture and a click with the grants, chat and a
+   file, the PKG installing and enrolling, and its uninstall script (macOS unattended sessions are still an open item,
+   section 15.10).
 
 ---
 
@@ -235,6 +364,17 @@ Authenticode + timestamp (`IA_EXPECTED_SIGNER`) → `WinVerifyTrust` self-check 
 **Installed agent MSI (Phase D):** release build of `ia-service`/`ia-desktop`/`ia-watchdog` (both `-msvc`) → gates →
 Authenticode on all three → `node packaging/windows/build.mjs` (wix build + ICE validation, manifest of signed hashes) →
 sign + verify the MSI → publish to `AGENT_MSI_DIST_DIR` → sandbox install/upgrade/uninstall check (section 1.6).
+
+**Linux installed agent (section 1.7):** region keys in `WSLENV` → `pnpm linux:pkg` (`--sandbox` for T1) → copy
+`packaging/linux/out/dist/*` to `AGENT_MSI_DIST_DIR/linux/` → reload the api → the Manual checks.
+
+**Linux portable pair (section 1.8):** region keys set → `pnpm agent:release:linux --dist <AGENT_DIST_DIR>` (companion
+first, then X11 with its hash; both elf-checked at 2.34) → deploy the dist dir → reload the api → GNOME, KDE, X11 and
+no-PipeWire checks.
+
+**macOS (section 1.9):** `macos-bundle.sh` + `macos-zip.sh` → `AGENT_DIST_DIR` + `pnpm agent:manifest`;
+`macos-pkg.sh` → `AGENT_MSI_DIST_DIR/macos/`; Developer ID signing, `notarytool` and `stapler` once the certificates
+exist, otherwise `signed: false`.
 
 **Server:** build reproducible images → SBOM + `SHA256SUMS` → `cosign` sign → run the section 2.3 gates →
 publish digests + signatures → self-hoster `cosign verify` and pins `IA_VERSION`.
