@@ -386,6 +386,14 @@ pub enum DeviceServerMessage {
     },
     #[serde(rename = "device.policy")]
     Policy { policy: UnattendedPolicy },
+    /// Rule 9.3: the org's playbook catalogue changed while this device is connected. The
+    /// entries are exactly those `device.hello.ok.playbooks` carries; the service replaces its
+    /// manifest with them.
+    #[serde(rename = "device.playbooks")]
+    Playbooks {
+        #[serde(default)]
+        playbooks: Vec<PlaybookManifest>,
+    },
     #[serde(rename = "device.receipt")]
     Receipt { receipt: Value },
     #[serde(rename = "device.tamper.ok")]
@@ -677,6 +685,28 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(m, DeviceServerMessage::Policy { .. }));
+    }
+
+    #[test]
+    fn a_playbooks_push_parses_with_the_hello_ok_entry_shape() {
+        let m = parse_server_frame(
+            r#"{"t":"device.playbooks","playbooks":[{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7",
+            "name":"Disk report","description":"","interpreter":"sh","requiresElevation":false,
+            "parameters":[],"timeoutSec":60,"bodyHash":"ab"}]}"#,
+        )
+        .unwrap();
+        match m {
+            DeviceServerMessage::Playbooks { playbooks } => {
+                assert_eq!(playbooks.len(), 1);
+                assert_eq!(playbooks[0]["bodyHash"], "ab");
+            }
+            other => panic!("{other:?}"),
+        }
+        // An emptied catalogue is a valid push too.
+        assert!(matches!(
+            parse_server_frame(r#"{"t":"device.playbooks","playbooks":[]}"#).unwrap(),
+            DeviceServerMessage::Playbooks { playbooks } if playbooks.is_empty()
+        ));
     }
 
     #[test]

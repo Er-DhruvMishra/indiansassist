@@ -109,7 +109,57 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
         .name("ia-ui".into())
         .spawn(move || {
             let emit: Rc<Emit> = Rc::new(emit);
+            // A UI that cannot run reports `Failed` and returns; it never panics the process
+            // (`crate::uifail`: the preflight before any window code, then `catch_unwind`).
+            if let Err(why) = crate::uifail::preflight() {
+                tracing::warn!(%why, "the Desk UI could not start");
+                emit(UiEvent::Failed(why));
+                return;
+            }
             let app_emit = emit.clone();
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                crate::uifail::panic_point();
+                run_consent_app(req, rx, app_emit, slot, app_keep)
+            }));
+            match run {
+                Ok(Ok(())) => emit(UiEvent::Closed),
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "the Desk UI failed");
+                    emit(UiEvent::Failed(e.to_string()));
+                }
+                Err(payload) => {
+                    let why = crate::uifail::panic_text(&*payload);
+                    tracing::error!(%why, "the Desk UI panicked; the agent carries on without it");
+                    emit(UiEvent::Failed(format!(
+                        "the UI stopped unexpectedly: {why}"
+                    )));
+                }
+            }
+        })
+        .ok();
+    if thread.is_none() {
+        tracing::warn!("the Desk UI thread could not be started");
+    }
+    UiHandle {
+        tx,
+        ctx: ctx_slot,
+        thread,
+        keep,
+    }
+}
+
+/// The eframe run of [`spawn`], on the UI thread: the consent window (or the pill).
+fn run_consent_app(
+    req: ConsentRequest,
+    rx: Receiver<UiCommand>,
+    app_emit: Rc<Emit>,
+    slot: Arc<Mutex<Option<egui::Context>>>,
+    app_keep: Arc<Mutex<KeepChoice>>,
+) -> eframe::Result<()> {
+    // The two blocks keep this body, and the apple-owned lines in it, exactly as they stood
+    // inside the thread closure this function was lifted from.
+    {
+        {
             let options = eframe::NativeOptions {
                 viewport: ViewportBuilder::default()
                     .with_title(CONSENT_TITLE)
@@ -143,7 +193,7 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
                 })),
                 ..Default::default()
             };
-            let result = eframe::run_native(
+            eframe::run_native(
                 CONSENT_TITLE,
                 options,
                 Box::new(move |cc| {
@@ -152,18 +202,8 @@ pub fn spawn(req: ConsentRequest, emit: Emit) -> UiHandle {
                     }
                     Ok(Box::new(IaApp::new(req, rx, app_emit, app_keep)))
                 }),
-            );
-            match result {
-                Ok(()) => emit(UiEvent::Closed),
-                Err(e) => emit(UiEvent::Failed(e.to_string())),
-            }
-        })
-        .ok();
-    UiHandle {
-        tx,
-        ctx: ctx_slot,
-        thread,
-        keep,
+            )
+        }
     }
 }
 
@@ -1700,5 +1740,55 @@ impl IaApp {
                 self.live.level_prompt = None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::uifail::{force_failure, ForcedFailure};
+
+    fn request() -> ConsentRequest {
+        ConsentRequest {
+            technician: "Asha".into(),
+            org: "Acme".into(),
+            api_host: "api.example.test".into(),
+            monitors: vec![],
+            recording_sentence: None,
+            warnings: vec![],
+            deadline_secs: 180,
+            start_live: true,
+        }
+    }
+
+    /// The UI forced to fail both ways (the `uifail` seam): the agent's side receives `Failed`
+    /// and the UI thread ends on its own; nothing panics past the UI entry. Both modes run in one
+    /// test because the seam is process-wide.
+    #[test]
+    fn a_ui_that_cannot_start_or_panics_reports_failed_and_its_thread_ends() {
+        for mode in [ForcedFailure::StartError, ForcedFailure::Panic] {
+            force_failure(Some(mode));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let handle = spawn(
+                request(),
+                Box::new(move |e| {
+                    let _ = tx.send(e);
+                }),
+            );
+            let first = rx.recv_timeout(Duration::from_secs(10)).expect("an event");
+            match first {
+                UiEvent::Failed(why) => {
+                    assert!(why.contains("forced by a test"), "{mode:?}: {why}")
+                }
+                other => panic!("{mode:?}: expected Failed, got {other:?}"),
+            }
+            assert!(
+                handle.wait_closed(Duration::from_secs(10)),
+                "{mode:?}: the UI thread ended"
+            );
+            // The emitter went with the thread: nothing else arrives, and the channel is closed.
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        }
+        force_failure(None);
     }
 }

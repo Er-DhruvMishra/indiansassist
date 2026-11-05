@@ -9,7 +9,8 @@
  *     attended session (local consent, granted by the dev `--auto-consent` the harness passes to the worker) with the
  *     security code, a click at control, chat, a file and a read-only `sh` playbook in the session (as the user);
  *     an unattended `auto_grant` session; a read-only `sh` playbook as a device action (run by the service,
- *     `ranAs: 'admin'`); a clean stop (exit 0);
+ *     `ranAs: 'admin'`), and another created after the device connected, which reaches it as `device.playbooks`
+ *     and runs without a reconnect; a clean stop (exit 0);
  *  2. X11 on :97: an attended and an unattended session sharing the harness display, a click read back with xdotool
  *     on :97; the locked state shown on the device page (rule 8.4e); the Wayland case (no screen, chat and a file
  *     still work, rule 8.4d); nobody signed in (`409 prelogin_unsupported`, rule 8.4f) while device actions still
@@ -417,6 +418,18 @@ test('Linux P4 (synthetic): enrollment through --enroll, attended and unattended
       await endSession(assist, sessionId);
     });
     await test.step('a read-only sh playbook as a device action, run by the service', async () => deviceAction(assist, deviceId, org.playbookId));
+    await test.step('a playbook created after the device connected runs as a device action without a reconnect', async () => {
+      const from = s.mark();
+      const late = await assist.request.post(`${API}/api/v1/orgs/current/playbooks`, {
+        headers,
+        data: { name: 'Linux P4 e2e: added later', description: 'Read-only: prints the kernel name.', interpreter: 'sh', body: 'echo "late=$(uname -s)"\n', timeoutSec: 30 },
+      });
+      expect(late.status(), `late playbook created: ${await late.text()}`).toBe(201);
+      // Rule 9.3: the catalogue reaches the connected service as `device.playbooks`, with no new hello.
+      await s.waitForLine(/the playbook catalogue changed/i, 15_000, from);
+      expect(s.lines.slice(from).some((l) => /device\.hello\.ok/.test(l)), 'no reconnect in between').toBe(false);
+      await deviceAction(assist, deviceId, (await late.json()).id as string);
+    });
     await test.step("systemd's stop: SIGTERM ends the service with status 0", async () => {
       expect(await s.stop()).toBe(0);
     });

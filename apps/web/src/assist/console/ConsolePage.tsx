@@ -25,6 +25,9 @@ import { MirrorLiveConsole } from './mirror/MirrorConsole';
 import { AgentConsole } from './agent/AgentConsole';
 import { unattendedInfo, type LocalUserArrival } from './agent/UnattendedBanner';
 
+/** How often the console of a device session re-reads the device (its interactive state, rule 8.4e). */
+const DEVICE_REFRESH_MS = 5_000;
+
 export function ConsolePage() {
   usePageTitle('Session console');
   const { id = '' } = useParams();
@@ -42,6 +45,14 @@ export function ConsolePage() {
   const fleetRead = can(me?.user.role, 'fleet.read');
   const deviceRecord = useAsync(() => (deviceId && fleetRead ? devicesApi.get(deviceId) : Promise.resolve(null)), [deviceId, fleetRead]);
   const devicePolicy = { data: deviceRecord.data?.policy ?? null };
+  // Phase F rule 8.4e: the device's interactive state (locked or not) changes during the session; the service reports a
+  // change within 2 s, so the console re-reads the device record while it is open.
+  const reloadDevice = deviceRecord.reload;
+  useEffect(() => {
+    if (!deviceId || !fleetRead) return;
+    const t = setInterval(reloadDevice, DEVICE_REFRESH_MS);
+    return () => clearInterval(t);
+  }, [deviceId, fleetRead, reloadDevice]);
   // Phase F section 7.3: the keys bar offers Ctrl+Alt+Del only when the device's service advertises `sas`.
   const deskSas = (() => {
     const f = (deviceRecord.data?.capabilities as { features?: unknown } | undefined)?.features;
@@ -69,6 +80,7 @@ export function ConsolePage() {
     devicePolicy: devicePolicy.data,
     approvedBy: cached?.approvedBy ?? d?.approvedBy,
     arrival,
+    interactive: deviceRecord.data?.interactive ?? null,
   });
 
   // Section 13.4: the kind of a device session is never left implicit, live, read-only or ended.

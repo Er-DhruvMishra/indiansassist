@@ -374,9 +374,7 @@ async fn apply(shared: &Arc<LinuxShared>, step: Step) -> Option<Disconnect> {
             if let Ok(mut p) = shared.policy.lock() {
                 *p = *policy;
             }
-            if let Ok(mut c) = shared.playbooks.lock() {
-                *c = playbooks;
-            }
+            crate::devicesock::replace_manifest(&shared.playbooks, playbooks);
             for action in queued {
                 let shared = shared.clone();
                 tokio::spawn(async move { run_queued(&shared, action).await });
@@ -417,6 +415,10 @@ async fn apply(shared: &Arc<LinuxShared>, step: Step) -> Option<Disconnect> {
             if let Ok(mut p) = shared.policy.lock() {
                 *p = *policy;
             }
+        }
+        Step::Playbooks(playbooks) => {
+            let n = crate::devicesock::replace_manifest(&shared.playbooks, playbooks);
+            tracing::info!(playbooks = n, "the playbook catalogue changed");
         }
         Step::Receipt(receipt) => store_receipt(shared, &receipt),
         Step::TamperAcknowledged { ids } => {

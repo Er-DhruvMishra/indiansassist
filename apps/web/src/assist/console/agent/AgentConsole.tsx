@@ -33,7 +33,8 @@ import { SasConfirmDialog, SAS_STOP_TEXT } from './SasConfirmDialog';
 import { controlBlocker, hasFeature, levelAllows, levelChip, sasOk } from './agentState';
 import { NoScreenSlot, useEnterpriseLiveHooks } from '../EnterpriseSlots';
 import { CameraSlot, DeskKeepSlot } from '../PhaseFSlots';
-import { PolicyState, UnattendedBanner, type UnattendedSessionInfo } from './UnattendedBanner';
+import { PolicyState, ScreenLockedNotice, UnattendedBanner, type UnattendedSessionInfo } from './UnattendedBanner';
+import { stopNotice } from './agentController';
 import type { OverlayActions } from './InputOverlay';
 import type { RemoteTouch } from '../RemoteView';
 import { KeysBar } from '../../touch/KeysBar';
@@ -174,6 +175,7 @@ export function AgentConsoleView({
     return (
       <div className="flex flex-col gap-4">
         <Alert tone="blue">Session ended{snap.ended ? `: ${humanise(snap.ended.endReason)}` : ''}. All local media was stopped.</Alert>
+        {snap.deskStopReason && <Alert tone="amber">{stopNotice(snap.deskStopReason)}</Alert>}
         <SasHistory history={snap.sasHistory} />
       </div>
     );
@@ -188,6 +190,7 @@ export function AgentConsoleView({
   const alerts = (
     <>
       {device && <UnattendedBanner info={device} />}
+      {device?.screenLocked && <ScreenLockedNotice />}
       {snap.error && <Alert>{snap.error}</Alert>}
       {snap.captureNotice && <Alert tone="amber">{snap.captureNotice}</Alert>}
       {elevated && <Alert tone="blue">{ELEVATED_NOTE}</Alert>}

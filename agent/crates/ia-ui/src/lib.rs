@@ -16,6 +16,8 @@ pub mod bridge;
 /// Phase F §6.1: the camera-link QR beside a technician's chat message (pure; drawn by `app`).
 pub mod camqr;
 pub mod model;
+/// A UI failure never takes the agent down: the preflight, the panic guard and the test seam.
+pub mod uifail;
 
 #[cfg(feature = "gui")]
 pub mod app;

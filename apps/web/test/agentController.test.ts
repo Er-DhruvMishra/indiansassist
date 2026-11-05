@@ -264,6 +264,21 @@ describe('AgentConsoleController', () => {
     expect(ws.ofType('session.end')).toHaveLength(0);
   });
 
+  it("stop.sharing { reason: 'indicator_failed' } says the Desk's indicator could not be shown, then ends as the Desk's error", async () => {
+    const d = await live();
+    deskSend(d, 'ia.ctrl', { t: 'stop.sharing', ts: 1, reason: 'indicator_failed' });
+    deskTeardown(d);
+    expect(ctrl.snapshot.phase).toBe('ending');
+    expect(ctrl.snapshot.notice).toMatch(/on-screen indicator could not be shown/);
+    await settle();
+    expect(ctrl.snapshot.sec.state).toBe('established');
+    // The Desk's own `session.end { note: 'indicator_lost' }` comes back as `error` (C W21).
+    ws.receive(sessionEnded('error'));
+    expect(ctrl.snapshot.phase).toBe('ended');
+    expect(ctrl.snapshot.ended?.endReason).toBe('error');
+    expect(reports.some((r) => r.action === 'sec.failed')).toBe(false);
+  });
+
   it('a close on another channel in the same tick as stop.sharing is decided after the message (no sec.fail)', async () => {
     const d = await live();
     d.chans.get('ia.control')!.close();

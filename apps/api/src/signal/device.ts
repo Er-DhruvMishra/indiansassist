@@ -15,6 +15,7 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { TokenBucket } from '../limiter.js';
 import { clearDevicePresence, getDevicePresence } from '../fleet/common.js';
 import { handleDeviceMessage, onDeviceSocketClosed } from '../fleet/device-socket.js';
+import { ManifestPush } from '../fleet/manifest-push.js';
 import type { SignalHub } from './hub.js';
 
 /** Section 3.4: `device.hello` within 10 s of the challenge. */
@@ -78,10 +79,13 @@ export class DeviceHub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   /** Section 13.5 `DEVICE_HELLO_RATE`: `device.hello`s verified per second on this node. */
   readonly helloBucket: TokenBucket;
+  /** Rule 9.3: `device.playbooks` to an org's connected devices when its catalogue changes, coalesced per org. */
+  readonly manifests: ManifestPush;
 
   constructor(readonly hub: SignalHub) {
     const rate = hub.ctx.config.fleet.deviceHelloRate;
     this.helloBucket = new TokenBucket(rate, rate);
+    this.manifests = new ManifestPush(hub.ctx);
   }
 
   get ctx() {
@@ -214,6 +218,7 @@ export class DeviceHub {
   }
 
   async close(): Promise<void> {
+    await this.manifests.close();
     for (const c of this.conns.values()) c.terminate();
     this.conns.clear();
     this.byDevice.clear();

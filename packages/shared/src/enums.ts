@@ -73,6 +73,14 @@ export const SESSION_END_REASONS = [
 ] as const;
 export type SessionEndReason = (typeof SESSION_END_REASONS)[number];
 
+/**
+ * Why a native Desk stopped sharing, as the optional `reason` of its `ia.ctrl` `stop.sharing` (absent = the person at
+ * the Desk pressed Stop). `indicator_failed`: the Desk UI (consent window, pill) could not start or stopped, and a
+ * session never runs without its indicator; the WS `session.end` that follows carries `note: 'indicator_lost'` (C W21).
+ */
+export const STOP_SHARING_REASONS = ['indicator_failed'] as const;
+export type StopSharingReason = (typeof STOP_SHARING_REASONS)[number];
+
 /** `recorder` (Phase A.2, docs/specs/phase-a2-recorder.md section 2): the server-side recorder participant. */
 /** `camera` (Phase F section 6.7): the phone that joined a live session as a camera only. */
 export const PARTICIPANT_ROLES = ['assist', 'desk', 'supervisor', 'recorder', 'camera'] as const;

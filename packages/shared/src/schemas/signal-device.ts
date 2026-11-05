@@ -64,6 +64,11 @@ export const deviceActionMsgSchema = msg('device.action', {
   secrets: z.array(z.strictObject({ env: z.string(), sealed: sealedSchema })).max(8).optional(),
 });
 export const devicePolicySchema = msg('device.policy', { policy: unattendedPolicySchema });
+/**
+ * Rule 9.3: the org's playbook catalogue changed while the device is connected. Carries exactly what
+ * `device.hello.ok.playbooks` carries (the same entries, filtered by the device's interpreters); the device replaces its manifest with it.
+ */
+export const devicePlaybooksSchema = msg('device.playbooks', { playbooks: z.array(playbookManifestSchema).max(LIMITS.playbookCatalogueMax) });
 export const deviceReceiptMsgSchema = msg('device.receipt', { receipt: anyDeviceReceiptSchema });
 export const deviceTamperOkSchema = msg('device.tamper.ok', { ids: z.array(uuidSchema).max(1000) });
 export const deviceRotateOkSchema = msg('device.rotate.ok', { keyId: z.string().regex(/^[0-9a-f]{16}$/) });
@@ -188,6 +193,7 @@ export const deviceServerMessageSchema = z.discriminatedUnion('t', [
   deviceWorkerCredentialSchema,
   deviceActionMsgSchema,
   devicePolicySchema,
+  devicePlaybooksSchema,
   deviceReceiptMsgSchema,
   deviceTamperOkSchema,
   deviceRotateOkSchema,

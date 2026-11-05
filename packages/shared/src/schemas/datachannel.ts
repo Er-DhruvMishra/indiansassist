@@ -3,7 +3,7 @@
  * `ia.file`, `ia.ctrl`, the `DataChannelMessage` union keyed on `t`, and the binary file chunk codec.
  */
 import { z } from 'zod';
-import { DEFAULT_ANNOT_COLOR, LIMITS, MIRROR_TRANSPORTS } from '../enums.js';
+import { DEFAULT_ANNOT_COLOR, LIMITS, MIRROR_TRANSPORTS, STOP_SHARING_REASONS } from '../enums.js';
 import { epochMsSchema, hex64Schema, hexColorSchema, sideSchema, uint32Schema, uuidSchema } from './common.js';
 import { controlEventSchema, controlRequestSchema, controlResponseSchema, tabInfoSchema } from '../extension/control.js';
 import { agentControlEventSchema, agentControlRequestSchema } from '../agent/control.js';
@@ -123,7 +123,8 @@ export const dcFileCancelSchema = z.object({
 
 // ---------- ia.ctrl (8.4) ----------
 
-export const dcStopSharingSchema = z.object({ t: z.literal('stop.sharing'), ts });
+/** `reason` (optional; absent = the Desk pressed Stop): why a native Desk stopped, e.g. its indicator failed. */
+export const dcStopSharingSchema = z.object({ t: z.literal('stop.sharing'), ts, reason: z.enum(STOP_SHARING_REASONS).optional() });
 export const dcConsentRevokedSchema = z.object({ t: z.literal('consent.revoked'), ts });
 export const dcRecordingStateSchema = z.object({ t: z.literal('recording.state'), recording: z.boolean(), ts });
 export const dcVoiceStateSchema = z.object({ t: z.literal('voice.state'), from: sideSchema, muted: z.boolean(), ts });

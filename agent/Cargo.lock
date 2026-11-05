@@ -2412,6 +2412,7 @@ dependencies = [
  "ia-core",
  "ia-input-mac",
  "ksni",
+ "libc",
  "qrcode",
  "tracing",
  "tray-icon",

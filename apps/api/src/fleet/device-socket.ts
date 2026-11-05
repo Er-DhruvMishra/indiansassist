@@ -13,14 +13,14 @@ import {
   type DeviceClientMessage,
   type DeviceClientOf,
 } from '@indiansassist/shared';
-import { getDevice, getOrg, listManifestPlaybooks, updateDevice, type DeviceRow } from '@indiansassist/db';
+import { getDevice, getOrg, updateDevice, type DeviceRow } from '@indiansassist/db';
 import { writeAudit } from '../lib/audit.js';
 import { brandingPublic } from '../lib/mappers.js';
-import { buildManifest } from '../signal/agent-manifest.js';
 import type { DeviceConn, DeviceHub } from '../signal/device.js';
 import { WS_CLOSE } from '@indiansassist/shared';
 import { handleActionResult, helloQueue, pushVaultQueue } from './actions.js';
 import { deviceActor, effectivePolicyFor, macPatch, setDevicePresence } from './common.js';
+import { devicePlaybooks } from './manifest-push.js';
 import { deliverPendingReceipts } from './receipts.js';
 import { handleTamper } from './tamper.js';
 import { confirmWakes, handleAmtResult, handleAmtSolData, handleWakeSent } from './wake.js';
@@ -128,8 +128,8 @@ async function deviceHello(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<
   await setDevicePresence(ctx, d.id, { connectionId: conn.id, nodeId: ctx.config.nodeId, region: d.region });
   const policy = await effectivePolicyFor(ctx, fresh, org);
   const queued = await helloQueue(ctx, fresh, org, policy);
-  const rows = await listManifestPlaybooks(ctx.db, d.orgId, c.capabilities.interpreters, LIMITS.playbookCatalogueMax + 1);
-  const manifest = buildManifest(rows);
+  // The same entries `device.playbooks` pushes when the catalogue changes while this socket is up.
+  const playbooks = await devicePlaybooks(ctx.db, d.orgId, c.capabilities.interpreters);
   conn.send({
     t: 'device.hello.ok',
     ...re(msg.id),
@@ -139,7 +139,7 @@ async function deviceHello(dh: DeviceHub, conn: DeviceConn, msg: DeviceClientOf<
     policy,
     groupId: fresh.groupId ?? null,
     queued: queued.wire,
-    playbooks: manifest.msg.playbooks,
+    playbooks,
     rotationNonce: fresh.rotationNonce ?? null,
   });
   await pushVaultQueue(ctx, fresh, org, queued.vault);

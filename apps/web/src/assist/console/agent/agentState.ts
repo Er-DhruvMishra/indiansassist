@@ -13,6 +13,7 @@ import {
   type PlaybookManifest,
   type SessionCreated,
   type SessionEnded,
+  type StopSharingReason,
 } from '@indiansassist/shared';
 import type { Transfer } from '../../../lib/fileTransfer';
 import type { ChatItem } from '../../../lib/link';
@@ -76,6 +77,8 @@ export type AgentSnapshot = {
   muted: boolean;
   peerMuted: boolean | null;
   ended: SessionEnded | null;
+  /** Why the Desk said it stopped (`stop.sharing.reason`), kept for the ended view; null for a plain Stop. */
+  deskStopReason: StopSharingReason | null;
   notice: string | null;
   error: string | null;
 };
@@ -115,6 +118,7 @@ export const AGENT_INITIAL: AgentSnapshot = {
   muted: false,
   peerMuted: null,
   ended: null,
+  deskStopReason: null,
   notice: null,
   error: null,
 };

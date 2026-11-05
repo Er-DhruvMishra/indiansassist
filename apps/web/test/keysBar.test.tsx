@@ -37,9 +37,34 @@ describe('special keys and sticky modifiers', () => {
   });
 
   it('a double tap locks a modifier until it is tapped again; modifiers combine', () => {
+    // A double tap is timed (350 ms): the clock is fake, so a slow, loaded run can never stretch the two taps apart.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-04T10:00:00.000Z') });
+    try {
+      doubleTapLocks();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('two taps further apart than a double tap latch and release instead of locking', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-04T10:00:00.000Z') });
+    try {
+      setup();
+      fireEvent.click(screen.getByRole('button', { name: 'Shift' }));
+      vi.advanceTimersByTime(351);
+      fireEvent.click(screen.getByRole('button', { name: /Shift, held/ }));
+      expect(screen.queryByRole('button', { name: 'Shift, locked' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Shift' }).getAttribute('aria-pressed')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  function doubleTapLocks() {
     const { actions } = setup();
     const shift = screen.getByRole('button', { name: 'Shift' });
     fireEvent.click(shift);
+    vi.advanceTimersByTime(120);
     fireEvent.click(screen.getByRole('button', { name: /Shift, held/ }));
     expect(screen.getByRole('button', { name: 'Shift, locked' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Alt' }));
@@ -51,7 +76,7 @@ describe('special keys and sticky modifiers', () => {
     ]);
     fireEvent.click(screen.getByRole('button', { name: 'Shift, locked' }));
     expect(screen.getByRole('button', { name: 'Shift' }).getAttribute('aria-pressed')).toBe('false');
-  });
+  }
 
   it('has Esc, Tab, arrows, Home, End, PgUp, PgDn, Del and an expandable F1-F12 row', () => {
     const { actions } = setup();

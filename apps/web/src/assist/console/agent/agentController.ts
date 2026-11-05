@@ -12,7 +12,7 @@
  * console waits for `session.ended` and only sends a plain `session.end` (idempotent on the server) if none arrives
  * within `AGENT_PEER_END_FALLBACK_MS`.
  */
-import { type AgentCapabilities, type SessionCreated, type SessionEnded, type SecFailReason } from '@indiansassist/shared';
+import { type AgentCapabilities, type SessionCreated, type SessionEnded, type SecFailReason, type StopSharingReason } from '@indiansassist/shared';
 import { errorMessage } from '../../../lib/api';
 import { agentPolicyApi, p3Event } from '../../../lib/agentApi';
 import { sessionsApi } from '../../../lib/endpoints';
@@ -53,6 +53,13 @@ export const AGENT_STATS_SAMPLE_MS = 2500;
 /** After a Desk stop message, how long the console waits for `session.ended` before sending its own (plain) end. */
 export const AGENT_PEER_END_FALLBACK_MS = 10_000;
 const SHOWN_ERRORS = ['forbidden', 'session_not_found', 'bad_state', 'consent_required', 'relay_closed'];
+
+/** The notice for a Desk's `stop.sharing`: a plain Stop, or the reason a native Desk gave. */
+export function stopNotice(reason: StopSharingReason | undefined): string {
+  if (reason === 'indicator_failed')
+    return 'The Desk ended the session because its on-screen indicator could not be shown. IndiansAssist never shares a screen without it.';
+  return 'The Desk stopped sharing.';
+}
 
 export class AgentControllerCore {
   protected snap: AgentSnapshot = AGENT_INITIAL;
@@ -310,7 +317,7 @@ export class AgentControllerCore {
         if (m.from !== 'desk') return;
         return this.set({ peerMuted: m.muted });
       case 'stop.sharing':
-        return this.onPeerEnd('desk_stopped');
+        return this.onPeerEnd('desk_stopped', m.reason);
       case 'consent.revoked':
         return this.onPeerEnd('consent_revoked');
       default:
@@ -322,13 +329,13 @@ export class AgentControllerCore {
    * The Desk announced its hard rule 2 teardown: tear down here too (input first), mark the end orderly so the closes
    * that follow are not channel violations, and wait for the Desk's own end to come back as `session.ended`.
    */
-  private onPeerEnd(kind: 'desk_stopped' | 'consent_revoked'): void {
-    const notice = kind === 'desk_stopped' ? 'The Desk stopped sharing.' : 'The Desk revoked consent.';
+  private onPeerEnd(kind: 'desk_stopped' | 'consent_revoked', reason?: StopSharingReason): void {
+    const notice = kind === 'consent_revoked' ? 'The Desk revoked consent.' : stopNotice(reason);
     if (this.endingBy) return this.set({ notice });
     this.endingBy = kind;
     this.input.flush(true);
     this.teardown();
-    this.set({ phase: 'ending', notice });
+    this.set({ phase: 'ending', notice, deskStopReason: reason ?? null });
     this.peerEndTimer = setTimeout(() => {
       this.peerEndTimer = null;
       if (this.disposed || this.snap.phase === 'ended') return;

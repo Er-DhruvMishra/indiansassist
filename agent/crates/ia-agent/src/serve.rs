@@ -73,6 +73,7 @@ mod meter;
 mod recleg;
 mod secfail;
 mod selfdel;
+mod uiloss;
 use link::*;
 use meter::*;
 use recleg::*;
@@ -103,6 +104,10 @@ pub enum LiveOutcome {
     SecFailed(String),
     /// Consent was declined (window, Escape, close, deadline) or setup failed.
     Failed(String),
+    /// The Desk UI failed or vanished (`serve/uiloss.rs`: no indicator, no sharing). The agent
+    /// sent `stop.sharing { reason: 'indicator_failed' }` when a channel was open, then
+    /// `session.end { note: 'indicator_lost' }`. The string is why the UI failed.
+    IndicatorLost(String),
 }
 
 /// One decrypted frame routed to the serve loop by channel label.
@@ -418,6 +423,9 @@ enum ConsentDecision {
     Granted(ConsentPayload),
     Declined(String),
     Ended,
+    /// The consent window could not be shown or stopped (`serve/uiloss.rs`): not a decline,
+    /// nobody answered.
+    UiFailed(String),
 }
 
 /// §4.3 / §6.2: what a Phase D worker does instead of asking.
@@ -585,6 +593,14 @@ async fn worker_consent(
                     ui.close().await;
                     Err(format!("consent declined ({why})"))
                 }
+                WorkerConsent::UiFailed(why) => {
+                    // No indicator, no sharing: end the session as the lost indicator it is
+                    // (`serve/uiloss.rs`), never as a decline nobody made.
+                    tracing::warn!(%why, "the approval card could not be shown: ending the session");
+                    let _ = ws.send(uiloss::indicator_lost_end(&ctx.session_id)).await;
+                    ui.close().await;
+                    Err(format!("indicator failed ({why})"))
+                }
             }
         }
     }
@@ -595,6 +611,8 @@ enum WorkerConsent {
     /// Rule 6.1 `autoAllowAfterSec`: nobody answered in time and the policy allows.
     AutoAllowed,
     Declined(String),
+    /// The card could not be shown or stopped (`serve/uiloss.rs`).
+    UiFailed(String),
 }
 
 /// [`await_consent`] with the rule 6.1 countdown. `auto_allow` of `None` is the C behaviour
@@ -611,12 +629,15 @@ async fn await_consent_with_timeout(
             ConsentDecision::Granted(p) => WorkerConsent::Granted(p),
             ConsentDecision::Declined(why) => WorkerConsent::Declined(why),
             ConsentDecision::Ended => WorkerConsent::Declined("the session ended".into()),
+            ConsentDecision::UiFailed(why) => WorkerConsent::UiFailed(why),
         },
         Some(secs) => {
             match tokio::time::timeout(Duration::from_secs(u64::from(secs)), answer).await {
                 Ok(ConsentDecision::Granted(p)) => WorkerConsent::Granted(p),
                 Ok(ConsentDecision::Declined(why)) => WorkerConsent::Declined(why),
                 Ok(ConsentDecision::Ended) => WorkerConsent::Declined("the session ended".into()),
+                // A card that failed cannot count down to an auto-allow: nobody saw it.
+                Ok(ConsentDecision::UiFailed(why)) => WorkerConsent::UiFailed(why),
                 Err(_) => WorkerConsent::AutoAllowed,
             }
         }
@@ -637,8 +658,11 @@ async fn await_consent(
             ev = ui_rx.recv() => match ev {
                 Some(UiEvent::ConsentGranted(p)) => return ConsentDecision::Granted(p),
                 Some(UiEvent::ConsentDeclined) => return ConsentDecision::Declined("declined".into()),
-                Some(UiEvent::Failed(e)) => return ConsentDecision::Declined(format!("consent window failed: {e}")),
-                Some(UiEvent::Closed) | None => return ConsentDecision::Declined("consent window closed".into()),
+                Some(UiEvent::Failed(e)) => return ConsentDecision::UiFailed(format!("consent window failed: {e}")),
+                // Closing the window is a Decline (§3.3, sent as `ConsentDeclined` first); a UI
+                // thread that is simply gone is a failure nobody answered.
+                Some(UiEvent::Closed) => return ConsentDecision::Declined("consent window closed".into()),
+                None => return ConsentDecision::UiFailed("the consent window's thread is gone".into()),
                 Some(_) => {}
             },
             msg = ws_rx.recv() => {
@@ -792,6 +816,13 @@ pub async fn run_live_session(
             ConsentDecision::Ended => {
                 ui.close().await;
                 return Ok(LiveOutcome::EndedRemotely);
+            }
+            ConsentDecision::UiFailed(why) => {
+                // No indicator, no sharing (`serve/uiloss.rs`): end the session, do not crash.
+                tracing::warn!(%why, "the consent window could not be shown: ending the session");
+                let _ = ws.send(uiloss::indicator_lost_end(&session_id)).await;
+                ui.close().await;
+                return Ok(LiveOutcome::IndicatorLost(why));
             }
         }
     };
@@ -2580,6 +2611,9 @@ impl Live<'_> {
                 LiveOutcome::Revoked => "You revoked consent. Sharing has stopped.".to_string(),
                 LiveOutcome::EndedRemotely => "The technician ended the session.".to_string(),
                 LiveOutcome::HandedOver => "Continuing with administrator rights.".to_string(),
+                LiveOutcome::IndicatorLost(_) => {
+                    "The on-screen indicator stopped, so sharing has stopped.".to_string()
+                }
                 _ => "Sharing has stopped.".to_string(),
             },
             format!(
@@ -3136,10 +3170,13 @@ async fn serve(
                     }
                     Some(UiEvent::ConsentGranted(_)) | Some(UiEvent::ConsentDeclined) => {}
                     Some(UiEvent::Failed(_)) | Some(UiEvent::Closed) | None => {
-                        // The indicator is mandatory (§3.5): no indicator, no sharing.
-                        tracing::warn!("indicator UI gone: stopping");
+                        // The indicator is mandatory (§3.5): no indicator, no sharing. The
+                        // session ends cleanly with the reason (`serve/uiloss.rs`).
+                        let why = uiloss::indicator_gone(ev.as_ref()).unwrap_or_default();
+                        tracing::warn!(%why, "indicator UI gone: ending the session");
                         *ui_rx = None;
                         live.ui = None;
+                        outcome = LiveOutcome::IndicatorLost(why);
                         break;
                     }
                 }
@@ -3362,6 +3399,15 @@ async fn serve(
             .await;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+        LiveOutcome::IndicatorLost(_) => {
+            // The console's reason for the end (`serve/uiloss.rs`), then the usual teardown.
+            live.seal(
+                "ia.ctrl",
+                &uiloss::indicator_failed_stop(now_ms()).to_string(),
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         LiveOutcome::SecFailed(_) => {
             // §1.3 step 9: sec.fail on ia.sec (plaintext) and desk.event sec.failed, before the
             // teardown and the WS session.end { note }.
@@ -3420,6 +3466,10 @@ async fn serve(
                 .send(json!({ "t": "session.end", "sessionId": session_id, "note": format!("sec:{reason}") }))
                 .await;
             tracing::info!(%reason, "session.end (sec) sent");
+        }
+        LiveOutcome::IndicatorLost(why) => {
+            let _ = live.ws.send(uiloss::indicator_lost_end(session_id)).await;
+            tracing::info!(%why, "session.end (indicator_lost) sent");
         }
         _ => {}
     }

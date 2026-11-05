@@ -3,7 +3,9 @@
  * role, bodies only for org_admin / senior_technician / auditor); every load is `(id, org_id)` so another org's id
  * is `404`. The run endpoint is the body's release point: assist of the session, then the playbook of the session's
  * org, `enabled`, the pinned manifest hash (`playbook_changed`) and the elevation rule, in that order; it mints
- * `runId` / `opId`, chains `playbook.run_requested` and answers `202` with the body and canonical args.
+ * `runId` / `opId`, chains `playbook.run_requested` and answers `202` with the body and canonical args. Every
+ * catalogue change pushes the org's new manifest to its connected devices (`device.playbooks`, coalesced per org; see
+ * `fleet/manifest-push.ts`).
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -120,6 +122,7 @@ export async function playbookRoutes(app: FastifyInstance, ctx: AppContext): Pro
         return r;
       }),
     );
+    ctx.hub.devices.manifests.schedule(p.org.id);
     return reply.status(201).send(toPlaybook(row, { id: p.user.id, name: p.user.name }, true));
   });
 
@@ -142,6 +145,7 @@ export async function playbookRoutes(app: FastifyInstance, ctx: AppContext): Pro
         return r;
       }),
     );
+    ctx.hub.devices.manifests.schedule(p.org.id);
     const names = row.createdBy ? await userRefs(ctx.db, [row.createdBy]) : new Map<string, UserRef>();
     return toPlaybook(row, row.createdBy ? refOf(names, row.createdBy) : null, true);
   });
@@ -154,6 +158,7 @@ export async function playbookRoutes(app: FastifyInstance, ctx: AppContext): Pro
       if (!(await deletePlaybook(tx, cur.id, p.org.id))) fail('not_found', 'playbook not found');
       await writeAudit(ctx, tx, p.org, { actor: userActor(p.user), action: 'playbook.deleted', data: { playbookId: cur.id } });
     });
+    ctx.hub.devices.manifests.schedule(p.org.id);
     return reply.status(204).send();
   });
 

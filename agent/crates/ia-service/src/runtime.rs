@@ -318,9 +318,7 @@ async fn apply(shared: &Arc<Shared>, step: Step) -> Option<Disconnect> {
             if let Ok(mut p) = shared.policy.lock() {
                 *p = *policy;
             }
-            if let Ok(mut c) = shared.playbooks.lock() {
-                *c = playbooks;
-            }
+            crate::devicesock::replace_manifest(&shared.playbooks, playbooks);
             // Rule 3.6b: whatever queued up while this device was offline. Each one runs on
             // its own task: a playbook may take minutes (its pinned `timeoutSec` is up to 900 s),
             // and the socket has a 30 s heartbeat to keep.
@@ -361,6 +359,10 @@ async fn apply(shared: &Arc<Shared>, step: Step) -> Option<Disconnect> {
             if let Ok(mut p) = shared.policy.lock() {
                 *p = *policy;
             }
+        }
+        Step::Playbooks(playbooks) => {
+            let n = crate::devicesock::replace_manifest(&shared.playbooks, playbooks);
+            tracing::info!(playbooks = n, "the playbook catalogue changed");
         }
         Step::Receipt(receipt) => crate::session::store_receipt(shared, &receipt),
         Step::TamperAcknowledged { ids } => {

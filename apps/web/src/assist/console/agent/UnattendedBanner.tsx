@@ -5,9 +5,9 @@
  * (what this policy lets the technician do, and what it does not). Both banners are polite live regions and carry
  * their state as text, never as colour alone (section 13.5).
  */
-import type { ApprovedBy, UnattendedPolicy } from '@indiansassist/shared';
+import type { ApprovedBy, InteractiveState, UnattendedPolicy } from '@indiansassist/shared';
 import { Alert, Badge } from '../../../components/ui';
-import { APPROVED_BY_TEXT, policyHighlights } from '../../fleet/fleetText';
+import { APPROVED_BY_TEXT, policyHighlights, SCREEN_LOCKED_TEXT } from '../../fleet/fleetText';
 
 export type UnattendedSessionInfo = {
   /** `true` for a session opened with `unattended: true` (section 3.5). */
@@ -19,6 +19,8 @@ export type UnattendedSessionInfo = {
   userArrived?: boolean;
   /** Rule 6.2a: with `requireLocalApprovalWhenPresent` the session drops to view until they choose Continue. */
   levelDroppedToView?: boolean;
+  /** Phase F rule 8.4e: the device reports its signed-in session locked (`interactive.state === 'locked'`). */
+  screenLocked?: boolean;
 };
 
 /** Rule 6.2a, as the server pushes it (`session.local_user_arrived`). */
@@ -38,6 +40,8 @@ export function unattendedInfo(a: {
   devicePolicy?: UnattendedPolicy | null | undefined;
   approvedBy?: ApprovedBy | null | undefined;
   arrival?: LocalUserArrival | null | undefined;
+  /** The device's interactive state as the console last read it (`GET /devices/:id`). */
+  interactive?: InteractiveState | null | undefined;
 }): UnattendedSessionInfo | undefined {
   if (!a.deviceId) return undefined;
   return {
@@ -46,7 +50,17 @@ export function unattendedInfo(a: {
     policy: a.policySnapshot ?? a.devicePolicy ?? null,
     approvedBy: a.approvedBy ?? null,
     ...(a.arrival ? { userArrived: true, levelDroppedToView: a.arrival.levelDroppedTo === 'view' } : {}),
+    ...(a.interactive?.state === 'locked' ? { screenLocked: true } : {}),
   };
+}
+
+/** Phase F rule 8.4e: the live console says so while the device reports its session locked, as the device page does. */
+export function ScreenLockedNotice() {
+  return (
+    <p className="text-sm font-medium" role="status" aria-live="polite" data-testid="screen-locked">
+      {SCREEN_LOCKED_TEXT}
+    </p>
+  );
 }
 
 export const UNATTENDED_TEXT = 'No one is at this device — session is policy-authorised and recorded.';

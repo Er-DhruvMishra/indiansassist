@@ -44,6 +44,13 @@ pub enum Step {
     RunAction(Box<ActionRequest>),
     /// The effective policy changed (rule 9.9's push).
     Policy(Box<ia_core::policy::UnattendedPolicy>),
+    /// The org's playbook catalogue changed while connected (`device.playbooks`, rule 9.3):
+    /// replace the manifest queued runs are checked against ([`replace_manifest`]).
+    ///
+    /// Not on macOS yet: its runtime is the Mac session's, and until it adds the arm there the
+    /// frame plans to [`Step::Ignore`] so that build keeps its exhaustive match.
+    #[cfg(not(target_os = "macos"))]
+    Playbooks(Vec<ia_core::playbook::ManifestEntry>),
     /// Store the receipt and, when somebody is there, show the §6.4 toast.
     Receipt(serde_json::Value),
     /// Remove the acknowledged tamper events from the outbox (§10.2).
@@ -129,6 +136,37 @@ fn manifest_param(v: &serde_json::Value) -> Option<ia_core::playbook::PlaybookPa
     serde_json::from_value(v.clone()).ok()
 }
 
+/// The readable entries of a catalogue (`device.hello.ok.playbooks` or `device.playbooks`).
+pub fn manifest_entries(playbooks: &[serde_json::Value]) -> Vec<ia_core::playbook::ManifestEntry> {
+    playbooks.iter().filter_map(manifest_entry).collect()
+}
+
+/// Replaces the service's manifest (a hello or a `device.playbooks` push) and returns how many
+/// entries it now holds. The whole list is swapped, never merged: an entry the server dropped
+/// (deleted or disabled) must stop being runnable at once.
+pub fn replace_manifest(
+    slot: &std::sync::Mutex<Vec<ia_core::playbook::ManifestEntry>>,
+    entries: Vec<ia_core::playbook::ManifestEntry>,
+) -> usize {
+    let n = entries.len();
+    match slot.lock() {
+        Ok(mut c) => *c = entries,
+        // A poisoned lock still holds a usable value; the manifest must not go stale over it.
+        Err(poisoned) => *poisoned.into_inner() = entries,
+    }
+    n
+}
+
+#[cfg(not(target_os = "macos"))]
+fn playbooks_step(playbooks: &[serde_json::Value]) -> Step {
+    Step::Playbooks(manifest_entries(playbooks))
+}
+
+#[cfg(target_os = "macos")]
+fn playbooks_step(_playbooks: &[serde_json::Value]) -> Step {
+    Step::Ignore
+}
+
 /// Which server error codes mean "stop retrying with this identity" (§3.4: `device_disabled`
 /// pauses retries for an hour; `device_unauthenticated` means the server does not know this
 /// key, which a retry will not fix).
@@ -156,7 +194,7 @@ pub fn plan_for_frame(frame: DeviceServerMessage) -> Step {
             device_id,
             policy: Box::new(policy),
             queued,
-            playbooks: playbooks.iter().filter_map(manifest_entry).collect(),
+            playbooks: manifest_entries(&playbooks),
             rotation_armed: rotation_nonce.is_some(),
         },
         DeviceServerMessage::SessionOpen {
@@ -206,6 +244,7 @@ pub fn plan_for_frame(frame: DeviceServerMessage) -> Step {
             secrets: secrets.unwrap_or_default(),
         })),
         DeviceServerMessage::Policy { policy } => Step::Policy(Box::new(policy)),
+        DeviceServerMessage::Playbooks { playbooks } => playbooks_step(&playbooks),
         DeviceServerMessage::Receipt { receipt } => Step::Receipt(receipt),
         DeviceServerMessage::TamperOk { ids } => Step::TamperAcknowledged { ids },
         DeviceServerMessage::RotateOk { key_id } => Step::KeyRotated { key_id },
@@ -439,6 +478,84 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Rule 9.3 after connect: a playbook the org adds while the device is online arrives as
+    /// `device.playbooks`, the service swaps its manifest, and a queued run of it passes the
+    /// same check that refused it a moment earlier. One the push no longer lists stops passing.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_playbooks_push_replaces_the_manifest_so_a_playbook_added_after_connect_runs() {
+        use sha2::{Digest, Sha256};
+        let interpreter = if cfg!(windows) { "powershell" } else { "sh" };
+        let body = if cfg!(windows) {
+            "Get-Date\n"
+        } else {
+            "date\n"
+        };
+        let hash = hex::encode(Sha256::digest(body.as_bytes()));
+        let old_id = "3d1c7a2e-1f4b-4c7d-9e8a-6b5c4d3e2f10";
+        let new_id = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+        let entry = |id: &str| {
+            format!(
+                r#"{{"id":"{id}","name":"Clock","description":"","interpreter":"{interpreter}",
+                "requiresElevation":false,"parameters":[],"timeoutSec":60,"bodyHash":"{hash}"}}"#
+            )
+        };
+        // What the hello delivered: only the older playbook.
+        let Step::Ready { playbooks, .. } = plan(&format!(
+            r#"{{"t":"device.hello.ok","deviceId":"0b9f3c2e-7d41-4a8e-9c55-1f2e3d4c5b6a","orgDisplayName":"Acme",
+            "region":"in-mum","policy":{POLICY},"groupId":null,"queued":[],"playbooks":[{}],"rotationNonce":null}}"#,
+            entry(old_id)
+        )) else {
+            panic!("not ready")
+        };
+        let slot = std::sync::Mutex::new(Vec::new());
+        assert_eq!(replace_manifest(&slot, playbooks), 1);
+
+        let queued = |id: &str| {
+            ia_core::queue::playbook_action(&serde_json::json!({
+                "playbookId": id, "args": {}, "requiresElevation": false, "bodyHash": hash,
+                "body": body, "interpreter": interpreter, "timeoutSec": 60,
+            }))
+            .expect("a dispatched payload")
+        };
+        let check = |id: &str| {
+            let manifest = slot.lock().unwrap().clone();
+            ia_core::queue::check_queued_playbook(
+                &queued(id),
+                "run1",
+                &manifest,
+                ia_core::types::ElevationLevel::Admin,
+            )
+        };
+        assert_eq!(
+            check(new_id).unwrap_err(),
+            ia_core::playbook::PlaybookError::NotAllowed
+        );
+
+        // The catalogue changes while connected: the new one is added, the old one removed.
+        let step = plan(&format!(
+            r#"{{"t":"device.playbooks","playbooks":[{}]}}"#,
+            entry(new_id)
+        ));
+        let Step::Playbooks(entries) = step else {
+            panic!("{step:?}")
+        };
+        assert_eq!(replace_manifest(&slot, entries), 1);
+        assert!(check(new_id).is_ok(), "added after connect, runnable now");
+        assert_eq!(
+            check(old_id).unwrap_err(),
+            ia_core::playbook::PlaybookError::NotAllowed,
+            "a playbook the push no longer lists is refused at once"
+        );
+
+        // An emptied catalogue empties the manifest.
+        let Step::Playbooks(none) = plan(r#"{"t":"device.playbooks","playbooks":[]}"#) else {
+            panic!("not a playbooks push")
+        };
+        assert_eq!(replace_manifest(&slot, none), 0);
+        assert!(check(new_id).is_err());
     }
 
     #[test]
