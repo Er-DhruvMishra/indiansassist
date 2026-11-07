@@ -25,7 +25,7 @@
 
   <Package
     Name="IndiansAssist Agent$(var.NameSuffix)"
-    Manufacturer="IndiansAssist"
+    Manufacturer="IndiansAssist Project"
     Version="$(var.ProductVersion)"
     UpgradeCode="6F3B2A91-4C7E-4E0D-9B1A-2D5C8E7F6A43"
     Scope="perMachine"
@@ -33,7 +33,7 @@
     Compressed="yes"
     Language="1033">
 
-    <SummaryInformation Description="IndiansAssist Agent (installed service with unattended access)" Manufacturer="IndiansAssist" />
+    <SummaryInformation Description="IndiansAssist Agent (installed service with unattended access)" Manufacturer="IndiansAssist Project" />
 
     <!-- Upgrade (12.2): install the new version first, then remove the old one, so components
          shared by both (services, task, %ProgramData% identity) are never removed in between. -->

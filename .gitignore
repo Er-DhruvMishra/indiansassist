@@ -25,3 +25,27 @@ apps/extension/test/e2e/artifacts/
 
 # Rust agent (Phase C) build artefacts
 agent/target/
+
+# Signing material never enters the repository (docs/release.md section 4). The private keys live in
+# %USERPROFILE%\.indiansassist\signing\ and in the CI secrets; only site/keys/ holds public parts.
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.pvk
+*.snk
+*.key
+*.pem
+*-secret.asc
+*.rev
+*.kbx
+*.gpg
+secring.*
+pubring.*
+trustdb.*
+private-keys-v1.d/
+openpgp-revocs.d/
+keystore.properties
+pfx-password.txt
+gpg-passphrase.txt
+android-keystore-password.txt

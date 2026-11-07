@@ -8,6 +8,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext';
 import { can, type Capability } from '../auth/permissions';
 import { ShortcutHelp } from '../components/ShortcutHelp';
+import { SourceFooter } from '../components/SourceLink';
 import { Badge, Button, cx } from '../components/ui';
 import { APP_NAME } from '../config';
 import { fmtRoleName, regionLabel } from '../lib/format';
@@ -141,6 +142,10 @@ export function AppShell() {
         )}
         <Outlet />
       </main>
+      {/* AGPL-3.0-only section 13: the source offer for everyone using the console over the network. */}
+      <footer className="no-print mx-auto max-w-7xl px-4 pb-6">
+        <SourceFooter />
+      </footer>
       <KnockToasts />
       </div>
     </AssistSignalProvider>

@@ -5,3 +5,8 @@ local.properties
 .idea/
 *.iml
 captures/
+# Release signing material (docs/release.md section 4.5): never committed
+keystore.properties
+*.jks
+*.keystore
+*.p12

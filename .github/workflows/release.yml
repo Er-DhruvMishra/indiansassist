@@ -1,0 +1,307 @@
+# Release: on a v* tag, build the Windows and Linux agents from the tagged public source, sign them through the signing
+# seam (packaging/sign), and attach everything with SHA256SUMS and its signature to a GitHub Release
+# (docs/release.md section 4.8).
+#
+# Every job that touches a signing key runs in the `release-signing` environment. Configure that environment with
+# required reviewers (Settings > Environments), so every release waits for a person's approval before any key is
+# used: SignPath requires a manual approval for each release, and the interim keys get the same rule.
+#
+# Signing providers (repository variable IA_SIGNING_PROVIDER):
+#   selfsigned (default)  the interim keys from the secrets IA_SIGN_PFX_BASE64, IA_SIGN_PFX_PASSWORD (Windows) and
+#                         IA_GPG_PRIVATE_KEY, IA_GPG_PASSPHRASE (Linux).
+#   signpath              Windows files go to SignPath (signpath/github-action-submit-signing-request) in two rounds:
+#                         the PE payload before it is packed into the MSI, then the MSI. Needs the secret
+#                         SIGNPATH_API_TOKEN and the variables SIGNPATH_CONNECTOR_URL, SIGNPATH_ORGANIZATION_ID,
+#                         SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG. Linux keeps the OpenPGP key
+#                         (IA_SIGNING_PROVIDER_LINUX stays selfsigned). STUB until the SignPath project exists: check
+#                         the step inputs against the action's README at the switch-over (docs/release.md 4.7).
+#
+# Every action is pinned to a full commit SHA with its version in the comment; only GitHub's own actions and
+# SignPath's own action are used.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IA_SIGNING_PROVIDER: ${{ vars.IA_SIGNING_PROVIDER || 'selfsigned' }}
+  IA_SIGNING_PROVIDER_LINUX: selfsigned
+  IA_TOKEN_PUBKEYS: ${{ vars.IA_TOKEN_PUBKEYS }}
+  IA_API_ORIGIN: ${{ vars.IA_API_ORIGIN }}
+  IA_REQUIRE_VERSIONINFO: '1'
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows (portable agent and MSI, x64)
+    runs-on: windows-latest
+    environment: release-signing
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read # SignPath reads the uploaded artifact through GITHUB_TOKEN
+    env:
+      # The Authenticode subject compiled into the agents (docs/release.md section 1.3).
+      IA_EXPECTED_SIGNER: ${{ vars.IA_EXPECTED_SIGNER || 'IndiansAssist (self-signed)' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Version from the tag must match agent/Cargo.toml
+        shell: bash
+        run: |
+          v="$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' agent/Cargo.toml)"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match workspace version $v"; exit 1; }
+          echo "IA_RELEASE_VERSION=$v" >> "$GITHUB_ENV"
+      - name: Toolchain and WiX v5 (build tools only)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          dotnet tool install --global wix --version 5.0.2
+      - name: Release build (ia-agent, ia-service, ia-watchdog, ia-desktop)
+        working-directory: agent
+        run: >
+          cargo build --release --locked --target x86_64-pc-windows-msvc
+          -p ia-agent -p ia-service -p ia-watchdog -p ia-desktop
+          --features ia-service/service,ia-watchdog/service
+
+      # --- the interim self-signed certificate -------------------------------------------------------------------
+      - name: Load the signing certificate (selfsigned)
+        if: env.IA_SIGNING_PROVIDER == 'selfsigned'
+        shell: pwsh
+        env:
+          IA_SIGN_PFX_BASE64: ${{ secrets.IA_SIGN_PFX_BASE64 }}
+        run: |
+          if (-not $env:IA_SIGN_PFX_BASE64) { throw 'the secret IA_SIGN_PFX_BASE64 is not set' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'ia-sign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:IA_SIGN_PFX_BASE64))
+          "IA_SIGN_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # --- SignPath, round 1: the PE payload (STUB, see the header) -----------------------------------------------
+      - name: Collect the PE payload for SignPath
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        shell: bash
+        run: |
+          mkdir -p signpath-in
+          cp agent/target/x86_64-pc-windows-msvc/release/{IndiansAssist,ia-service,ia-desktop,ia-watchdog}.exe signpath-in/
+      - name: Upload the unsigned payload
+        id: payload
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-payload-unsigned
+          path: signpath-in/
+          if-no-files-found: error
+      - name: SignPath (payload)
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          connector-url: ${{ vars.SIGNPATH_CONNECTOR_URL }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: payload
+          github-artifact-id: ${{ steps.payload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signpath-out
+      - name: Put the SignPath-signed payload in place
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        shell: bash
+        run: cp signpath-out/*.exe agent/target/x86_64-pc-windows-msvc/release/
+
+      # --- the portable agent and the MSI through the seam ---------------------------------------------------------
+      - name: Portable agent into the dist dir (signed by the seam)
+        env:
+          IA_SIGN_PFX_PASSWORD: ${{ secrets.IA_SIGN_PFX_PASSWORD }}
+        run: >
+          node scripts/agent-release-windows.mjs --arch x64 --dist dist/agent
+          --exe agent/target/x86_64-pc-windows-msvc/release/IndiansAssist.exe --require-signed
+      - name: MSI (payload signed before packing; the MSI signed after ICE validation)
+        env:
+          IA_SIGN_PFX_PASSWORD: ${{ secrets.IA_SIGN_PFX_PASSWORD }}
+        run: node packaging/windows/build.mjs --arch x64
+
+      # --- SignPath, round 2: the MSI (STUB) -----------------------------------------------------------------------
+      - name: Upload the unsigned MSI
+        id: msi
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-msi-unsigned
+          path: packaging/windows/out/dist/*.msi
+          if-no-files-found: error
+      - name: SignPath (MSI)
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          connector-url: ${{ vars.SIGNPATH_CONNECTOR_URL }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: msi
+          github-artifact-id: ${{ steps.msi.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: packaging/windows/out/dist
+      - name: Re-hash the MSI row after SignPath
+        if: env.IA_SIGNING_PROVIDER == 'signpath'
+        run: node packaging/sign/rehash.mjs packaging/windows/out/dist --mark-signed
+
+      - name: Verify (signature, timestamp, metadata)
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem dist/agent/*.exe) + @(Get-ChildItem packaging/windows/out/dist/*.msi)
+          node packaging/sign/sign-windows.mjs --verify-only @($files.FullName)
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Remove the certificate file
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP 'ia-sign.pfx')
+      - name: Collect the Windows release files
+        shell: bash
+        run: |
+          mkdir -p release-windows
+          cp dist/agent/IndiansAssist-windows-*.exe release-windows/
+          cp packaging/windows/out/dist/*.msi release-windows/
+          cp packaging/windows/out/dist/manifest.json release-windows/installer-manifest-windows.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows
+          path: release-windows/
+          if-no-files-found: error
+
+  linux:
+    name: Linux (deb, rpm and the portable pair, x86_64)
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Version from the tag must match agent/Cargo.toml
+        run: |
+          v="$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' agent/Cargo.toml)"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match workspace version $v"; exit 1; }
+      - name: System packages (Phase F sections 8.9, 8.12 and 9.6)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libx11-dev libxext-dev libxtst-dev libxrandr-dev libxfixes-dev \
+            rpm ansible-core ansible-lint gnupg
+      # The contract's versions: Zig 0.15.2 (sha256 from ziglang.org/download/index.json), cargo-zigbuild 0.24.0,
+      # cargo-deb 3.8.0, cargo-generate-rpm 0.21.1.
+      - name: Build tools at the contract's versions
+        run: |
+          rustup toolchain install stable --profile minimal
+          curl -fsSLo "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          echo "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/.local/zig"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$HOME/.local/zig" --strip-components=1
+          cargo install cargo-zigbuild --version 0.24.0 --locked
+          cargo install cargo-deb --version 3.8.0 --locked
+          cargo install cargo-generate-rpm --version 0.21.1 --locked
+      - name: Load the OpenPGP key into a temporary GNUPGHOME
+        env:
+          IA_GPG_PRIVATE_KEY: ${{ secrets.IA_GPG_PRIVATE_KEY }}
+          IA_GPG_PASSPHRASE: ${{ secrets.IA_GPG_PASSPHRASE }}
+        run: |
+          [ -n "$IA_GPG_PRIVATE_KEY" ] || { echo "the secret IA_GPG_PRIVATE_KEY is not set"; exit 1; }
+          home="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$home"
+          umask 077
+          printf '%s' "$IA_GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass"
+          printf '%s\n' "$IA_GPG_PRIVATE_KEY" | gpg --homedir "$home" --batch --pinentry-mode loopback \
+            --passphrase-file "$RUNNER_TEMP/gpg-pass" --import
+          echo "IA_GPG_HOME=$home" >> "$GITHUB_ENV"
+          echo "IA_GPG_PASSPHRASE_FILE=$RUNNER_TEMP/gpg-pass" >> "$GITHUB_ENV"
+      - name: deb and rpm (signed by the seam before hashing)
+        run: node packaging/linux/build.mjs
+      - name: The portable pair (signed by the seam)
+        run: node packaging/linux/agent-release.mjs --dist dist/agent
+      - name: Verify (temporary keyrings, rpm -K, sha256sum -c)
+        run: |
+          v="$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' agent/Cargo.toml)"
+          bash packaging/sign/verify-linux.sh packaging/linux/out/dist site/keys/indiansassist-release-signing.asc \
+            "IndiansAssist-Agent-$v-linux-x64.deb" "IndiansAssist-Agent-$v-linux-x64.rpm"
+          bash packaging/sign/verify-linux.sh packaging/linux/out/agent site/keys/indiansassist-release-signing.asc \
+            "IndiansAssist-linux-x64-$v" "IndiansAssist-linux-portal-x64-$v"
+      - name: Remove the key material
+        if: always()
+        run: |
+          gpgconf --homedir "$RUNNER_TEMP/gnupg" --kill gpg-agent || true
+          rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/gpg-pass"
+      - name: Collect the Linux release files
+        run: |
+          mkdir -p release-linux
+          cp packaging/linux/out/dist/*.deb packaging/linux/out/dist/*.rpm packaging/linux/out/dist/*.deb.asc \
+            packaging/linux/out/dist/*.rpm.asc release-linux/
+          cp packaging/linux/out/dist/manifest.json release-linux/installer-manifest-linux.json
+          cp dist/agent/IndiansAssist-linux-* release-linux/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux
+          path: release-linux/
+          if-no-files-found: error
+
+  publish:
+    name: GitHub Release
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the release and upload its assets
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: SHA256SUMS over every release file, signed with the OpenPGP key
+        env:
+          IA_GPG_PRIVATE_KEY: ${{ secrets.IA_GPG_PRIVATE_KEY }}
+          IA_GPG_PASSPHRASE: ${{ secrets.IA_GPG_PASSPHRASE }}
+        run: |
+          home="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$home"
+          umask 077
+          printf '%s' "$IA_GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass"
+          printf '%s\n' "$IA_GPG_PRIVATE_KEY" | gpg --homedir "$home" --batch --pinentry-mode loopback \
+            --passphrase-file "$RUNNER_TEMP/gpg-pass" --import
+          cp site/keys/indiansassist-release-signing.asc site/keys/indiansassist-windows-selfsigned.cer release/
+          (cd release && find . -maxdepth 1 -type f ! -name 'SHA256SUMS*' ! -name '*.asc' -printf '%f\n' | sort \
+            | xargs sha256sum > SHA256SUMS)
+          gpg --homedir "$home" --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/gpg-pass" \
+            --armor --detach-sign --output release/SHA256SUMS.asc release/SHA256SUMS
+          gpgconf --homedir "$home" --kill gpg-agent || true
+          rm -rf "$home" "$RUNNER_TEMP/gpg-pass"
+          (cd release && sha256sum -c SHA256SUMS)
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "IndiansAssist $GITHUB_REF_NAME" \
+            --notes "Signed with the interim keys (docs/release.md section 4). Verify: site/keys/README.md."

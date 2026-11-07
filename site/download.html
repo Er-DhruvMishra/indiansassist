@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download IndiansAssist</title>
+  <meta name="description" content="Download the IndiansAssist agents and apps for Windows, Linux, macOS, Android, iOS and the browser, and verify their checksums and signatures.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Ctext x='16' y='22' font-family='Arial,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3EIA%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">IA</span>IndiansAssist</a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="download.html" aria-current="page">Download</a></li>
+        <li><a href="code-signing.html">Code signing</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="license.html">Licence</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+<h1>Download</h1>
+<p class="lead">IndiansAssist connects a technician (the Assist console, in a browser) with the computer or phone being
+  helped (the Desk). The Desk can join from a browser with nothing installed; the agents and apps below add remote
+  control, unattended access to managed devices and mobile screen sharing.</p>
+
+<div class="note">
+  <p><strong>Getting help from a technician?</strong> You usually do not need this page. Open the link or code your
+    technician gave you; the join page of your organisation's IndiansAssist server offers the right file for your
+    device, and it only works with that server.</p>
+</div>
+
+<p>All files are published on <a href="https://github.com/Er-DhruvMishra/indiansassist/releases">GitHub Releases</a>,
+  built by GitHub Actions from the <a href="https://github.com/Er-DhruvMishra/indiansassist">public source</a>, together
+  with a <code>SHA256SUMS</code> file. Self-hosting operators publish the same files on their own server (see
+  <code>docs/release.md</code> in the repository).</p>
+
+<h2 id="platforms">Platforms</h2>
+<div class="table-wrap">
+<table>
+  <caption class="sr-only">Downloads by platform</caption>
+  <thead>
+    <tr><th scope="col">Platform</th><th scope="col">File</th><th scope="col">What it does</th><th scope="col">Signed today</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th scope="row">Windows: portable agent</th>
+      <td><code>IndiansAssist-windows-x64-&lt;version&gt;.exe</code> (also <code>arm64</code>)</td>
+      <td>One attended session, no installation. The person being helped runs it, sees the consent screen with a
+        verification code, and the technician can view and, if allowed, control the screen, chat, transfer files and run
+        approved playbooks. Removes itself after the session.</td>
+      <td>Self-signed Authenticode certificate</td>
+    </tr>
+    <tr>
+      <th scope="row">Windows: installer</th>
+      <td><code>IndiansAssist-Agent-&lt;version&gt;-windows-x64.msi</code></td>
+      <td>Installs the agent as a Windows service for a managed device: unattended access under the organisation's
+        policy, consent receipts, remote wake. For IT teams; deployable silently.</td>
+      <td>Self-signed Authenticode certificate</td>
+    </tr>
+    <tr>
+      <th scope="row">Linux: installed agent</th>
+      <td><code>IndiansAssist-Agent-&lt;version&gt;-linux-x64.deb</code> and <code>.rpm</code></td>
+      <td>A systemd service for managed Linux devices (Debian, Ubuntu, Fedora, RHEL and similar), the Linux
+        counterpart of the Windows installer.</td>
+      <td>GPG (detached <code>.asc</code>; the <code>.rpm</code> also carries an embedded signature)</td>
+    </tr>
+    <tr>
+      <th scope="row">Linux: portable pair</th>
+      <td><code>IndiansAssist-linux-x64-&lt;version&gt;</code> with <code>IndiansAssist-linux-portal-x64-&lt;version&gt;</code></td>
+      <td>One download for attended sessions on both X11 and Wayland desktops: the X11 agent, and the companion it hands
+        over to on Wayland, which shares the screen through the desktop's screen-sharing portal.</td>
+      <td>GPG (detached <code>.asc</code>)</td>
+    </tr>
+    <tr>
+      <th scope="row">macOS</th>
+      <td><code>IndiansAssist-Agent-&lt;version&gt;-macos-arm64.pkg</code> and <code>IndiansAssist-macos-arm64-&lt;version&gt;.app.zip</code></td>
+      <td>The installer adds the agent for managed Macs (unattended access, with an MDM profile for administrators);
+        the app is the portable agent for one attended session. Apple silicon.</td>
+      <td>Ad hoc signature only, not notarized (see below)</td>
+    </tr>
+    <tr>
+      <th scope="row">Android</th>
+      <td><code>IndiansAssist-android-universal-&lt;version&gt;.apk</code></td>
+      <td>Shares the phone's screen with a technician after consent. Its
+        <strong>Give help</strong> button opens the technician console in a phone-friendly layout.</td>
+      <td>The project's own Android signing key (Android requires one)</td>
+    </tr>
+    <tr>
+      <th scope="row">Browser extension</th>
+      <td>Chrome and Edge (Manifest V3)</td>
+      <td>A light way to get help with one web app: shares only the browser tabs you choose, as a live page mirror, with
+        sensitive fields masked. Not yet in the Chrome Web Store or Edge Add-ons; until then, build it from source and
+        load it unpacked (<code>apps/extension/README.md</code>).</td>
+      <td>Not applicable (stores sign what they distribute)</td>
+    </tr>
+    <tr>
+      <th scope="row">iOS and iPadOS</th>
+      <td>App</td>
+      <td>Shares the iPhone or iPad screen with a technician through a screen broadcast, after consent. Not yet in the
+        App Store; build it from source in Xcode (<code>apps/ios/README.md</code>).</td>
+      <td>Not applicable (Apple signs App Store apps)</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="code-signing">Code signing policy</h2>
+<div class="signpath">
+  <p>Free code signing provided by <a href="https://about.signpath.io">SignPath.io</a>, certificate by
+    <a href="https://signpath.org">SignPath Foundation</a>.</p>
+  <p class="note"><strong>Current status:</strong> the SignPath Foundation certificate has not been granted yet.
+    Releases are currently signed with the project's own self-signed certificate (Windows) and GPG key (Linux). The
+    SignPath arrangement applies once the project is approved. Because the Windows certificate is self-signed,
+    Windows SmartScreen and the UAC prompt show an unknown publisher until then.</p>
+  <p>macOS, iOS and Android builds are outside SignPath's scope. The macOS files are signed ad hoc only until the
+    project has an Apple Developer ID; then they will be signed and notarized. Until then macOS asks you to allow the
+    app in System Settings, Privacy &amp; Security.</p>
+  <p>The full <a href="code-signing.html">code signing policy</a> lists the team roles and the manual approval of every
+    release.</p>
+</div>
+
+<h2 id="verify">Verify a download</h2>
+<p>The public keys are published under <code>/keys/</code> on this site and in the repository under
+  <code>site/keys/</code>:</p>
+<ul>
+  <li><a href="keys/indiansassist-windows-selfsigned.cer"><code>indiansassist-windows-selfsigned.cer</code></a>: the
+    Windows code signing certificate (self-signed, interim).</li>
+  <li><a href="keys/indiansassist-release-signing.asc"><code>indiansassist-release-signing.asc</code></a>: the OpenPGP
+    key that signs the Linux files and <code>SHA256SUMS</code>.</li>
+</ul>
+<p>Fetch each key from both places and check that they are the same file.</p>
+
+<h3>Checksums (every platform)</h3>
+<pre><code># Linux and macOS
+sha256sum -c SHA256SUMS --ignore-missing      # macOS: shasum -a 256 -c SHA256SUMS --ignore-missing
+
+# Windows PowerShell: compare with the line for the file in SHA256SUMS
+(Get-FileHash .\IndiansAssist-windows-x64-&lt;version&gt;.exe -Algorithm SHA256).Hash</code></pre>
+
+<h3>Windows signature</h3>
+<pre><code>$sig  = Get-AuthenticodeSignature .\IndiansAssist-Agent-&lt;version&gt;-windows-x64.msi
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 .\indiansassist-windows-selfsigned.cer
+$sig.SignerCertificate.Thumbprint -eq $cert.Thumbprint    # True
+$sig.TimeStamperCertificate -ne $null                     # True: timestamped</code></pre>
+<p>While the certificate is self-signed, the signature status is <code>UnknownError</code> (untrusted root). That is
+  expected; you do not need to install the certificate anywhere.</p>
+
+<h3>Linux signatures</h3>
+<pre><code>gpg --import indiansassist-release-signing.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS
+gpg --verify IndiansAssist-Agent-&lt;version&gt;-linux-x64.deb.asc IndiansAssist-Agent-&lt;version&gt;-linux-x64.deb
+sudo rpm --import indiansassist-release-signing.asc
+rpm -K IndiansAssist-Agent-&lt;version&gt;-linux-x64.rpm</code></pre>
+
+<h2 id="build">Build it yourself</h2>
+<p>Every file can be built from the source; the steps are in the repository's <code>README.md</code> and
+  <code>docs/release.md</code>.</p>
+    </div>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <ul aria-label="Policies and source">
+        <li><a href="code-signing.html">Code signing policy</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        <li><a href="license.html">Licence</a></li>
+      </ul>
+      <p>IndiansAssist is free software under the GNU Affero General Public License, version 3 only. Copyright (C) 2026 Dhruv Mishra.</p>
+    </div>
+  </footer>
+</body>
+</html>

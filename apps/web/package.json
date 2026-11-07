@@ -1,6 +1,7 @@
 {
   "name": "@indiansassist/web",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "IndiansAssist web app: Assist technician console and Desk web room (Package 1), Vite + React 18 + Tailwind.",
   "type": "module",

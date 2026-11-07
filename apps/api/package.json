@@ -1,6 +1,7 @@
 {
   "name": "@indiansassist/api",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "IndiansAssist REST API and WebSocket signaling server (Fastify 5 + ws), contracts docs/specs/phase-a-contracts.md sections 6, 7, 9, 10, 11.",
   "type": "module",

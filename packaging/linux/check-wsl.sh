@@ -90,7 +90,9 @@ done
 
 echo "== rpm: $(basename "$rpmf")"
 mkdir -p "$T/rpmdb"
-R=(rpm --dbpath "$T/rpmdb")
+# --nosignature: a signed rpm (packaging/sign) would otherwise print a NOKEY warning into every query output, because
+# this empty temporary database holds no key; the signature itself is checked by packaging/sign/verify-linux.sh.
+R=(rpm --dbpath "$T/rpmdb" --nosignature)
 "${R[@]}" -qpi "$rpmf" >"$T/rpm-info.txt" 2>&1
 "${R[@]}" -qpl "$rpmf" >"$T/rpm-list.txt" 2>&1
 "${R[@]}" -qp --scripts "$rpmf" >"$T/rpm-scripts.txt" 2>&1

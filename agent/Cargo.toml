@@ -34,7 +34,7 @@ members = [
 version = "0.3.0"
 edition = "2021"
 rust-version = "1.99"
-license = "SEE docs/LICENSE-REGISTER.md"
+license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]

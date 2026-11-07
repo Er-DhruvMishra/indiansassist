@@ -2,6 +2,7 @@
   "name": "indiansassist",
   "private": true,
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=22"
@@ -39,6 +40,8 @@
     "packaging:msi:placeholder": "node packaging/windows/build.mjs --placeholder",
     "linux:pkg": "node packaging/linux/build.mjs",
     "agent:release:linux": "node packaging/linux/agent-release.mjs",
+    "agent:release:windows": "node scripts/agent-release-windows.mjs",
+    "sign:windows": "node packaging/sign/sign-windows.mjs",
     "linux:throwaway": "powershell -NoProfile -ExecutionPolicy Bypass -File agent/scripts/throwaway-wsl.ps1",
     "packaging:test": "node --test packaging/windows/tools/enroll-config.test.mjs && cargo test --manifest-path packaging/windows/ca/Cargo.toml --locked",
     "test:scripts": "vitest run --config scripts/vitest.config.mjs",

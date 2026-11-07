@@ -1,6 +1,7 @@
 {
   "name": "@indiansassist/extension",
   "version": "0.2.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "IndiansAssist Package 2: Chrome MV3 extension on the Desk (DOM mirroring with rrweb, browser-scoped control, side panel).",
   "type": "module",

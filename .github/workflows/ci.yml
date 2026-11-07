@@ -1,0 +1,98 @@
+# Continuous integration: every push and pull request builds and tests the public source (docs/release.md
+# section 4.8). Every action is pinned to a full commit SHA (the version is in the comment); only GitHub's own
+# actions are used; the token can only read the repository.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node (build, typecheck, lint, test, test:scripts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Enable pnpm (the packageManager pin in package.json, through corepack)
+        run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm test:scripts
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml says stable with rustfmt and clippy)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup show active-toolchain
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('agent/Cargo.lock', 'packaging/windows/ca/Cargo.lock') }}
+      - name: Linux build packages (the X11 headers of Phase E section 7.1, Xvfb for the X11 suites)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config xvfb xdotool \
+            libx11-dev libxext-dev libxtst-dev libxrandr-dev libxfixes-dev
+      - name: rustfmt
+        shell: bash
+        working-directory: agent
+        run: cargo fmt --all --check
+      - name: clippy and tests (Windows, --all-features)
+        if: runner.os == 'Windows'
+        working-directory: agent
+        run: |
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+      - name: custom-action DLL tests (packaging:test)
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path packaging/windows/ca/Cargo.toml --locked
+      - name: clippy and tests (Linux, the FEATS of agent/scripts/linux-env.sh)
+        if: runner.os == 'Linux'
+        working-directory: agent
+        shell: bash
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/ia-agent-target"
+          source scripts/linux-env.sh
+          cargo clippy --workspace --exclude ia-desktop --exclude ia-service --all-targets --no-default-features \
+            --features "$FEATS" --locked -- -D warnings
+          T="$(mktemp -d)"; mkdir -p "$T/data" "$T/config" "$T/state" "$T/runtime"; chmod 0700 "$T/runtime"
+          env -u WAYLAND_DISPLAY -u DISPLAY XDG_DATA_HOME="$T/data" XDG_CONFIG_HOME="$T/config" \
+            XDG_STATE_HOME="$T/state" XDG_RUNTIME_DIR="$T/runtime" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$T/no-session-bus" \
+            cargo test --workspace --exclude ia-desktop --exclude ia-service --no-default-features \
+            --features "$FEATS" --locked

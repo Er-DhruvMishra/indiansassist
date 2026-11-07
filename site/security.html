@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security: IndiansAssist</title>
+  <meta name="description" content="How to report a security vulnerability in IndiansAssist privately.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Ctext x='16' y='22' font-family='Arial,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3EIA%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">IA</span>IndiansAssist</a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="code-signing.html">Code signing</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html" aria-current="page">Security</a></li>
+        <li><a href="license.html">Licence</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+<h1>Security</h1>
+<div class="prose">
+<p>IndiansAssist gives people remote access to computers, so security reports are taken seriously and handled first.</p>
+<h2 id="reporting-a-vulnerability">Reporting a vulnerability</h2>
+<p><strong>Please do not report security problems in public issues, discussions or pull requests.</strong></p>
+<p>Report them privately through GitHub's private vulnerability reporting:</p>
+<ol><li>Open <a href="https://github.com/Er-DhruvMishra/indiansassist/security/advisories/new">https://github.com/Er-DhruvMishra/indiansassist/security/advisories/new</a> (or the repository's <strong>Security</strong> tab, then <strong>Report a vulnerability</strong>).</li><li>Describe the problem, the affected component (web app, api, recorder, an agent, an app, the extension, the installers or the release signing) and version, and the steps to reproduce it. A proof of concept helps.</li></ol>
+<p>Only the maintainers can see the report. There is no security email address; private vulnerability reporting is the only private channel.</p>
+<h2 id="what-to-expect">What to expect</h2>
+<ul><li>An acknowledgement within 7 days.</li><li>An assessment and, for a confirmed problem, a plan for the fix within 30 days. Fixes for problems that let someone watch or control a device without consent, bypass sign-in, or tamper with the audit chain or a release signature come first.</li><li>A GitHub security advisory and a fixed release once the fix is out, crediting you unless you prefer otherwise.</li></ul>
+<p>Please give the project a reasonable time to fix the problem before you disclose it, and do not access data that is not yours, disrupt services, or test against servers you do not run. Testing against your own self-hosted instance is welcome.</p>
+<h2 id="supported-versions">Supported versions</h2>
+<p>Security fixes go into the latest release. Operators of self-hosted servers should keep their server, agents and apps on the latest release.</p>
+<h2 id="scope">Scope</h2>
+<p>In scope: the code in this repository and the files published on its <a href="https://github.com/Er-DhruvMishra/indiansassist/releases">GitHub Releases</a>, including their signatures (see <a href="code-signing.html">the code signing policy</a>). Out of scope: how a particular operator configures and runs their own server (report those to the operator), and third-party services (report those to their owners).</p>
+</div>
+<p class="note">This page has the same content as <a href="https://github.com/Er-DhruvMishra/indiansassist/blob/master/SECURITY.md"><code>SECURITY.md</code></a> in the repository; its history shows every change.</p>
+    </div>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <ul aria-label="Policies and source">
+        <li><a href="code-signing.html">Code signing policy</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        <li><a href="license.html">Licence</a></li>
+      </ul>
+      <p>IndiansAssist is free software under the GNU Affero General Public License, version 3 only. Copyright (C) 2026 Dhruv Mishra.</p>
+    </div>
+  </footer>
+</body>
+</html>

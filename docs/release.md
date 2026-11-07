@@ -73,7 +73,10 @@ shcore, propsys, …`) must be reached only through `ia_platform::sys_lib` late 
 
 ### 1.3 Authenticode signing (section 2.6)
 
-Sign each release exe with **Authenticode SHA-256 and an RFC-3161 timestamp**, using one of:
+Sign each release exe with **Authenticode SHA-256 and an RFC-3161 timestamp**. **Today** this is the interim
+self-signed certificate through the signing seam (section 4): `pnpm agent:release:windows` copies, signs and
+publishes the exe. The SignPath Foundation certificate replaces it (section 4.7). Earlier plans named these
+alternatives:
 
 - **Azure Trusted Signing** via `AzureSignTool` (MIT), or
 - an **EV code-signing certificate on an HSM** via `signtool.exe`.
@@ -106,6 +109,10 @@ installed agent (Program Files, a service) removes this class of risk.
 ### 1.4 Publishing into the download flow (section 2.2)
 
 After signing:
+
+For the Windows exe, steps 1 and 2 are one command: `pnpm agent:release:windows [--exe <IndiansAssist.exe>] [--arch
+x64] [--dist <AGENT_DIST_DIR>]`. It copies, signs (section 4), records the file in `manifest.signed.json` and runs
+`pnpm agent:manifest`.
 
 1. Lay the signed files out under `AGENT_DIST_DIR` with their canonical names:
    `IndiansAssist-windows-x64-<version>.exe`, `IndiansAssist-windows-arm64-<version>.exe`,
@@ -149,7 +156,10 @@ CI order (the install manifest and the MSI must cover **signed** bytes):
    seams, renamed) and `ia-watchdog`, on both `-msvc` triples. Run the section 1.2 import-table and size gates on each exe.
    C section 10 self-delete is disabled in the P4 build.
 2. Authenticode SHA-256 + timestamp on all three exes, with the same identity as section 1.3 (`IA_EXPECTED_SIGNER`
-   compiled in).
+   compiled in). **As built:** `packaging/windows/build.mjs` does this itself through the signing seam (section 4)
+   when `IA_SIGN_PFX` is set. It signs the **staged copies** of the three exes and of the custom-action DLL before
+   it writes the install manifest and runs WiX, then signs the MSI after ICE validation. Steps 2 to 4 are then one
+   command.
 3. Build the MSI from the signed exes:
    `node packaging/windows/build.mjs --arch <x64|arm64> --service <ia-service.exe> --desktop <ia-desktop.exe> --watchdog <ia-watchdog.exe>`
    (`pnpm packaging:msi` finds them under `agent/target/<triple>/release/` by default). The script:
@@ -161,7 +171,9 @@ CI order (the install manifest and the MSI must cover **signed** bytes):
    `signtool verify /pa` it. Publish the MSI to `AGENT_MSI_DIST_DIR` on the region's api nodes with a `manifest.json`
    beside it: `{ "v": 1, "builds": [{ "arch": "x64", "version": "<v>", "size": <bytes>, "sha256": "<hex>", "signed": true,
    "minOs": "10.0.17763" }] }` (one row per arch; `platform` and `format` default to `windows` and `msi`). Take the size
-   and sha256 of the **signed** MSI: the sha256 in `packaging/windows/out/<arch>/build-info.json` is from before signing.
+   and sha256 of the **signed** MSI. **As built**, the build does this itself: `packaging/windows/out/dist/` holds the
+   signed MSI and that `manifest.json`, with one row per arch, merged. Copy the folder to `AGENT_MSI_DIST_DIR`.
+   `build-info.json` records the sha256 after signing and `signed`.
    From there the tokens page serves the branded download (section 13.4).
 5. The org transform is created per enrollment config: by the api for the tokens page, or by an admin with
    `packaging/windows/tools/New-EnrollTransform.ps1`. It is not signed. It only sets Property rows (`IA_ENROLL`,
@@ -198,8 +210,11 @@ One-time setup in the WSL build distro (user-level, the operator runs these once
 2. The result is in `packaging/linux/out/dist/`: `IndiansAssist-Agent-<v>-linux-x64.deb` and `.rpm`, a `.sha256` file for
    each, and `manifest.json` (one row per package, `platform: 'linux'`, `signed: false`). `out/build-info.json` records
    the elf-check results.
-3. The packages are **not signed** (W111). Their sha256 is the check: it is in `manifest.json`, shown by the console's
-   enroll dialog, and published in the `.sha256` files (`sha256sum -c`).
+3. **Signed with the interim OpenPGP key** when `IA_GPG_HOME` is set (section 4; this supersedes W111's "unsigned").
+   The rpm carries an embedded signature (`rpm -K`). Each package gets a detached `<package>.asc`. The dist folder
+   gets `SHA256SUMS` and `SHA256SUMS.asc`. The rows say `signed: true`. Without a key the packages stay unsigned and
+   the rows say `signed: false`. Either way the sha256 is still the check: it is in `manifest.json`, shown by the
+   console's enroll dialog, and published in the `.sha256` files (`sha256sum -c`).
 4. Copy everything in `packaging/linux/out/dist/` to `AGENT_MSI_DIST_DIR/linux/` on every api node of the region, then
    reload the api (`SIGHUP` or restart). The console's **Linux** tab then offers both packages.
 5. Supported: x86-64 with glibc 2.34 or later, so **Ubuntu 22.04 or later, Debian 12, EL 9 (RHEL, Rocky, Alma) and
@@ -239,7 +254,10 @@ One-time setup in the WSL build distro: Zig and cargo-zigbuild as in section 1.7
       replaces the Linux row of its `manifest.json` with one row carrying `companion: { sha256, size }`. Rows of other
       platforms are kept; `pnpm agent:manifest` keeps this row too.
    `packaging/linux/out/agent-release-info.json` records both elf-check results.
-2. Both files are **not signed**; the join page prints the X11 agent's sha256 and the companion's on a second line.
+2. With `IA_GPG_HOME` set, both files get a detached `<file>.asc` (copied into the dist dir beside them), and the stage
+   `packaging/linux/out/agent/` gets a signed `SHA256SUMS`. The Linux row then says `signed: true` (section 4).
+   Without a key they stay unsigned. The join page prints the X11 agent's sha256 and the companion's on a second
+   line either way. `--skip-build` gates, signs and publishes the pair already in the stage.
 3. Copy the dist directory to every api node of the region and reload the api. If the companion file is missing or does
    not match its row, the api serves the X11 agent alone and logs why.
 4. What a Desk needs: x86-64 with glibc 2.34 or later. On X11 nothing more. On Wayland, for screen sharing:
@@ -378,3 +396,224 @@ exist, otherwise `signed: false`.
 
 **Server:** build reproducible images → SBOM + `SHA256SUMS` → `cosign` sign → run the section 2.3 gates →
 publish digests + signatures → self-hoster `cosign verify` and pins `IA_VERSION`.
+
+**Signing (section 4):** set `IA_SIGN_PFX` + `IA_SIGN_PFX_PASSWORD_FILE` (Windows) and `IA_GPG_HOME` +
+`IA_GPG_PASSPHRASE_FILE` (Linux) before the commands above → each script signs before it hashes → check with
+`signtool verify /pa /v`, `Get-AuthenticodeSignature`, `packaging/sign/verify-linux.sh`. In CI: push a `v*` tag →
+approve the `release-signing` environment → the GitHub Release has every file, `SHA256SUMS` and `SHA256SUMS.asc`.
+
+---
+
+## 4. Interim signing (self-signed and free keys) and verifiable CI
+
+The project signs every artefact it builds **now** with keys it made itself, until the SignPath Foundation
+certificate arrives. The signing is a seam (`packaging/sign/`): one switch moves Windows to SignPath (section 4.7).
+
+### 4.1 What is signed, and how
+
+| Artefact | Signature | Verified with |
+|---|---|---|
+| Portable Windows agent `IndiansAssist-windows-<arch>-<v>.exe` | Authenticode SHA-256, RFC 3161 timestamp (`http://timestamp.digicert.com`, free) | `signtool verify /pa /v`, `Get-AuthenticodeSignature` |
+| MSI payload: `ia-service.exe`, `ia-desktop.exe`, `ia-watchdog.exe`, the custom-action DLL | the same, signed as staged copies **before** the install manifest hashes them and WiX packs them | the same |
+| MSI `IndiansAssist-Agent-<v>-windows-<arch>.msi` | the same, after ICE validation | the same |
+| deb | detached `<file>.asc` (OpenPGP, armored) | `gpg --verify` |
+| rpm | embedded (`rpmsign --addsign`) and detached `<file>.asc` | `rpm -K`, `gpg --verify` |
+| Linux portable pair (X11 agent and `.ia-portal`) | detached `<file>.asc` | `gpg --verify` |
+| `SHA256SUMS` (Linux dist, the stage of the pair, the GitHub Release) | detached `SHA256SUMS.asc` | `gpg --verify`, `sha256sum -c` |
+| Android release APK | APK signature v2 and v3 with the release keystore (section 4.5) | `apksigner verify --print-certs` |
+
+A self-signed Authenticode signature does not chain to a root Windows trusts. `signtool verify /pa` therefore ends
+with "terminated in a root certificate which is not trusted", and `Get-AuthenticodeSignature` reports
+`UnknownError`. Both are expected. The signature still proves that the file is unchanged, and the thumbprint
+identifies the key. **Nothing is ever added to a trusted store**, here or on a user's machine. `site/keys/README.md`
+tells downloaders how to check a file without trusting the key.
+
+The manifest rows say `signed: true` only for files that were really signed. The installer rows (deb, rpm, MSI) are
+`installerBuildSchema` rows. The portable rows are `agentBuildSchema` rows (through `manifest.signed.json` for
+Windows). **Both shared schemas are strict and have no `signature` field**, so none is written. By convention the
+detached signature sits beside its file as `<file>.asc`. Adding a field would be a shared-schema change for a
+contract revision.
+
+### 4.2 Where the keys live
+
+Everything private is in **`%USERPROFILE%\.indiansassist\signing\`**, made on 7 Nov 2026. Only the current Windows
+user can read it (`icacls`, inheritance removed). Its `README.txt` lists every file. **Nothing there is ever
+committed.** The root `.gitignore` refuses `*.pfx`, `*.p12`, `*.jks`, `*.keystore`, `*.key`, `*.pem`,
+`*-secret.asc`, keyring files, `keystore.properties` and the password files anywhere in the tree.
+
+| Key | Private part (in that folder) | Public part (in the repo) | Fingerprint |
+|---|---|---|---|
+| Windows: `CN=IndiansAssist (self-signed), O=IndiansAssist Project`, RSA 3072, SHA-256, Code Signing EKU, to 7 Nov 2029 | `indiansassist-windows-selfsigned.pfx` (AES-256), `pfx-password.txt` | `site/keys/indiansassist-windows-selfsigned.cer` | SHA-1 thumbprint `7BE7416FEF06EDA266EB2035987875E4256B09F0`; `.cer` SHA-256 `7871915d20a0a97902543964c1ca00222178df252e603efaa5aee5f313f7ddd5` |
+| Linux: `IndiansAssist Release Signing (self-managed)` (no email), ed25519, to 6 Nov 2029 | `gnupg\` (a dedicated GNUPGHOME, never `~/.gnupg`), `gpg-passphrase.txt`, `indiansassist-release-signing-secret.asc`, `indiansassist-release-signing-revocation.asc` | `site/keys/indiansassist-release-signing.asc` | `43848FFFF2479CE0DE28CD4FC6E3E6E839D60661` |
+| Android: `CN=IndiansAssist (self-managed), O=IndiansAssist Project`, RSA 3072, alias `indiansassist`, to 1 Nov 2051 | `indiansassist-android-release.p12`, `android-keystore-password.txt` | none (the APK carries the certificate) | certificate SHA-256 `2F:D7:47:C9:…:FB:9E:9B:5E` (in `site/keys/README.md`) |
+
+The Windows certificate was created with `New-SelfSignedCertificate -Type CodeSigningCert` in
+`Cert:\CurrentUser\My`. It was exported, then **removed from the store**, together with the copy Windows also placed
+in `CurrentUser\CA`. It is in no certificate store on the build machine. `signtool` reads the PFX file directly.
+
+**Back the folder up offline.** The Android keystore matters most: an installed app can only be updated by an APK
+signed with the same key.
+
+### 4.3 The signing seam (`packaging/sign/`)
+
+| File | Role |
+|---|---|
+| `sign-lib.mjs` | the pure rules: the provider switch, the key checks, the `signtool` arguments, the `signed` rows, `SHA256SUMS`, the metadata check (tested in `scripts/test/signing.test.mjs`) |
+| `sign-windows.mjs` | `signtool sign /fd SHA256 /f <pfx> /p <pw> /tr <tsa> /td SHA256` on `.exe`, `.dll`, `.msi`, then a `Get-AuthenticodeSignature` check (a signer and a timestamp, status `Valid` or the self-signed `UnknownError`); CLI `pnpm sign:windows [--require] [--verify] <files>` and `--verify-only` |
+| `sign-linux.sh` / `sign-linux.mjs` | in WSL (from Windows) or with bash (Linux CI): `rpmsign --addsign` for rpms, then `gpg --armor --detach-sign` for every file, then `SHA256SUMS` and `SHA256SUMS.asc`; exit 3 = no key |
+| `verify-linux.sh` | the downloader's check: a temporary GNUPGHOME and a temporary rpm database (`rpmkeys --dbpath … --define _keyringpath …`), `gpg --verify`, `sha256sum -c`, `rpm -K` |
+| `rehash.mjs` | re-measures a dist `manifest.json` after an outside signer (SignPath) changed a file |
+
+The release paths that call it: `pnpm agent:release:windows`, `pnpm packaging:msi` (`packaging/windows/build.mjs`),
+`pnpm linux:pkg` (`packaging/linux/build.mjs`, which signs **before** it hashes, because the rpm signature changes
+its bytes) and `pnpm agent:release:linux` (`packaging/linux/agent-release.mjs`). Each one prints "not signed (why)"
+and writes `signed: false` when the keys are absent. It never fails a dev build for that.
+`agent:release:windows --require-signed` and `sign:windows --require` make missing keys an error, as CI does.
+
+Environment (the keys are never arguments or files in the repo):
+
+| Variable | Meaning |
+|---|---|
+| `IA_SIGNING_PROVIDER` | `selfsigned` (default) or `signpath`; `IA_SIGNING_PROVIDER_WINDOWS` / `_LINUX` override it per platform; anything else is an error |
+| `IA_SIGN_PFX`, `IA_SIGN_PFX_PASSWORD` or `IA_SIGN_PFX_PASSWORD_FILE` | the Windows PFX and its password |
+| `IA_SIGN_TIMESTAMP_URL`, `IA_SIGNTOOL` | another RFC 3161 TSA; an explicit `signtool.exe` (default: the newest Windows Kits 10 x64 one) |
+| `IA_GPG_HOME`, `IA_GPG_KEY`, `IA_GPG_PASSPHRASE_FILE` or `IA_GPG_PASSPHRASE` | the GNUPGHOME holding the key (from Windows it is translated into WSL through `WSLENV`), its fingerprint (default: the only secret key there), the passphrase |
+| `IA_REQUIRE_VERSIONINFO=1` | a missing version resource fails the build (section 4.4); CI sets it |
+
+A local signed release on the build machine:
+
+```powershell
+$s = "$env:USERPROFILE\.indiansassist\signing"
+$env:IA_SIGN_PFX = "$s\indiansassist-windows-selfsigned.pfx"; $env:IA_SIGN_PFX_PASSWORD_FILE = "$s\pfx-password.txt"
+$env:IA_GPG_HOME = "$s\gnupg"; $env:IA_GPG_PASSPHRASE_FILE = "$s\gpg-passphrase.txt"
+pnpm agent:release:windows --dist <AGENT_DIST_DIR>; pnpm packaging:msi; pnpm linux:pkg; pnpm agent:release:linux --dist <AGENT_DIST_DIR>
+```
+
+`packaging/linux/check-wsl.sh` queries the rpm with `--nosignature`, because its empty temporary rpm database holds
+no key. The signature itself is checked by `verify-linux.sh`.
+
+### 4.4 Windows file metadata
+
+Every release PE carries a VERSIONINFO resource: `ProductName` "IndiansAssist", `CompanyName` "IndiansAssist
+Project", `FileVersion` and `ProductVersion` the release version (also `FILEVERSION a.b.c.0`), plus
+`FileDescription`, `OriginalFilename` and `LegalCopyright`. Before this change none of the exes had one.
+`agent/build-support/versioninfo.rs` is `include!`d by the `build.rs` of `ia-agent`, `ia-desktop`, `ia-service`,
+`ia-watchdog` and the custom-action crate. It compiles the resource with the Windows SDK's `rc.exe` on `-msvc`
+(`windres` on `-gnu`) and adds no crate dependency. On other targets it does nothing. The version is
+`IA_RELEASE_VERSION` when it is set, else the crate version. The MSI build sets it, so the custom-action DLL (crate
+0.1.0) carries the MSI's version. A missing `rc.exe` is a warning on a dev build and an error with
+`IA_REQUIRE_VERSIONINFO=1`. The MSI build and `agent:release:windows` read the fields back and check them before
+they sign.
+
+The MSI has `Manufacturer` "IndiansAssist Project" (it was "IndiansAssist") and `ProductVersion` the release
+version. **Its `ProductName` stays "IndiansAssist Agent"**: it is the name in Add/Remove Programs, and
+`New-EnrollTransform.ps1` writes "IndiansAssist Agent - <org>" over it. The SignPath artifact configuration
+therefore pins the MSI's product name to "IndiansAssist Agent" and the PE files' to "IndiansAssist".
+
+### 4.5 Android
+
+`apps/android/build.gradle.kts` has a `release` signing config. It reads `apps/android/keystore.properties`
+(git-ignored; see `keystore.properties.example`) or `IA_ANDROID_KEYSTORE`, `IA_ANDROID_KEYSTORE_PASSWORD`,
+`IA_ANDROID_KEY_ALIAS` (default `indiansassist`) and `IA_ANDROID_KEY_PASSWORD`. Without them the release APK is
+built unsigned, as before. Debug builds keep the debug key. The release key's certificate SHA-256 above is the value
+the per-region `assetlinks.json` needs in `sha256_cert_fingerprints` for App Links to verify.
+
+### 4.6 The agent's self-check with a self-signed build (`IA_EXPECTED_SIGNER`)
+
+Unchanged code, documented here:
+
+- The self-check is `WinVerifyTrust` over the agent's own image (`ia-platform/src/trust.rs`). It verifies the
+  **chain**. A self-signed signature therefore gives the verdict `untrusted` (`CERT_E_UNTRUSTEDROOT`,
+  `0x800B0109`), not `trusted`.
+- The user instance only logs that ("not validly signed (log-only in the user instance)") and **runs normally**, as
+  it does unsigned.
+- **Elevation of the portable agent** needs a trusted chain. The parent refuses to start the elevated child for any
+  verdict other than `trusted` or `unsigned` (`image_mismatch`). The child refuses anything but `trusted` (an
+  `unsigned` dev build is the exception). So a self-signed release build cannot elevate, which is the same outcome
+  an unsigned release build already had in the child. Elevation works again with the SignPath certificate. **Sign
+  only release copies, never `agent/target`:** a signed `dev` build would lose the dev elevation that an unsigned
+  one has. The seam always signs copies.
+- The installed agent (MSI) does not use `WinVerifyTrust`. Its service and watchdog compare sha256 against the
+  install manifest, which hashes the signed bytes. It is unaffected.
+- Compile `IA_EXPECTED_SIGNER="IndiansAssist (self-signed)"` into interim release builds; the release workflow
+  does. The elevation card then names the right publisher. The subject compare is still not implemented (section 1.3).
+
+### 4.7 Rotation, and the SignPath switch-over
+
+**Rotate an interim key** before it expires (Windows and OpenPGP: November 2029) or at once if it is exposed:
+
+1. Make the new key the way section 4.2 describes, in the same folder, beside the old one.
+2. Replace the public file in `site/keys/` and the fingerprints in `site/keys/README.md` and in this section.
+3. Update the repository secrets (section 4.8).
+4. If the old OpenPGP key was exposed, publish its revocation certificate: remove the `:` in front of
+   `-----BEGIN`, then `gpg --homedir <old gnupg> --import` it and publish the revoked public key in `site/keys/`.
+   An exposed Windows PFX cannot be revoked (self-signed): publish the new thumbprint and say so in the release
+   notes.
+5. The Android key is never rotated casually. An app can move to a new key only through APK signature v3 key
+   rotation (`apksigner rotate`), and only when you choose to.
+
+**Switch Windows to SignPath** once the Foundation accepts the project:
+
+1. In SignPath: create the project. Link it to this GitHub repository with the GitHub Actions connector (trusted
+   build system), and create a signing policy that requires manual approval. Create two artifact configurations.
+   `payload` covers the four PE files (`IndiansAssist.exe`, `ia-service.exe`, `ia-desktop.exe`, `ia-watchdog.exe`)
+   with product name "IndiansAssist" and the release version. `msi` covers the MSI with product name "IndiansAssist
+   Agent".
+2. In GitHub: add the secret `SIGNPATH_API_TOKEN` and the variables `SIGNPATH_CONNECTOR_URL`,
+   `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`. Then set the variable
+   `IA_SIGNING_PROVIDER=signpath` and `IA_EXPECTED_SIGNER` to the new certificate's CN.
+3. The stub steps in `.github/workflows/release.yml` then run
+   `signpath/github-action-submit-signing-request` (pinned v3.0). First the payload, before WiX packs it. Then the
+   MSI, followed by `packaging/sign/rehash.mjs --mark-signed`. **Check the step inputs against the action's README
+   on the day**: they are written from v3.0 and have not run yet. Locally, `IA_SIGNING_PROVIDER=signpath` signs
+   nothing. A file that already carries a trusted, timestamped signature is accepted as signed.
+4. Linux keeps the OpenPGP key (`IA_SIGNING_PROVIDER_LINUX=selfsigned`, set in the workflow).
+5. Replace the Windows rows of `site/keys/README.md` with the new certificate, and keep the old thumbprint listed for
+   files already shipped.
+
+### 4.8 Verifiable CI (`.github/workflows/`)
+
+- **`ci.yml`** runs on every push and pull request. On ubuntu-24.04: `pnpm install --frozen-lockfile`, `build`,
+  `typecheck`, `lint`, `test`, `test:scripts`. Rust on windows-latest: fmt, clippy `--all-features -D warnings`,
+  tests, and the custom-action crate's tests. Rust on ubuntu-24.04: fmt, then clippy and tests with
+  `agent/scripts/linux-env.sh`'s `FEATS`. The token is read-only.
+- **`release.yml`** runs on a `v*` tag. The tag must equal the workspace version. Three jobs run in the
+  **`release-signing` environment**. The owner must create that environment with required reviewers (Settings,
+  Environments), so every release waits for a person's approval before any key is loaded:
+  - `windows` (windows-latest): the x64 release build with `IA_REQUIRE_VERSIONINFO=1`, WiX 5.0.2, then
+    `agent:release:windows --require-signed`, the MSI build and the verify step.
+  - `linux` (ubuntu-24.04): Zig 0.15.2 (sha256-pinned), cargo-zigbuild 0.24.0, cargo-deb 3.8.0,
+    cargo-generate-rpm 0.21.1 and the apt packages. Then `linux:pkg` (with its package checks),
+    `agent:release:linux` and `verify-linux.sh`. The build scripts run bash directly on a Linux host.
+  - `publish`: `SHA256SUMS` over every file, `SHA256SUMS.asc`, the public keys, and
+    `gh release create --verify-tag`. Only this job has `contents: write`.
+- Every action is pinned to a full commit SHA with its version in a comment: `actions/checkout` v7.0.1,
+  `setup-node` v7.1.0, `cache` v6.1.0, `upload-artifact` v7.0.2, `download-artifact` v8.0.2, and SignPath's own
+  action v3.0. pnpm comes through corepack (the `packageManager` pin) and Rust through the runner's rustup, so no
+  third-party action runs. arm64 Windows and macOS are not in the release workflow yet.
+- **Repository secrets** the owner adds: `IA_SIGN_PFX_BASE64` (`[Convert]::ToBase64String([IO.File]::ReadAllBytes(
+  "<folder>\indiansassist-windows-selfsigned.pfx"))`), `IA_SIGN_PFX_PASSWORD` (`pfx-password.txt`),
+  `IA_GPG_PRIVATE_KEY` (the whole of `indiansassist-release-signing-secret.asc`), `IA_GPG_PASSPHRASE`
+  (`gpg-passphrase.txt`). Add them as environment secrets of `release-signing`, so only approved jobs can read them.
+  **Variables:** `IA_TOKEN_PUBKEYS`, `IA_API_ORIGIN`, optionally `IA_EXPECTED_SIGNER` and `IA_SIGNING_PROVIDER`.
+- Neither workflow has run yet. Both are checked as parsed YAML by `scripts/test/signing.test.mjs`. The first tag
+  push is their first real run.
+
+### 4.9 Verification record (7 Nov 2026, this build machine)
+
+- Portable agent (release build with VERSIONINFO, `agent:release:windows`): signed and timestamped (DigiCert
+  "Timestamp Responder 2026 1"). `signtool verify /pa /v` shows the signer `IndiansAssist (self-signed)` and the
+  timestamp, then "root … not trusted" (exit 1, expected). `Get-AuthenticodeSignature` reports `UnknownError` with
+  signer and timestamper. The manifest row says `signed: true`.
+- MSI (`pnpm packaging:msi` with that build's exes): the three exes and the custom-action DLL were signed before
+  hashing, ICE validation passed, and the MSI was signed and checked the same way. `out/dist/manifest.json` has
+  `signed: true`. The MSI properties read back: ProductName "IndiansAssist Agent", Manufacturer "IndiansAssist
+  Project", ProductVersion 0.3.0. Every PE reports ProductName, CompanyName, FileVersion and ProductVersion as
+  section 4.4 says.
+- `pnpm linux:pkg --skip-build`: the rpm was signed (embedded) and both packages got `.asc` files and a signed
+  `SHA256SUMS`. 47 of 47 package checks passed. `verify-linux.sh` with the public key from `site/keys/` passed
+  `gpg --verify` (both packages and `SHA256SUMS`), `sha256sum -c` and `rpm -K` against a temporary rpm database
+  ("Header OpenPGP V4 EdDSA/SHA512 signature … OK"). One byte changed in each package made all five checks fail.
+- `pnpm agent:release:linux --skip-build` on the staged pair of 5 Nov 2026: both elf-checks passed, both files got
+  `.asc` files, the Linux row says `signed: true`, and `verify-linux.sh` passed `gpg --verify` and `sha256sum -c`.
+- No certificate is left in any CurrentUser or LocalMachine store.

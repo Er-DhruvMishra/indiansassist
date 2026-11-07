@@ -18,13 +18,17 @@
 //      <= 25 MiB), then stage/manifest.json, the installed-file list and sha256 the section 8.8
 //      integrity check reads at /usr/lib/indiansassist/manifest.json;
 //   4. `build-wsl.sh package`: cargo-deb and cargo-generate-rpm with --no-build over the stage;
-//   5. Windows Node: out/dist/<package>.sha256, out/dist/manifest.json (the installer dist
-//      manifest: `installerDistManifestSchema` rows with platform, format and file) and
-//      out/build-info.json (the elf-check results);
-//   6. unless --no-check, `check-wsl.sh`: the section 8.12 package checks (read-only);
+//   5. the signing seam (packaging/sign/sign-linux.mjs, docs/release.md section 4): with IA_GPG_HOME
+//      set, rpmsign embeds the rpm's signature, each package gets a detached `.asc` and the dist a
+//      SHA256SUMS with SHA256SUMS.asc; without a key the packages stay unsigned;
+//   6. Windows Node: out/dist/<package>.sha256, out/dist/manifest.json (the installer dist
+//      manifest: `installerDistManifestSchema` rows with platform, format, file and `signed`) and
+//      out/build-info.json (the elf-check results), all over the signed bytes;
+//   7. unless --no-check, `check-wsl.sh`: the section 8.12 package checks (read-only);
 //      with --sandbox, also `agent/scripts/pkg-sandbox-test.sh` (the T1 sandbox install).
 //
 // The WSL target directory defaults to $HOME/.cache/ia-agent-target (agent/scripts/linux-env.sh).
+// On a Linux host (CI) the shell halves run with bash directly instead of through wsl.exe.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -32,6 +36,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkElf } from '../../scripts/elf-check.mjs';
+import { signLinuxFiles } from '../sign/sign-linux.mjs';
+import { hostPath, shellCommand, toWslPath } from './host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..', '..');
@@ -52,12 +58,7 @@ export function packageFileName(version, format, arch = ARCH) {
   return `IndiansAssist-Agent-${version}-linux-${arch}.${format}`;
 }
 
-/** `C:\a\b` -> `/mnt/c/a/b` (the WSL view of a Windows path). */
-export function toWslPath(winPath) {
-  const m = /^([A-Za-z]):[\\/](.*)$/.exec(winPath);
-  if (!m) throw new Error(`not an absolute Windows path: ${winPath}`);
-  return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`.replace(/\/+$/, '');
-}
+export { toWslPath };
 
 /** MAJOR.MINOR.PATCH from `[workspace.package]` of agent/Cargo.toml. */
 export function workspaceVersion(cargoToml) {
@@ -83,9 +84,10 @@ export function installManifest(version, files) {
 
 /**
  * The installer dist manifest the api serves from (`installerDistManifestSchema`, section 8.11):
- * one row per package, `platform: 'linux'`, `format`, and the bare `file` name.
+ * one row per package, `platform: 'linux'`, `format`, and the bare `file` name. `signed` is true only when the
+ * signing seam signed the packages (packaging/sign; the rpm carries an embedded signature, both a detached `.asc`).
  */
-export function distManifest(version, packages) {
+export function distManifest(version, packages, signed = false) {
   return {
     v: 1,
     builds: packages.map(({ format, size, sha256, file }) => ({
@@ -95,7 +97,7 @@ export function distManifest(version, packages) {
       version,
       size,
       sha256,
-      signed: false,
+      signed,
       minOs: MIN_OS,
       file,
     })),
@@ -123,10 +125,15 @@ function parseArgs(argv) {
     else if (a === '--no-check') opts.check = false;
     else if (a === '--sandbox') opts.sandbox = true;
     else if (a === '--help' || a === '-h') {
+      const lines = readFileSync(fileURLToPath(import.meta.url), 'utf8')
+        .split('\n')
+        .slice(1);
       console.log(
-        readFileSync(fileURLToPath(import.meta.url), 'utf8')
-          .split('\n')
-          .slice(1, 27)
+        lines
+          .slice(
+            0,
+            lines.findIndex((l) => !l.startsWith('//')),
+          )
           .join('\n'),
       );
       process.exit(0);
@@ -144,11 +151,12 @@ function fail(msg) {
   process.exit(1);
 }
 
+/** Run a shell half: through wsl.exe on Windows, with bash on Linux (CI). */
 function wsl(distro, script, args) {
-  const full = ['-d', distro, '--', 'bash', toWslPath(script), ...args];
-  console.log(`> wsl.exe ${full.join(' ')}`);
-  const r = spawnSync('wsl.exe', full, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
-  if (r.error) fail(`wsl.exe: ${r.error.message}`);
+  const { cmd, args: full } = shellCommand(process.platform, distro, script, args);
+  console.log(`> ${cmd} ${full.join(' ')}`);
+  const r = spawnSync(cmd, full, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
+  if (r.error) fail(`${cmd}: ${r.error.message}`);
   process.stdout.write(r.stdout ?? '');
   return { status: r.status ?? 1, stdout: r.stdout ?? '' };
 }
@@ -164,7 +172,8 @@ function sourceDateEpoch() {
 }
 
 function main() {
-  if (process.platform !== 'win32') fail('run this on Windows: it drives the Linux build through wsl.exe');
+  if (process.platform !== 'win32' && process.platform !== 'linux')
+    fail('run this on Windows (it drives the Linux build through wsl.exe) or on a Linux host');
   const opts = parseArgs(process.argv.slice(2));
   const version = opts.version ?? workspaceVersion(readFileSync(join(ROOT, 'agent', 'Cargo.toml'), 'utf8'));
   const out = join(HERE, 'out');
@@ -172,6 +181,7 @@ function main() {
   const dist = join(out, 'dist');
   const wslScript = join(HERE, 'build-wsl.sh');
   const targetDir = opts.targetDir ?? '$HOME/.cache/ia-agent-target';
+  const hp = (p) => hostPath(process.platform, p);
 
   // 1. the tools
   const tools = wsl(opts.distro, wslScript, ['tools']);
@@ -180,7 +190,7 @@ function main() {
   // 2. the binaries (wsl.exe passes arguments literally, so a `$HOME/...` default is expanded here)
   const resolvedTarget = targetDir.startsWith('$HOME/') ? resolveWslHome(opts.distro, targetDir) : targetDir;
   rmSync(stage, { recursive: true, force: true });
-  if (wsl(opts.distro, wslScript, [opts.build ? 'build' : 'stage', resolvedTarget, toWslPath(stage)]).status !== 0)
+  if (wsl(opts.distro, wslScript, [opts.build ? 'build' : 'stage', resolvedTarget, hp(stage)]).status !== 0)
     fail(opts.build ? 'the release build failed' : 'staging the release binaries failed');
 
   // 3. the elf-check gate and the installed-file manifest
@@ -202,29 +212,35 @@ function main() {
   const rpmName = packageFileName(version, 'rpm');
   rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
-  const pkg = wsl(opts.distro, wslScript, [
-    'package',
-    toWslPath(stage),
-    toWslPath(dist),
-    debName,
-    rpmName,
-    sourceDateEpoch(),
-  ]);
+  const pkg = wsl(opts.distro, wslScript, ['package', hp(stage), hp(dist), debName, rpmName, sourceDateEpoch()]);
   if (pkg.status !== 0) fail('cargo-deb / cargo-generate-rpm failed');
+  for (const file of [debName, rpmName]) if (!existsSync(join(dist, file))) fail(`${file} was not written`);
 
-  // 5. sha256 files and the installer manifest
+  // 5. the signing seam (packaging/sign, docs/release.md section 4), before anything is hashed: rpmsign embeds the
+  //    rpm's signature, then each package gets a detached <file>.asc and the dist a signed SHA256SUMS. Without a
+  //    key configured the packages stay unsigned and their rows say `signed: false`.
+  let signing;
+  try {
+    signing = signLinuxFiles({ dir: dist, files: [debName, rpmName], distro: opts.distro });
+  } catch (err) {
+    fail(err.message);
+  }
+
+  // 6. sha256 files and the installer manifest (over the signed bytes)
   const packages = [];
   for (const [format, file] of [
     ['deb', debName],
     ['rpm', rpmName],
   ]) {
     const path = join(dist, file);
-    if (!existsSync(path)) fail(`${file} was not written`);
     const digest = sha256(path);
     writeFileSync(join(dist, `${file}.sha256`), sha256Line(digest, file));
     packages.push({ format, file, size: statSync(path).size, sha256: digest });
   }
-  writeFileSync(join(dist, 'manifest.json'), `${JSON.stringify(distManifest(version, packages), null, 2)}\n`);
+  writeFileSync(
+    join(dist, 'manifest.json'),
+    `${JSON.stringify(distManifest(version, packages, signing.signed), null, 2)}\n`,
+  );
   const info = {
     version,
     arch: ARCH,
@@ -235,20 +251,21 @@ function main() {
         { size: elf[n].size, sizeMiB: elf[n].sizeMiB, glibc: elf[n].glibc, needed: elf[n].needed },
       ]),
     ),
-    signed: false,
+    signed: signing.signed,
+    ...(signing.signed ? { signingKey: signing.key } : { unsignedReason: signing.reason }),
   };
   writeFileSync(join(out, 'build-info.json'), `${JSON.stringify(info, null, 2)}\n`);
 
-  // 6. the read-only package checks, and the T1 sandbox when asked
+  // 7. the read-only package checks, and the T1 sandbox when asked
   let checks = 'skipped';
   if (opts.check) {
-    const c = wsl(opts.distro, join(HERE, 'check-wsl.sh'), [toWslPath(dist), debName, rpmName]);
+    const c = wsl(opts.distro, join(HERE, 'check-wsl.sh'), [hp(dist), debName, rpmName]);
     checks = c.status === 0 ? 'passed' : 'FAILED';
     if (c.status !== 0) process.exitCode = 1;
   }
   let sandbox = 'not run (pass --sandbox)';
   if (opts.sandbox) {
-    const s = wsl(opts.distro, join(ROOT, 'agent', 'scripts', 'pkg-sandbox-test.sh'), [toWslPath(join(dist, debName))]);
+    const s = wsl(opts.distro, join(ROOT, 'agent', 'scripts', 'pkg-sandbox-test.sh'), [hp(join(dist, debName))]);
     sandbox = s.status === 0 ? 'passed' : 'FAILED';
     if (s.status !== 0) process.exitCode = 1;
   }
@@ -258,17 +275,26 @@ function main() {
   for (const n of BINARIES)
     console.log(`  ${n}: ${elf[n].sizeMiB} MiB, GLIBC ${elf[n].glibc}, NEEDED ${elf[n].needed.join(' ')}`);
   console.log(`  package checks: ${checks}; T1 sandbox: ${sandbox}`);
-  console.log(`  installer manifest: ${join(dist, 'manifest.json')} (unsigned, W111)`);
+  console.log(
+    `  installer manifest: ${join(dist, 'manifest.json')} ` +
+      (signing.signed
+        ? `(signed with OpenPGP key ${signing.key}: rpm embedded, .asc beside each package, SHA256SUMS.asc)`
+        : `(unsigned: ${signing.reason})`),
+  );
 }
 
-/** Expand a `$HOME/...` WSL path once (wsl.exe passes arguments literally). */
+/** Expand a `$HOME/...` path once (wsl.exe passes arguments literally); on Linux, this process's HOME. */
 function resolveWslHome(distro, p) {
+  if (process.platform !== 'win32') {
+    const home = process.env.HOME ?? '';
+    if (!home.startsWith('/')) fail('HOME is not set');
+    return home + p.slice('$HOME'.length);
+  }
   const r = spawnSync('wsl.exe', ['-d', distro, '--', 'printenv', 'HOME'], { encoding: 'utf8' });
   const home = (r.stdout ?? '').trim();
   if (r.status !== 0 || !home.startsWith('/')) fail('could not read $HOME in WSL');
   return home + p.slice('$HOME'.length);
 }
-
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main();
 }

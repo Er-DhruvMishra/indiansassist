@@ -16,6 +16,19 @@ export const API_BASE = `${API_URL}/api/v1`;
 /** Assist WS endpoint. The Desk uses `PublicToken.signalUrl` instead (section 6.13 step 3). */
 export const ASSIST_SIGNAL_URL = `${API_URL.replace(/^http/, 'ws')}/signal`;
 export const APP_NAME: string = import.meta.env.VITE_APP_NAME || 'IndiansAssist';
+/** The project's public repository (AGPL-3.0-only section 13). An operator running a modified build points it at their own source. */
+export const DEFAULT_SOURCE_URL = 'https://github.com/Er-DhruvMishra/indiansassist';
+export const SOURCE_URL: string = safeHttpsUrl(import.meta.env.VITE_SOURCE_URL) ?? DEFAULT_SOURCE_URL;
+
+function safeHttpsUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' ? u.href : null;
+  } catch {
+    return null;
+  }
+}
 
 function safeOrigins(raw: string): Partial<Record<Region, string>> {
   try {

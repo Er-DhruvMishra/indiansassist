@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IndiansAssist: open source remote support</title>
+  <meta name="description" content="IndiansAssist is an open source, self-hostable remote support and remote access platform with consent, an audit chain and data residency built in.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Ctext x='16' y='22' font-family='Arial,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3EIA%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">IA</span>IndiansAssist</a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+        <li><a href="index.html" aria-current="page">Home</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="code-signing.html">Code signing</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="license.html">Licence</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+<section class="hero">
+  <h1>Remote support that people can trust</h1>
+  <p class="lead">IndiansAssist is an open source remote support and remote access platform. A technician helps
+    someone over their screen, with that person's consent, from a browser. Every session is recorded in a tamper-evident
+    audit chain, and an organisation's data stays in the region it chooses. You can run it on your own servers.</p>
+  <div class="actions">
+    <a class="button primary" href="download.html">Download</a>
+    <a class="button secondary" href="https://github.com/Er-DhruvMishra/indiansassist">Source code on GitHub</a>
+  </div>
+</section>
+
+<h2 id="features">What it does</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Help from the browser</h3>
+    <p>The person being helped (the Desk) opens a join link and shares a screen or a tab. The technician (Assist)
+      sees it in the web console, with voice, chat, file transfer and on-screen annotation. Nothing to install for a
+      quick session.</p>
+  </div>
+  <div class="card">
+    <h3>Remote control with consent</h3>
+    <p>Small native agents for Windows, Linux (X11 and Wayland) and macOS, an Android app and a browser extension give
+      the technician control when the person agrees. The consent screen says exactly what will be shared, and a
+      visible indicator stays on screen for the whole session.</p>
+  </div>
+  <div class="card">
+    <h3>Managed devices</h3>
+    <p>Installed agents for Windows, Linux and macOS let an organisation support its own fleet: unattended access under
+      a policy, consent receipts, playbooks, remote wake and device groups.</p>
+  </div>
+  <div class="card">
+    <h3>A record you can verify</h3>
+    <p>Each organisation has an append-only, hash-chained audit log with signed checkpoints. Recordings, when turned on,
+      are stored with their SHA-256 in the chain, and the console verifies the chain and each recording.</p>
+  </div>
+  <div class="card">
+    <h3>Data residency and privacy</h3>
+    <p>An organisation picks India, the EU or the US at sign-up and its data stays there. Personal values in the audit
+      chain are stored only as keyed hashes; an organisation can erase itself completely. See the
+      <a href="privacy.html">privacy policy</a>.</p>
+  </div>
+  <div class="card">
+    <h3>Built for teams</h3>
+    <p>Roles, single sign-on (OIDC and SAML), branding, a phone layout for the console, optional AI session summaries
+      (off by default) and ticketing integrations for Zoho Desk, ServiceNow, Jira, Freshdesk and webhooks.</p>
+  </div>
+</div>
+
+<h2 id="open-source">Open source</h2>
+<p class="prose">IndiansAssist is free software under the <a href="license.html">GNU Affero General Public License,
+  version 3 only</a>. The whole project, the server, the web app, the agents and the apps, is developed in public at
+  <a href="https://github.com/Er-DhruvMishra/indiansassist">github.com/Er-DhruvMishra/indiansassist</a>. Releases are
+  built from that source by GitHub Actions.</p>
+
+<h2 id="code-signing">Code signing policy</h2>
+<div class="signpath">
+  <p>Free code signing provided by <a href="https://about.signpath.io">SignPath.io</a>, certificate by
+    <a href="https://signpath.org">SignPath Foundation</a>.</p>
+  <p class="note"><strong>Current status:</strong> the SignPath Foundation certificate has not been granted yet.
+    Releases are currently signed with the project's own self-signed certificate (Windows) and GPG key (Linux). The
+    SignPath arrangement applies once the project is approved.</p>
+  <p>Read the full <a href="code-signing.html">code signing policy</a>: who may change the code, who approves each
+    signing request, and how to verify a download.</p>
+</div>
+
+<h2 id="more">More</h2>
+<ul class="prose">
+  <li><a href="download.html">Download</a>: every platform, what it is for, and how to check the files.</li>
+  <li><a href="code-signing.html">Code signing policy</a></li>
+  <li><a href="privacy.html">Privacy policy</a></li>
+  <li><a href="security.html">Security</a>: how to report a vulnerability privately.</li>
+  <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source code</a> and
+    <a href="https://github.com/Er-DhruvMishra/indiansassist/issues">issues</a></li>
+</ul>
+    </div>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <ul aria-label="Policies and source">
+        <li><a href="code-signing.html">Code signing policy</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        <li><a href="license.html">Licence</a></li>
+      </ul>
+      <p>IndiansAssist is free software under the GNU Affero General Public License, version 3 only. Copyright (C) 2026 Dhruv Mishra.</p>
+    </div>
+  </footer>
+</body>
+</html>

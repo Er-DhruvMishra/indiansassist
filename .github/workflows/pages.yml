@@ -1,0 +1,68 @@
+# Publishes the static project website in site/ to GitHub Pages (custom domain indiansassist.com, site/CNAME).
+# One-time setup by the repository owner: site/README.md. Actions are pinned to full commit SHAs (tag in the comment).
+name: pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits rather than cancelling one that is half done.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the site (no scripts, a title and the policy footer on every page)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          if grep -RIil '<script' site --include='*.html'; then echo "::error::site/ must not contain scripts"; fail=1; fi
+          for f in site/*.html; do
+            grep -q '<title>[^<]\+</title>' "$f" || { echo "::error file=$f::no <title>"; fail=1; }
+            for link in code-signing.html privacy.html security.html license.html 'github.com/Er-DhruvMishra/indiansassist"'; do
+              grep -q "$link" "$f" || { echo "::error file=$f::footer link $link missing"; fail=1; }
+            done
+          done
+          test "$(tr -d '\r\n' < site/CNAME)" = "indiansassist.com" || { echo "::error::site/CNAME must be indiansassist.com"; fail=1; }
+          exit "$fail"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

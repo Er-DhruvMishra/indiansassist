@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy policy: IndiansAssist</title>
+  <meta name="description" content="What the IndiansAssist software and website do with personal data.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Ctext x='16' y='22' font-family='Arial,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3EIA%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">IA</span>IndiansAssist</a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="code-signing.html">Code signing</a></li>
+        <li><a href="privacy.html" aria-current="page">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="license.html">Licence</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+<h1>Privacy policy</h1>
+<div class="prose">
+<p>Last updated: 7 November 2026. This policy covers the IndiansAssist software (the web app, the api and recorder services, the Windows, Linux and macOS agents, the Android and iOS apps and the browser extension) and the project website at indiansassist.com. It describes what the software does with personal data, as built in this repository.</p>
+<h2 id="who-is-responsible">Who is responsible</h2>
+<p>IndiansAssist is open source software (AGPL-3.0-only) that anyone can run on their own servers.</p>
+<ul><li><strong>Each IndiansAssist server is run by an operator</strong> (for example a company's IT team or a service provider). The operator, and the organisation that signs up on that server, decide what is collected and how long it is kept. <strong>The operator of a server is the controller of the data on it.</strong> Questions about your data on a server, and requests to see, correct or delete it, go to that operator or to the organisation that invited you to a session.</li><li><strong>The project</strong> publishes the source code, the releases and this website. Downloading the software from GitHub Releases does not send the project any data about you beyond what GitHub itself records (see "Third-party services").</li><li><strong>A hosted service at indiansassist.com</strong>, if and when it is offered, is run by the project owner, Dhruv Mishra, who is then the operator, and so the controller, for the organisations that sign up there. This policy applies to it. Its default data region is India (<code>in-mum</code>).</li></ul>
+<p>The project does not sell personal data, does not show advertising and does not run analytics or tracking in the software or on this website.</p>
+<h2 id="what-the-software-processes">What the software processes</h2>
+<h3 id="accounts-technicians-and-administrators">Accounts (technicians and administrators)</h3>
+<ul><li>The account record holds the email address, name, role, status, the date of the last sign-in, and, for invited users, a hashed invite token. Passwords are stored only as an Argon2id hash. Password reset tokens are stored only as a hash.</li><li>Single sign-on, if the organisation turns it on: the identity provider's issuer and subject identifier for the user, and when the link was made and last used.</li><li>Sign-in sessions: a hash of the session token, the IP address and browser user agent of the sign-in, the time it was created and last used, its expiry and how the user signed in. Failed and successful sign-in attempts are kept for 24 hours (a SHA-256 hash of the email address, the IP address and whether it succeeded) to limit password guessing; then they are deleted.</li><li>Cookies: <code>ia_session</code> (the sign-in session; HttpOnly, 7 days) and, only while a single sign-on login is in progress, a short-lived cookie that binds the login to the browser (10 minutes). No other cookies. The Desk join page and the phone camera page set no cookie; the join page keeps the name you typed in the browser's own storage so you do not have to type it again.</li></ul>
+<h3 id="support-sessions">Support sessions</h3>
+<ul><li><strong>Session metadata:</strong> the session's times and state, the consent you gave and when, the name you typed on the join page (the "Desk label"), your browser's user agent or the agent's client type, connection statistics, and the region.</li><li><strong>Screen, voice and control</strong> travel directly between your device and the technician's browser over an encrypted WebRTC connection (DTLS-SRTP). When a direct connection is not possible, they pass through the operator's relay (TURN) server, still encrypted end to end between the two browsers or apps. The server does not see the screen unless server recording is on (below).</li><li><strong>Chat and file transfers</strong> go over encrypted WebRTC data channels between the two sides. The server does not store the chat text or the file contents. It stores, for each file, its name, size and SHA-256 hash; for chat, only a count of messages. Until the data channel is open, a chat message can pass through the server's signalling connection; it is not logged or stored there.</li><li><strong>The audit chain.</strong> Each organisation has an append-only, hash-chained record of what happened in its sessions (who knocked, who accepted, consent, control, files, recordings, administrative changes), so that the record cannot be altered unnoticed. Personal values (email addresses, Desk labels, user agents, file names) are written into the chain only as a keyed hash (SHA-256 with a secret per organisation), never in plain text. The technician's display name is written in plain text, because the chain exists to record what the technician did.</li><li><strong>Installed agents (unattended access):</strong> for a managed device, its name, operating system and agent version, a hardware fingerprint, the IP address it last connected from, the MAC address (encrypted, with a keyed hash for lookup) if wake-on-LAN is used, and an optional email address for consent receipts.</li></ul>
+<h3 id="recordings-optional">Recordings (optional)</h3>
+<p>Recording is controlled by the organisation's administrator, who chooses one of: off; recorded by the technician's console only when the technician clicks <strong>Record</strong> (the default); recorded by the server for every session; or both. The person sharing their screen is told before and while a session is recorded. A recording is stored, with its SHA-256 hash in the audit chain, in the operator's storage: a folder on the server or an S3-compatible object store chosen by the operator, under the organisation's data region. The administrator can set a retention period from 1 to 3650 days, after which recordings are deleted automatically; with no period set, they are kept until deleted.</p>
+<h3 id="ai-summaries-optional-off-by-default">AI summaries (optional, off by default)</h3>
+<p>Session summaries are off unless an organisation administrator turns them on. The administrator chooses the provider:</p>
+<ul><li><strong>An in-region model</strong> run by the operator (any server that speaks the OpenAI-style chat-completions API, such as vLLM, llama.cpp or Ollama). The data stays with the operator.</li><li><strong>Anthropic</strong>, only if the operator has configured an Anthropic API key and allowed it for the region, and only after the administrator types an exact acknowledgement that the data is processed by Anthropic, possibly outside the region.</li></ul>
+<p>What is sent: a list of the session's events, with people named by role and files described by type and size only. The chat transcript is included only if the administrator also turns on "include the chat" and a notice was posted in the chat. Before anything is sent, a redaction step (in the browser and again in the api) removes keys, tokens, passwords and secrets, email addresses, card numbers, Aadhaar and PAN numbers, phone numbers, MAC and IP addresses, user folder paths and long random strings. Names and postal addresses are not reliably detected and are not removed. A transcript is held in memory for at most 30 minutes and is never written to the database; the resulting summary is stored with the session.</p>
+<h3 id="ticketing-integrations-optional-off-by-default">Ticketing integrations (optional, off by default)</h3>
+<p>An administrator can connect Zoho Desk, ServiceNow, Jira, Freshdesk or a webhook of their own. When a technician sends a session to a ticket, the integration receives the title, the summary or note, a link to the session, the session's tier and times, the technician's name, the audit chain's status, and the requester's email address only if the technician typed it. The credentials for the integration are stored encrypted.</p>
+<h3 id="email">Email</h3>
+<p>The server sends email only if the operator configures an SMTP server; by default it only writes mail to its log. The messages are: invitations, password reset and its notice, single sign-on break-glass notices (including the IP address of the sign-in), consent receipts for managed devices, and notices about organisation erasure.</p>
+<h3 id="server-logs-and-metrics">Server logs and metrics</h3>
+<p>The web server logs the requesting IP address and the path (without query string). The api logs the requesting address and redacts request bodies, tokens, transcripts and similar fields; chat text is never logged. Metrics are counts and timings with no user or IP labels, served on an internal port only. How long logs and backups are kept is set by the operator.</p>
+<h2 id="data-regions">Data regions</h2>
+<p>An organisation chooses its data region when it signs up (India <code>in-mum</code> by default, the EU <code>eu-fra</code> or the US <code>us-east</code>); it cannot be changed later. Each region is served by its own servers, and an organisation's database rows, recordings and summaries stay in its region. The <strong>Residency</strong> page of the console lists where each kind of data lives and which outside services, if any, the organisation has turned on (for example a third-party STUN server, Anthropic or a ticketing service).</p>
+<h2 id="retention-and-deletion">Retention and deletion</h2>
+<ul><li>Sign-in attempts: 24 hours. Recordings: the period the administrator sets, or until deleted.</li><li>Accounts, session metadata, the audit chain, file metadata and summaries are kept for the life of the organisation. An administrator can disable a user; the software has no self-service deletion of a single account, so ask the organisation or the operator.</li><li><strong>Organisation erasure:</strong> an administrator can erase the whole organisation (two administrators, or one with a confirmation by email, then a 7- or 14-day cooling-off period). Erasure deletes the stored files and recordings, deletes or scrubs the database rows, and destroys the organisation's audit secret, so every hashed personal value in the audit chain can no longer be linked to a person. The server then issues a signed erasure certificate. The audit entries themselves, with technicians' names and typed reasons, are kept as the record of what happened. Erasure cannot reach the operator's backups (they expire on the operator's backup schedule) or data already sent to a third party.</li></ul>
+<h2 id="the-apps-and-agents">The apps and agents</h2>
+<p>The Windows, Linux and macOS agents, the Android and iOS apps and the browser extension talk only to the IndiansAssist server of the organisation that set them up (and, for the media, to the other side of the session, through the operator's relay when needed). They contain no analytics, advertising, crash reporting or update check that contacts the project or anyone else. In an attended session nothing is captured before you give consent on the device. On a device that an organisation manages for unattended access, its policy decides whether the person at the device must approve each session; either way an always-on-top indicator that cannot be switched off is shown while a session is live, and a consent receipt records the session.</p>
+<p>The browser extension asks for access to all sites because it cannot know in advance which tab you will share; it captures only the tabs you choose to share, only during a session you accepted.</p>
+<h2 id="the-website-and-the-web-app">The website and the web app</h2>
+<p>This website (indiansassist.com, served by GitHub Pages) and the IndiansAssist web app load no third-party scripts, fonts or analytics, and set no tracking cookies. In the provided nginx configuration, the web app's content security policy lets it load scripts, styles, images and frames only from its own server.</p>
+<h2 id="third-party-services-you-may-meet">Third-party services you may meet</h2>
+<p>Each has its own privacy policy, which applies to the data it receives:</p>
+<ul><li>GitHub, which hosts the source code, the releases and this website and records visitors' IP addresses: <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement</a></li><li>Anthropic, only when an organisation turns on Anthropic summaries: <a href="https://www.anthropic.com/legal/privacy">https://www.anthropic.com/legal/privacy</a></li><li>Ticketing services, only when an organisation connects one: Zoho (<a href="https://www.zoho.com/privacy.html">https://www.zoho.com/privacy.html</a>), ServiceNow (<a href="https://www.servicenow.com/privacy-statement.html">https://www.servicenow.com/privacy-statement.html</a>), Atlassian Jira (<a href="https://www.atlassian.com/legal/privacy-policy">https://www.atlassian.com/legal/privacy-policy</a>), Freshworks Freshdesk (<a href="https://www.freshworks.com/privacy/">https://www.freshworks.com/privacy/</a>), or the operator's own webhook.</li><li>The operator's email (SMTP) provider, which carries the mail listed above; its privacy policy is the one that the operator's provider publishes.</li><li>A third-party STUN server, only if the operator configures one (the default configuration uses the operator's own relay server).</li><li>Your identity provider, if your organisation uses single sign-on.</li></ul>
+<h2 id="your-rights">Your rights</h2>
+<p>Depending on where you live (for example under India's Digital Personal Data Protection Act or the EU GDPR), you may have the right to access, correct or delete your personal data. Send the request to the operator of the server or the organisation that holds your data. For the hosted service at indiansassist.com, if offered, or a question about this policy, open an issue at <a href="https://github.com/Er-DhruvMishra/indiansassist/issues">https://github.com/Er-DhruvMishra/indiansassist/issues</a> (do not put personal data in a public issue; say that you need a private channel and the owner will reply). To report a security problem, see <a href="security.html">the security page</a>.</p>
+<h2 id="changes">Changes</h2>
+<p>Changes to this policy are made in the public repository, so every version and its date are in the history of <a href="https://github.com/Er-DhruvMishra/indiansassist/commits/master/PRIVACY.md">PRIVACY.md</a>.</p>
+</div>
+<p class="note">This page has the same content as <a href="https://github.com/Er-DhruvMishra/indiansassist/blob/master/PRIVACY.md"><code>PRIVACY.md</code></a> in the repository; its history shows every change.</p>
+    </div>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <ul aria-label="Policies and source">
+        <li><a href="code-signing.html">Code signing policy</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="https://github.com/Er-DhruvMishra/indiansassist">Source</a></li>
+        <li><a href="license.html">Licence</a></li>
+      </ul>
+      <p>IndiansAssist is free software under the GNU Affero General Public License, version 3 only. Copyright (C) 2026 Dhruv Mishra.</p>
+    </div>
+  </footer>
+</body>
+</html>

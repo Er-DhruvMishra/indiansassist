@@ -15,6 +15,21 @@ val releaseOrigins = "https://in.indiansassist.example"
 val devApi = ((findProperty("iaDevApi") as String?) ?: System.getenv("IA_DEV_API") ?: "http://10.0.2.2:4000").trimEnd('/')
 val debugOrigins = listOf(devApi, "http://10.0.2.2:4000", "http://localhost:4000", "https://in.indiansassist.example").distinct().joinToString(",")
 
+// Release signing (docs/release.md section 4.5). The keystore and its passwords never enter the repository: they come
+// from apps/android/keystore.properties (git-ignored; see keystore.properties.example) or from the environment
+// (IA_ANDROID_KEYSTORE, IA_ANDROID_KEYSTORE_PASSWORD, IA_ANDROID_KEY_ALIAS, IA_ANDROID_KEY_PASSWORD). Without them the
+// release APK is built unsigned, as before; debug builds keep the debug key.
+val signingProps = java.util.Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(prop: String, env: String): String? =
+    (signingProps.getProperty(prop) ?: System.getenv(env))?.takeIf { it.isNotBlank() }
+val releaseStoreFile = signingValue("storeFile", "IA_ANDROID_KEYSTORE")
+val releaseStorePassword = signingValue("storePassword", "IA_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "IA_ANDROID_KEY_ALIAS") ?: "indiansassist"
+val releaseKeyPassword = signingValue("keyPassword", "IA_ANDROID_KEY_PASSWORD") ?: releaseStorePassword
+
 android {
     namespace = "com.indiansassist.desk"
     compileSdk = 36
@@ -34,6 +49,19 @@ android {
         testInstrumentationRunnerArguments["IA_TOKEN"] = System.getenv("IA_TOKEN") ?: ""
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null && releaseStorePassword != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         debug {
             buildConfigField("String", "REGION_ORIGINS", "\"$debugOrigins\"")
@@ -48,6 +76,7 @@ android {
             buildConfigField("String", "DEFAULT_API_ORIGIN", "\"https://in.indiansassist.example\"")
             buildConfigField("boolean", "DEV", "false")
             manifestPlaceholders["cleartext"] = "false"
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 

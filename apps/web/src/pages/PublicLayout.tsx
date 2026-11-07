@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
+import { SourceFooter } from '../components/SourceLink';
 import { APP_NAME } from '../config';
 
 /** Centered card layout for the public auth pages. */
@@ -17,7 +18,11 @@ export function PublicLayout({ title, children, footer }: { title: string; child
           {children}
         </div>
       </main>
-      {footer && <footer className="pb-8 text-center text-sm">{footer}</footer>}
+      <footer className="pb-8 text-center text-sm">
+        {footer}
+        {/* AGPL-3.0-only section 13: the source offer on the public pages (sign-in, join, phone camera). */}
+        <SourceFooter className={footer ? 'mt-3' : undefined} />
+      </footer>
     </div>
   );
 }

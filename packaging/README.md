@@ -24,8 +24,10 @@ pnpm packaging:test               # enroll-config tests (node) + custom-action t
 ```
 
 The build writes `windows/out/<arch>/IndiansAssist-Agent-<version>-windows-<arch>.msi`, a `build-info.json` and
-the staging folder. It runs `wix build`, then `wix msi validate` (the full ICE suite). Signing comes afterwards, in CI
-(see `docs/release.md` section 3).
+the staging folder. It runs `wix build`, then `wix msi validate` (the full ICE suite). With `IA_SIGN_PFX` set it
+also signs the staged exes and the custom-action DLL before packing them, and the MSI after validation. A
+non-placeholder build lays out `windows/out/dist/` (the MSI and its `manifest.json` row). See `docs/release.md`
+section 4.
 
 **Placeholder builds.** The `ia-service` crate (section 11.1) does not exist yet. `--placeholder` puts the Phase C agent
 (`agent/target/release/IndiansAssist.exe`, from `pnpm agent:release`) in place of each missing exe. This exercises the

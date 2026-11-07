@@ -3,7 +3,9 @@
 // with the revision 3 corrections) on Windows through WSL and publishes it into AGENT_DIST_DIR:
 //
 //   node packaging/linux/agent-release.mjs [--dist <dir>] [--version 0.3.0] [--distro Ubuntu]
-//        [--target-dir <WSL path>]
+//        [--target-dir <WSL path>] [--skip-build]
+//
+// --skip-build gates, signs and publishes the pair already in packaging/linux/out/agent (no cargo build).
 //
 // Steps (the build order matters: the X11 agent embeds the companion's sha256):
 //   1. `agent-release-wsl.sh tools`: cargo-zigbuild, Zig, clang and libpipewire-0.3 in WSL (never installed here);
@@ -14,23 +16,28 @@
 //   4. `agent-release-wsl.sh x11 <sha256>`: the X11 agent with IA_PORTAL_SHA256 embedded (glibc 2.34 floor);
 //   5. Windows Node: elf-check on it (the E NEEDED set, GLIBC_ <= 2.34, <= 25 MiB) and a check that it carries the
 //      companion's sha256;
-//   6. the dist: `IndiansAssist-linux-x64-<v>` and `IndiansAssist-linux-portal-x64-<v>` copied into the dist dir,
+//   6. the signing seam (packaging/sign/sign-linux.mjs): `<file>.asc` for both, SHA256SUMS(.asc) in the stage;
+//   7. the dist: `IndiansAssist-linux-x64-<v>` and `IndiansAssist-linux-portal-x64-<v>` copied into the dist dir,
 //      and its manifest.json updated: every earlier Linux row is replaced by one row with
 //      `companion: { sha256, size }` (`agentDistManifestSchema`); the Windows, Android and macOS rows are kept.
 //      packaging/linux/out/agent-release-info.json records the elf-check results.
 //
 // The dist dir defaults to AGENT_DIST_DIR, else ./data/agent-dist (as scripts/agent-manifest.mjs). The WSL cargo
 // target directory defaults to $HOME/.cache/ia-agent-target (agent/scripts/linux-env.sh). IA_TOKEN_PUBKEYS and
-// IA_API_ORIGIN, when set, are passed to the build (WSLENV). Linux artefacts are not signed: their sha256 is
-// published in the manifest and printed by the join page.
+// IA_API_ORIGIN, when set, are passed to the build (WSLENV). With IA_GPG_HOME set, the signing seam (packaging/sign,
+// docs/release.md section 4) writes a detached <file>.asc for both files and the Linux row says `signed: true`;
+// without a key they stay unsigned and the join page prints their sha256. On a Linux host (CI) the shell half runs
+// with bash directly instead of through wsl.exe.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkElf } from '../../scripts/elf-check.mjs';
-import { toWslPath, workspaceVersion } from './build.mjs';
+import { signLinuxFiles } from '../sign/sign-linux.mjs';
+import { workspaceVersion } from './build.mjs';
+import { hostPath, shellCommand } from './host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..', '..');
@@ -52,15 +59,18 @@ export function portalDistFileName(version) {
   return `IndiansAssist-linux-portal-x64-${version}`;
 }
 
-/** The Linux row of AGENT_DIST_DIR/manifest.json (`agentDistManifestSchema`), with its companion. */
-export function linuxDistRow(version, x11, portal) {
+/**
+ * The Linux row of AGENT_DIST_DIR/manifest.json (`agentDistManifestSchema`), with its companion. `signed` is true
+ * only when the signing seam signed both files (the schema has no signature field: `<file>.asc` sits beside each).
+ */
+export function linuxDistRow(version, x11, portal, signed = false) {
   return {
     platform: 'linux',
     arch: 'x64',
     version,
     size: x11.size,
     sha256: x11.sha256,
-    signed: false,
+    signed,
     minOs: MIN_OS,
     companion: { sha256: portal.sha256, size: portal.size },
   };
@@ -91,7 +101,7 @@ export function wslEnv(env) {
 }
 
 function parseArgs(argv) {
-  const opts = { distro: 'Ubuntu' };
+  const opts = { distro: 'Ubuntu', build: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -103,6 +113,7 @@ function parseArgs(argv) {
     else if (a === '--version') opts.version = next();
     else if (a === '--distro') opts.distro = next();
     else if (a === '--target-dir') opts.targetDir = next();
+    else if (a === '--skip-build') opts.build = false;
     else if (a === '--help' || a === '-h') {
       const lines = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1);
       console.log(lines.slice(0, lines.findIndex((l) => !l.startsWith('//'))).join('\n'));
@@ -121,19 +132,24 @@ function fail(msg) {
   process.exit(1);
 }
 
+/** Run the shell half: through wsl.exe on Windows, with bash on Linux (CI). */
 function wsl(distro, args) {
-  const full = ['-d', distro, '--', 'bash', toWslPath(join(HERE, 'agent-release-wsl.sh')), ...args];
-  console.log(`> wsl.exe ${full.join(' ')}`);
-  const r = spawnSync('wsl.exe', full, {
+  const { cmd, args: full } = shellCommand(process.platform, distro, join(HERE, 'agent-release-wsl.sh'), args);
+  console.log(`> ${cmd} ${full.join(' ')}`);
+  const r = spawnSync(cmd, full, {
     stdio: ['ignore', 'inherit', 'inherit'],
     env: { ...process.env, WSLENV: wslEnv(process.env) },
   });
-  if (r.error) fail(`wsl.exe: ${r.error.message}`);
+  if (r.error) fail(`${cmd}: ${r.error.message}`);
   return r.status ?? 1;
 }
 
-/** Expand a `$HOME/...` WSL path once (wsl.exe passes arguments literally). */
+/** Expand a `$HOME/...` path once (wsl.exe passes arguments literally); on Linux, this process's HOME. */
 function resolveWslHome(distro, p) {
+  if (process.platform !== 'win32') {
+    if (!(process.env.HOME ?? '').startsWith('/')) fail('HOME is not set');
+    return process.env.HOME + p.slice('$HOME'.length);
+  }
   const r = spawnSync('wsl.exe', ['-d', distro, '--', 'printenv', 'HOME'], { encoding: 'utf8' });
   const home = (r.stdout ?? '').trim();
   if (r.status !== 0 || !home.startsWith('/')) fail('could not read $HOME in WSL');
@@ -157,7 +173,8 @@ function writeAtomic(path, data) {
 }
 
 function main() {
-  if (process.platform !== 'win32') fail('run this on Windows: it drives the Linux build through wsl.exe');
+  if (process.platform !== 'win32' && process.platform !== 'linux')
+    fail('run this on Windows (it drives the Linux build through wsl.exe) or on a Linux host');
   const opts = parseArgs(process.argv.slice(2));
   const version = opts.version ?? workspaceVersion(readFileSync(join(ROOT, 'agent', 'Cargo.toml'), 'utf8'));
   const dist = resolve(ROOT, opts.dist ?? process.env.AGENT_DIST_DIR ?? join('data', 'agent-dist'));
@@ -167,24 +184,46 @@ function main() {
   if (!process.env.IA_TOKEN_PUBKEYS)
     console.warn('agent:release:linux: IA_TOKEN_PUBKEYS is empty; the agents will check a token\'s shape and time only');
 
-  // 1. the tools
-  if (wsl(opts.distro, ['tools']) !== 0) fail('the release tools are missing in WSL: the release gate is NOT MET');
-
-  // 2-3. the portal companion first, gated, hashed
-  rmSync(stage, { recursive: true, force: true });
-  mkdirSync(stage, { recursive: true });
+  const hp = (p) => hostPath(process.platform, p);
   const portalPath = join(stage, portalDistFileName(version));
-  if (wsl(opts.distro, ['portal', targetDir, toWslPath(portalPath)]) !== 0) fail('the portal build failed');
+  const x11Path = join(stage, x11DistFileName(version));
+
+  if (opts.build) {
+    // 1. the tools
+    if (wsl(opts.distro, ['tools']) !== 0) fail('the release tools are missing in WSL: the release gate is NOT MET');
+
+    // 2-3. the portal companion first (gated and hashed below)
+    rmSync(stage, { recursive: true, force: true });
+    mkdirSync(stage, { recursive: true });
+    if (wsl(opts.distro, ['portal', targetDir, hp(portalPath)]) !== 0) fail('the portal build failed');
+  } else {
+    // --skip-build: the pair already in packaging/linux/out/agent, gated again exactly as after a build.
+    for (const f of [portalPath, x11Path]) if (!existsSync(f)) fail(`--skip-build: ${f} is missing; build it first`);
+    for (const f of readdirSync(stage)) if (f.endsWith('.asc') || f.startsWith('SHA256SUMS')) rmSync(join(stage, f));
+  }
   const portal = gate('portal', portalPath, PORTAL_ALLOW);
   if (!portal.res.needed.includes('libpipewire-0.3.so.0')) fail('the portal companion does not link libpipewire-0.3.so.0');
 
   // 4-5. the X11 agent with the companion's hash embedded
-  const x11Path = join(stage, x11DistFileName(version));
-  if (wsl(opts.distro, ['x11', targetDir, toWslPath(x11Path), portal.sha256]) !== 0) fail('the X11 build failed');
+  if (opts.build && wsl(opts.distro, ['x11', targetDir, hp(x11Path), portal.sha256]) !== 0) fail('the X11 build failed');
   const x11 = gate('x11', x11Path, []);
   if (!embedsCompanionHash(x11.buf, portal.sha256)) fail('the X11 agent does not carry the companion sha256 (IA_PORTAL_SHA256)');
 
-  // 6. the dist files and manifest row
+  // 6. the signing seam (packaging/sign, docs/release.md section 4): a detached <file>.asc for both files, and a
+  //    signed SHA256SUMS in the stage (not in the dist dir, which holds every platform's files). The ELF bytes do not
+  //    change, so the hashes above stay the published ones.
+  let signing;
+  try {
+    signing = signLinuxFiles({
+      dir: stage,
+      files: [x11DistFileName(version), portalDistFileName(version)],
+      distro: opts.distro,
+    });
+  } catch (err) {
+    fail(err.message);
+  }
+
+  // 7. the dist files and manifest row
   mkdirSync(dist, { recursive: true });
   const manifestPath = join(dist, 'manifest.json');
   let existing = null;
@@ -197,17 +236,22 @@ function main() {
   }
   let manifest;
   try {
-    manifest = mergeDistManifest(existing, linuxDistRow(version, x11, portal));
+    manifest = mergeDistManifest(existing, linuxDistRow(version, x11, portal, signing.signed));
   } catch (err) {
     fail(err.message);
   }
-  // The files before the manifest that names them (the api reads both at boot and on SIGHUP).
-  copyFileSync(portalPath, join(dist, portalDistFileName(version)));
-  copyFileSync(x11Path, join(dist, x11DistFileName(version)));
+  // The files before the manifest that names them (the api reads both at boot and on SIGHUP); each signature beside
+  // its file, and no stale signature left from an earlier signed release of the same version.
+  for (const name of [portalDistFileName(version), x11DistFileName(version)]) {
+    copyFileSync(join(stage, name), join(dist, name));
+    if (signing.signed) copyFileSync(join(stage, `${name}.asc`), join(dist, `${name}.asc`));
+    else rmSync(join(dist, `${name}.asc`), { force: true });
+  }
   writeAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   const info = {
     version,
-    signed: false,
+    signed: signing.signed,
+    ...(signing.signed ? { signingKey: signing.key } : { unsignedReason: signing.reason }),
     minOs: MIN_OS,
     x11: { file: x11DistFileName(version), size: x11.size, sha256: x11.sha256, glibc: x11.res.glibc, needed: x11.res.needed, sizeMiB: x11.res.sizeMiB },
     portal: { file: portalDistFileName(version), size: portal.size, sha256: portal.sha256, glibc: portal.res.glibc, needed: portal.res.needed, sizeMiB: portal.res.sizeMiB },
@@ -217,7 +261,12 @@ function main() {
   console.log(`\nagent:release:linux: ${dist}`);
   for (const [k, v] of [['x11', info.x11], ['portal', info.portal]])
     console.log(`  ${k}: ${v.file}  ${v.sizeMiB} MiB  GLIBC ${v.glibc}  NEEDED ${v.needed.join(' ')}  sha256 ${v.sha256}`);
-  console.log(`  manifest: ${manifestPath} (${manifest.builds.length} row(s); the Linux row has the companion; unsigned)`);
+  console.log(
+    `  manifest: ${manifestPath} (${manifest.builds.length} row(s); the Linux row has the companion; ` +
+      (signing.signed
+        ? `signed with OpenPGP key ${signing.key}; .asc beside both files, SHA256SUMS(.asc) in ${stage})`
+        : `unsigned: ${signing.reason})`),
+  );
   console.log('  then reload the api (SIGHUP or restart) on every node of the region');
 }
 

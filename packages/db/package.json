@@ -1,6 +1,7 @@
 {
   "name": "@indiansassist/db",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "IndiansAssist Drizzle schema, migrations, PGlite/pg client factory, audit chain writer and typed repositories (contracts section 4).",
   "type": "module",

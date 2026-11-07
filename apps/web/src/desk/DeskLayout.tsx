@@ -1,6 +1,7 @@
 /** Desk page chrome: no cross-origin resources (contracts section 12), one landmark set, org branding. */
 import type { ReactNode } from 'react';
 import { ShortcutHelp, type Shortcut } from '../components/ShortcutHelp';
+import { SourceFooter } from '../components/SourceLink';
 import { APP_NAME } from '../config';
 import { safeAccent } from '../lib/contrast';
 import { safeLogo, type DeskBrand } from './brand';
@@ -28,7 +29,9 @@ export function DeskLayout({ children, wide, shortcuts, brand }: { children: Rea
         {children}
       </main>
       <footer className="pb-6 text-center text-xs text-slate-600 dark:text-slate-400">
-        The technician can only see what you choose to share and cannot control your mouse or keyboard.
+        <p>The technician can only see what you choose to share and cannot control your mouse or keyboard.</p>
+        {/* AGPL-3.0-only section 13: the source offer on every Desk page. */}
+        <SourceFooter className="mt-1" />
       </footer>
     </div>
   );

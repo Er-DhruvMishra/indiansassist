@@ -1,6 +1,7 @@
 {
   "name": "@indiansassist/shared",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "IndiansAssist Phase A contracts as code: regions, enums, zod schemas, canonical JSON, audit hash chain, signed tokens, TURN credentials.",
   "type": "module",

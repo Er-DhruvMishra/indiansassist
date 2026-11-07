@@ -1,6 +1,6 @@
 # IndiansAssist
 
-Remote support and remote access platform. Self hostable, source available, security by default.
+Remote support and remote access platform. Self hostable, open source (AGPL-3.0-only), security by default.
 
 - Product contract: [docs/PRD.md](docs/PRD.md)
 - Development plan: [docs/PLAN.md](docs/PLAN.md)
@@ -143,3 +143,16 @@ path against a running api with a Node client acting as the recorder (no media).
 ## Self host
 
 See [infra/README.md](infra/README.md).
+
+## Licence and policies
+
+- **Licence:** GNU Affero General Public License, version 3 only (AGPL-3.0-only): [LICENSE](LICENSE),
+  [NOTICE](NOTICE). Copyright (C) 2026 Dhruv Mishra. If you run a modified version as a network service, section 13
+  requires you to offer its source to your users; the web app's footer link (`VITE_SOURCE_URL`) does that.
+- **Third-party components** keep their own licences: [docs/LICENSE-REGISTER.md](docs/LICENSE-REGISTER.md), with the
+  AGPL compatibility audit at its end.
+- **Privacy policy:** [PRIVACY.md](PRIVACY.md). **Code signing policy:** [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+  **Security reports:** [SECURITY.md](SECURITY.md) (private vulnerability reporting, never public issues).
+  **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Website:** <https://indiansassist.com>, built from [site/](site/) (see [site/README.md](site/README.md)).
+  Downloads: [GitHub Releases](https://github.com/Er-DhruvMishra/indiansassist/releases).
