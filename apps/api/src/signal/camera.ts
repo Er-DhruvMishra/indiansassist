@@ -1,7 +1,8 @@
 /**
  * Phase F stream camera (docs/specs/phase-f-contracts.md sections 6.4, 6.5a): the phone camera's `/signal` side.
- * `camera.hello` resolves a link code or a resume key to a live session; `camera.ready` and `camera.stop` report the
- * track; `routeCameraWebrtc` relays the camera <-> Assist peer connection (`peer: 'camera'`) and
+ * `camera.hello` resolves a link code or a resume key to a live session (on any node: a hello for a session owned by
+ * another node is bridged to it, the first one found by the code and a resume by `ia:camres:`); `camera.ready` and
+ * `camera.stop` report the track; `routeCameraWebrtc` relays the camera <-> Assist peer connection (`peer: 'camera'`) and
  * `routeCameraRecorderWebrtc` the camera <-> recorder one (`peer: 'recorder'` from the camera side).
  *
  * Everything runs on the session's owner node against `Live.camera`. A per-hub watcher (every 250 ms while a camera
@@ -32,10 +33,13 @@ import { closeParticipants, getSession, replaceParticipant, type OrgRow } from '
 import {
   CAMERA_SESSION_CONNECTED_TTL_SEC,
   cameraCodeHash,
+  clearCameraResume,
   clearCameraSession,
   consumeCameraLink,
   peekCameraLink,
+  peekCameraResume,
   readCameraSession,
+  writeCameraResume,
   writeCameraSession,
 } from '../camera/state.js';
 import { deskActor, systemActor, writeAudit } from '../lib/audit.js';
@@ -224,6 +228,7 @@ export async function endCamera(hub: SignalHub, live: Live, by: CameraStopReason
   }
   pushState(hub, live, { cameraId: cam.cameraId, state: 'ended', reason: by });
   await clearCameraSession(ctx.presence, live.id, cam.cameraId);
+  await clearCameraResume(ctx.presence, cam.resumeKeyHash);
   if (cam.startedAt === null) {
     if (by === 'declined') countResult(hub, live, 'declined');
     else if (by === 'no_camera' || by === 'permission_denied') countResult(hub, live, 'no_camera');
@@ -271,7 +276,7 @@ export async function handleCameraHello(hub: SignalHub, conn: Conn, msg: SignalO
     });
     return conn.close(WS_CLOSE.rateLimited, 'rate limited');
   }
-  if (msg.resumeKey !== undefined) return resumeCamera(hub, conn, msg.resumeKey, msg.id);
+  if (msg.resumeKey !== undefined) return resumeCamera(hub, conn, msg, msg.resumeKey);
   const code = normaliseCameraCode(msg.code ?? '');
   if (!code) return refuseLink(conn, msg.id);
   const codeHash = cameraCodeHash(code);
@@ -327,6 +332,7 @@ export async function handleCameraHello(hub: SignalHub, conn: Conn, msg: SignalO
     { cameraId: link.cameraId, codeHash, state: 'connected' },
     CAMERA_SESSION_CONNECTED_TTL_SEC,
   );
+  await writeCameraResume(ctx.presence, sha256Hex(resumeKey), live.id);
   await replaceParticipant(ctx.db, {
     sessionId: live.id,
     role: 'camera',
@@ -364,35 +370,49 @@ async function helloOk(
   };
 }
 
-/** `camera.hello { resumeKey }`: the phone's socket dropped; within `cameraResumeSec` it takes the camera back. */
-async function resumeCamera(hub: SignalHub, conn: Conn, resumeKey: string, id: string | undefined): Promise<void> {
+/**
+ * `camera.hello { resumeKey }`: the phone's socket dropped; within `cameraResumeSec` it takes the camera back.
+ *
+ * The key is checked only on the session's owner node, against `Live.camera.resumeKeyHash`. A phone that reconnects
+ * through another node finds the session through `ia:camres:<hash>` (written by the owner with each key it issues) and
+ * its hello is bridged to the owner (`Bridge.forwardCameraHello`), exactly as a first hello is; from then on its frames
+ * are piped there. A hello bridged in is never forwarded again (`conn.remote`), so a stale record cannot loop.
+ */
+async function resumeCamera(
+  hub: SignalHub,
+  conn: Conn,
+  msg: SignalOf<'camera.hello'>,
+  resumeKey: string,
+): Promise<void> {
   const { ctx } = hub;
+  const id = msg.id;
   const hash = sha256Hex(resumeKey);
   const rt = runtime(hub);
   let live: Live | null = null;
   for (const l of hub.live.values()) if (l.camera?.resumeKeyHash === hash) live = l;
-  const cam = live?.camera;
-  const x = live ? rt.extra.get(live.id) : undefined;
+  if (!live) return resumeElsewhere(hub, conn, msg, hash);
+  const cam = live.camera;
+  const x = rt.extra.get(live.id);
   const now = Date.now();
-  if (
-    !live ||
-    !cam ||
-    !x ||
-    live.state === 'ended' ||
-    (cam.connId === null && x.resumeUntil !== null && now > x.resumeUntil)
-  )
+  if (!cam || !x || live.state === 'ended' || (cam.connId === null && x.resumeUntil !== null && now > x.resumeUntil))
     return refuseLink(conn, id);
-  const old = hub.conn(cam.connId);
+  // Single use: the key is spent here, before any await, so two hellos racing with one key (through one node or
+  // two) cannot both pass the check above.
+  const next = base64urlEncode(randomBytes(32));
+  cam.resumeKeyHash = sha256Hex(next);
+  const prevConnId = cam.connId;
+  await clearCameraResume(ctx.presence, hash);
+  const old = hub.conn(prevConnId);
   if (old && old.id !== conn.id) old.close(WS_CLOSE.forbidden, 'camera resumed elsewhere');
   const s = await getSession(ctx.db, live.id);
   if (!s || s.state === 'ended') return refuseLink(conn, id);
   const org = await orgOf(hub, s.orgId);
   if (refuseIfOrgErasing(conn, org, id)) return;
-  const next = base64urlEncode(randomBytes(32));
+  if (live.camera !== cam) return refuseLink(conn, id); // the camera ended meanwhile
   conn.side = 'camera';
   cam.connId = conn.id;
-  cam.resumeKeyHash = sha256Hex(next);
   x.resumeUntil = null;
+  await writeCameraResume(ctx.presence, cam.resumeKeyHash, live.id);
   await replaceParticipant(ctx.db, {
     sessionId: live.id,
     role: 'camera',
@@ -402,6 +422,26 @@ async function resumeCamera(hub: SignalHub, conn: Conn, resumeKey: string, id: s
   conn.send(await helloOk(hub, live, s.assistUserId, org, next, x.recording, id));
   if (cam.startedAt !== null) pushState(hub, live, { cameraId: cam.cameraId, state: 'live' });
   ensureWatcher(hub);
+}
+
+/**
+ * A resume key that names no camera on this node: when another live node owns the camera's session, the hello goes
+ * there (the key itself travels only in that node message, to the owner's check above); otherwise it is refused.
+ */
+async function resumeElsewhere(
+  hub: SignalHub,
+  conn: Conn,
+  msg: SignalOf<'camera.hello'>,
+  hash: string,
+): Promise<void> {
+  const { ctx } = hub;
+  if (!hub.bridge.on || conn.remote) return refuseLink(conn, msg.id);
+  const rec = await peekCameraResume(ctx.presence, hash);
+  if (!rec || hub.live.has(rec.sessionId)) return refuseLink(conn, msg.id);
+  const s = await getSession(ctx.db, rec.sessionId);
+  if (!s || s.state === 'ended' || s.nodeId === ctx.config.nodeId) return refuseLink(conn, msg.id);
+  if (await hub.bridge.forwardCameraHello(conn, s, msg)) return;
+  refuseLink(conn, msg.id); // the owner node is gone, and the camera with it
 }
 
 // ---------- ready / stop ----------

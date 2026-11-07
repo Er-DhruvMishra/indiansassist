@@ -62,6 +62,31 @@ export async function clearCameraSession(presence: Presence, sessionId: string, 
   if (cur && cur.cameraId === cameraId) await presence.delKey(cameraSessionKey(sessionId));
 }
 
+/**
+ * Section 6.4 (the open item of 15.10, closed): `ia:camres:<sha256Hex(resumeKey)>` = `{ sessionId }`, written by the
+ * session's owner node with each resume key it issues and deleted when the key is spent or the camera ends. A phone
+ * that reconnects through a node that does not own the session finds the session here and its hello is bridged to the
+ * owner, which alone checks the key (single use, the resume window). Only the hash is stored; the key is never logged.
+ */
+export type CameraResumeRecord = { sessionId: string };
+export const cameraResumeKey = (resumeKeyHash: string) => `ia:camres:${resumeKeyHash}`;
+
+export async function writeCameraResume(presence: Presence, resumeKeyHash: string, sessionId: string): Promise<void> {
+  await presence.setKey(
+    cameraResumeKey(resumeKeyHash),
+    JSON.stringify({ sessionId } satisfies CameraResumeRecord),
+    CAMERA_SESSION_CONNECTED_TTL_SEC,
+  );
+}
+
+export async function peekCameraResume(presence: Presence, resumeKeyHash: string): Promise<CameraResumeRecord | null> {
+  return parse<CameraResumeRecord>(await presence.getKey(cameraResumeKey(resumeKeyHash)));
+}
+
+export async function clearCameraResume(presence: Presence, resumeKeyHash: string): Promise<void> {
+  await presence.delKey(cameraResumeKey(resumeKeyHash));
+}
+
 export async function peekCameraLink(presence: Presence, codeHash: string): Promise<CameraLinkRecord | null> {
   return parse<CameraLinkRecord>(await presence.getKey(cameraLinkKey(codeHash)));
 }

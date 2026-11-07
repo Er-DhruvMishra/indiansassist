@@ -47,7 +47,8 @@ export type NodeMsg =
   // Phase D rule 3.6d: a P4 worker hello verified on the holder node, completed by the session's owner.
   | { k: 'worker-hello'; from: string; conn: ConnSnapshot; sessionId: string; gen: number; re?: string }
   // Phase F section 6.4: a phone's first `camera.hello { code }` on a node that does not own the session; the owner
-  // consumes the code, so the holder never spends it.
+  // consumes the code, so the holder never spends it. Also a `camera.hello { resumeKey }` whose `ia:camres:` record
+  // names a session of another node: only the owner checks (and spends) the key.
   | { k: 'camera-hello'; from: string; conn: ConnSnapshot; msg: SignalOf<'camera.hello'> }
   | { k: 'rpc-reply'; id: string; value: unknown };
 
@@ -177,8 +178,8 @@ export class Bridge {
   }
 
   /**
-   * Phase F section 6.4: a phone whose code names a session owned by another live node is piped there, as a Desk is;
-   * the owner peeks, consumes and answers. True when forwarded.
+   * Phase F section 6.4: a phone whose code (or resume key) names a session owned by another live node is piped
+   * there, as a Desk is; the owner checks, spends and answers. True when forwarded.
    */
   async forwardCameraHello(conn: Conn, s: Pick<SessionRow, 'id' | 'nodeId'>, msg: SignalOf<'camera.hello'>): Promise<boolean> {
     if (!this.on || conn.remote || s.nodeId === this.self || !(await this.alive(s.nodeId))) return false;
@@ -392,7 +393,7 @@ export class Bridge {
     }
   }
 
-  /** The phone's node peeked the code and found this node the owner (section 6.4); the hello runs here. */
+  /** The phone's node found this node the owner by the code or the resume key (section 6.4); the hello runs here. */
   private async cameraHello(rc: RemoteConn, m: Extract<NodeMsg, { k: 'camera-hello' }>): Promise<void> {
     try {
       await handleCameraHello(this.hub, rc, m.msg);

@@ -273,7 +273,7 @@ The E §15.8 rows not named above stay open and unchanged: the transcript TTL as
 | 4.1b | `SMTP_REQUIRE_TLS` (new, default `true` when `NODE_ENV=production`, else `false`): with `true` the transport refuses to send without STARTTLS or implicit TLS (`smtps:`). `MAIL_DRIVER=smtp` with `SMTP_REQUIRE_TLS=false` and a non-loopback SMTP host under `NODE_ENV=production` is a boot problem |
 | 4.1c | **Capability.** Password reset and invite mail exist only when `MAIL_DRIVER=smtp`. `GET /api/v1/auth/options` (new, public, mail stream) answers `{ passwordReset: boolean, inviteMail: boolean }` from config only (never per account), and the login page shows "Forgot your password?" only when `passwordReset` is true. With the `log` driver nothing that carries a token is "sent" (the log line never contains the token or the link) |
 | 4.1d | The residency report's `mail` flow `dataSent` (E §6.2b) becomes "consent receipts, invitations, password-reset links and break-glass and erasure notices" (F0 edits the constant in `services/residency.ts`) |
-| 4.1e | Metric `ia_mail_sent_total{kind,result}` with `kind` ∈ `MAIL_KINDS` (`invite`, `reset`, `reset_notice`, `break_glass`, `receipt`, `erasure`) and `result` ∈ `sent`, `failed`, `no_mailer`. `reset_notice` is the SSO notice of 4.3b and `break_glass` the break-glass reset notice of 4.3f (revision 3). The E break-glass **login** notice (`sso/break-glass.ts`) still does not increment the series, an E-owned follow-up (§15.10) |
+| 4.1e | Metric `ia_mail_sent_total{kind,result}` with `kind` ∈ `MAIL_KINDS` (`invite`, `reset`, `reset_notice`, `break_glass`, `break_glass_login`, `receipt`, `erasure`) and `result` ∈ `sent`, `failed`, `no_mailer`. `reset_notice` is the SSO notice of 4.3b and `break_glass` the break-glass reset notice of 4.3f (revision 3). `break_glass_login` is the E break-glass **login** notice (`sso/break-glass.ts`), sent through `mail/send.ts` with the fixed subject "IndiansAssist: break-glass sign-in" (revision 3 follow-up) |
 
 ### 4.2 Invites by email (binding)
 
@@ -469,7 +469,7 @@ A new hub side `camera`, beside `assist`, `desk` and `recorder` (`Conn.side`). T
 
 **Close handling and several nodes (revision 3).** `camera.hello` is refused for an erasing org (`refuseIfOrgErasing`, §5.3). The hub's close path (`signal/lifecycle.ts` `onConnClosed`) calls the camera close handler for a `camera` socket, so a dropped phone starts the 60-second resume window at once.
 The close handler (`onCameraConnClosed`, `signal/camera.ts`) only marks the phone gone and starts the window; **the 250 ms watcher stays**, because it also applies what is not a socket close: the session's end (`session_ended`), the end of the resume window (`disconnected`), the recorder taking or losing the camera (`recorder.camera`, the camera's `recording.server_stopped { reason: 'recorder_left' }`) and the phone's "Recording" bar (`camera.state { recording }`).
-**A phone on a node that does not own the session is bridged (revision 3).** The phone's node peeks the code (it never consumes it), finds the session's owner alive and sends it the hello as a node message `camera-hello` (`signal/bridge.ts`, `Bridge.forwardCameraHello`); the owner peeks, consumes and answers through the phone's node, exactly as a Desk resume is piped. From then on `ownerFor` returns `pipeTo` for a `camera` socket as for a Desk, `ConnSnapshot.side` carries `camera`, the owner's `onConnClosed` runs the camera close handler when the phone's node reports `closed`, and a session ended without its owner closes the piped phone (`camera.closed { reason: 'session_ended' }`). A bridged hello is rate-limited once, on the phone's node. Only when the owner node is not alive is the phone refused (`bad_state`, 4403), still without spending the code. **Open:** a `camera.hello { resumeKey }` is resolved only on the owner node (the resume key maps to no session id in presence), so a phone whose socket drops and reconnects through another node is refused `camera_link_invalid` and needs a new link (§15.10).
+**A phone on a node that does not own the session is bridged (revision 3).** The phone's node peeks the code (it never consumes it), finds the session's owner alive and sends it the hello as a node message `camera-hello` (`signal/bridge.ts`, `Bridge.forwardCameraHello`); the owner peeks, consumes and answers through the phone's node, exactly as a Desk resume is piped. From then on `ownerFor` returns `pipeTo` for a `camera` socket as for a Desk, `ConnSnapshot.side` carries `camera`, the owner's `onConnClosed` runs the camera close handler when the phone's node reports `closed`, and a session ended without its owner closes the piped phone (`camera.closed { reason: 'session_ended' }`). A bridged hello is rate-limited once, on the phone's node. Only when the owner node is not alive is the phone refused (`bad_state`, 4403), still without spending the code. **Resume through any node (revision 3 follow-up).** Each time the owner issues a resume key it writes `ia:camres:<sha256(resumeKey)>` = `{ sessionId }` to presence (only the hash is stored), deleted when the key is spent or the camera ends. A `camera.hello { resumeKey }` that matches no camera on its node is looked up there and, when another live node owns the session, sent to it as a `camera-hello` node message. The owner checks the key exactly as a local resume: single use, spent before any await, inside the 60 s window, and the rate limit counted once on the phone's node. A bridged hello is never forwarded again, and the resume key is never logged.
 
 ### 6.5 Media path and coexistence (binding)
 
@@ -1077,19 +1077,23 @@ Results the streams measured and reported (their own gates; the integration run 
 | mobile | tap, long press, pinch and two-finger scroll verified under Chromium device emulation (`mobile.spec.ts`); `mobile-emulator.spec.ts` not passing (below) |
 | apple | `package3-mac.spec.ts` **3/3** on the Mac (about 7 s per session; `zsh` playbook, file sha256, chain); the iOS `IASession` package **41** tests pass on macOS and the iOS 18.1 simulator; the app and extension build with no warnings; the macOS zip is byte-reproducible across two runs and the extracted bundle passes `codesign --verify --strict`; every plist and the PPPC profile pass `plutil -lint`; the Get help flow checked by hand on the iPhone 16 simulator up to the system broadcast button |
 
-**Open items (honest, not gated):**
+**Open items (honest, not gated; updated 7 Nov 2026 when Phase F was built):**
 
 - **Vendor request shapes:** all four ticketing types stay `verified: false` (§3.3): Jira cloud's `<site>/browse/<key>` link; ServiceNow's `caller_id` as a sys_id, the urgency values 1/2/3 = high/medium/low, the `nav_to.do` link and the `work_notes` write; Freshdesk's `/a/tickets/<id>` link; Zoho Desk's refused-refresh-token shape (HTTP 200 with `error`), HTML `description` and the `Urgent` priority. Confirming them needs a real vendor sandbox.
-- **`mobile-emulator.spec.ts` does not pass:** the `adb reverse` socket stalls under load, so touch on real Android Chrome is unverified; tap and pinch are verified only under Chromium emulation.
-- **Manual checks:** real iPhone and iPad Safari (W120); a real iOS device broadcast (A5); real macOS capture and input with TCC grants (A1).
-- **iOS file receive (`ia.file`) is not built:** the extension declines file offers.
-- **macOS P4 is blocked** on linux-p4's `ia-session0` unix transport (`unix.rs`, wave 2; §16.3 coordinator decisions).
-- **Keep** was not clicked on a real desktop (the UI guard, the Windows applier and the Linux plan are tested against temporary roots only).
-- **Break-glass login notice** (`sso/break-glass.ts`) does not increment `ia_mail_sent_total` (E code; a follow-up, §4.1e).
-- The phone camera across nodes: the first hello is bridged to the owner (§6.4), but a phone that reconnects through another node cannot resume (the resume key is resolved only on the owner) and needs a new link; tested only with two in-process nodes on one fake Redis (`camera.test.ts`).
+- **The Android emulator specs are unstable on the build machine** (a software-rendered emulator with little free memory): touch and the camera on a real Android phone are unverified; tap and pinch are verified under Chromium emulation.
+- **Manual checks on real machines:**
+  - real iPhone and iPad Safari (W120), and a real iOS device broadcast (A5; waits on the owner's Xcode update);
+  - Keep clicked on a real desktop (the UI guard and the appliers are tested against temporary roots only);
+  - an installed Linux machine with an Xorg session (reboot, lock, removal) and EL 9 or Fedora (§8.12 "Manual");
+  - GNOME and KDE for the Wayland portal build (§9).
+- **Signing:**
+  - an Apple Developer ID Application and Installer certificate with notarization;
+  - a Windows code-signing certificate.
+  Until they exist, macOS and Windows artefacts are marked not signed. The Linux packages are unsigned by design (W111), with published sha256.
+- **Not run on the build machine:** the opt-in T2 throwaway-distro install (§8.12), and the full-size 2,000-device load run.
+- Done since revision 3 was first written: iOS file receive, macOS P4 (unattended), real macOS capture and input with TCC grants, Linux unattended (§8), the Wayland portal build (§9), and the fix round (`device.playbooks`, a failed UI ends the session cleanly). The phone camera now resumes through any api node (the owner records `ia:camres:<sha256(resumeKey)>` in presence; a resume landing elsewhere is bridged to the owner, which spends the key once), and the break-glass login notice is counted as `break_glass_login`.
 
 ---
-
 ## 16. PRD deviations and open questions resolved
 
 Earlier contracts use W1 to W91; Phase F starts at W100.

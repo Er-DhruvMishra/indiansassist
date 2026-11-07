@@ -88,7 +88,15 @@ const ok = (s: z.ZodType, v: unknown) => s.safeParse(v).success;
 
 describe('Phase F enums and additive values (section 16.2)', () => {
   it('enums-f lists', () => {
-    expect(MAIL_KINDS).toEqual(['invite', 'reset', 'reset_notice', 'break_glass', 'receipt', 'erasure']);
+    expect(MAIL_KINDS).toEqual([
+      'invite',
+      'reset',
+      'reset_notice',
+      'break_glass',
+      'break_glass_login',
+      'receipt',
+      'erasure',
+    ]);
     expect(RESET_OUTCOMES).toEqual(['mailed', 'sso_notice', 'throttled', 'send_failed', 'no_mailer']);
     expect(ERASURE_STATES).toEqual([
       'pending_confirmation',

@@ -5,8 +5,19 @@
 
 // ---------- mail (section 4) ----------
 
-/** `ia_mail_sent_total{kind}` (section 4.1e). */
-export const MAIL_KINDS = ['invite', 'reset', 'reset_notice', 'break_glass', 'receipt', 'erasure'] as const;
+/**
+ * `ia_mail_sent_total{kind}` (section 4.1e). `break_glass` is the break-glass reset notice (rule 4.3f) and
+ * `break_glass_login` the E 3.7d break-glass login notice (`sso/break-glass.ts`).
+ */
+export const MAIL_KINDS = [
+  'invite',
+  'reset',
+  'reset_notice',
+  'break_glass',
+  'break_glass_login',
+  'receipt',
+  'erasure',
+] as const;
 export type MailKind = (typeof MAIL_KINDS)[number];
 
 /** `auth.password_reset_requested.outcome` (section 4.3g). */

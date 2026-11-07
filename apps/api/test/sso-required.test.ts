@@ -5,8 +5,9 @@
  */
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { authSession, user as userTable } from '@indiansassist/db';
+import { authSession, getOrg, user as userTable } from '@indiansassist/db';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { notifyBreakGlassLogin } from '../src/sso/break-glass.js';
 import { call, cookieOf, PASSWORD, type Account, type TestApp } from './helpers.js';
 import {
   adminWithDomain,
@@ -189,6 +190,40 @@ describe('SSO required on', () => {
     expect(send.mock.calls.map((c) => c[0].to).sort()).not.toContain(admin.email);
     expect(t.ctx.mailer.driver).toBe('log');
     send.mockRestore();
+  });
+
+  it('each break-glass login notice counts once in ia_mail_sent_total{kind="break_glass_login"} (F section 4.1e)', async () => {
+    const count = async (result: 'sent' | 'failed' | 'no_mailer') =>
+      (await t.ctx.metrics.mailSent.get()).values.find((v) => v.labels.kind === 'break_glass_login' && v.labels.result === result)?.value ?? 0;
+    const snap = async () => ({ sent: await count('sent'), failed: await count('failed'), no_mailer: await count('no_mailer') });
+    const org = (await getOrg(t.db, admin.org.id))!;
+    const [me] = await t.db.select().from(userTable).where(eq(userTable.id, admin.user.id));
+    const logMailer = t.ctx.mailer;
+    try {
+      // the `log` driver (the default): one `no_mailer` per notice, as for every other kind
+      let before = await snap();
+      expect(await notifyBreakGlassLogin(t.ctx, org, me!, '203.0.113.7')).toBe(0);
+      expect(await snap()).toEqual({ ...before, no_mailer: before.no_mailer + 2 });
+      // an SMTP transport that takes both notices: one `sent` each
+      const ok = vi.fn().mockResolvedValue(true);
+      t.ctx.mailer = { driver: 'smtp', send: ok };
+      before = await snap();
+      expect(await notifyBreakGlassLogin(t.ctx, org, me!, '203.0.113.7')).toBe(2);
+      expect(ok).toHaveBeenCalledTimes(2);
+      expect(ok.mock.calls[0]![0]).toMatchObject({ subject: 'IndiansAssist: break-glass sign-in', attachments: [] });
+      expect(String(ok.mock.calls[0]![0].text)).toMatch(/signed in with the break-glass password at .* from 203\.0\.113\.7\./);
+      expect(await snap()).toEqual({ ...before, sent: before.sent + 2 });
+      // a refused send counts as `failed`, the label the other kinds use, and the next admin is still mailed
+      const flaky = vi.fn().mockRejectedValueOnce(Object.assign(new Error('refused'), { code: 'EENVELOPE', responseCode: 550 })).mockResolvedValue(true);
+      t.ctx.mailer = { driver: 'smtp', send: flaky };
+      before = await snap();
+      expect(await notifyBreakGlassLogin(t.ctx, org, me!, undefined)).toBe(1);
+      expect(flaky).toHaveBeenCalledTimes(2);
+      expect(await snap()).toEqual({ sent: before.sent + 1, failed: before.failed + 1, no_mailer: before.no_mailer });
+      for (const c of [...ok.mock.calls, ...flaky.mock.calls]) expect(String(c[0].to)).not.toBe(admin.email);
+    } finally {
+      t.ctx.mailer = logMailer;
+    }
   });
 
   it('protects the last break-glass user and clears the flag of a demoted one', async () => {

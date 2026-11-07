@@ -12,6 +12,7 @@ export const MAIL_SUBJECTS: Record<Exclude<MailKind, 'receipt' | 'erasure'>, str
   reset: 'Reset your IndiansAssist password',
   reset_notice: 'Signing in to IndiansAssist',
   break_glass: 'IndiansAssist: break-glass password reset',
+  break_glass_login: 'IndiansAssist: break-glass sign-in',
 };
 
 /** One line of person-supplied text: sanitised, CR / LF / other line breaks folded to spaces, bounded. */
@@ -87,5 +88,19 @@ export function breakGlassResetMail(p: { name: string; orgName: string; at: Date
       `${oneLine(p.name)} reset the break-glass password at ${mailDate(p.at)}.\n\n` +
       `Single sign-on is required for ${oneLine(p.orgName)}. Every session of that account was signed out. ` +
       'If this was not expected, review the audit log and the break-glass list in the SSO settings.\n',
+  };
+}
+
+/**
+ * Phase E rule 3.7d: to every other active org_admin after a break-glass password login under SSO required. The E
+ * sentence ("<name> signed in with the break-glass password at <time> from <ip>"), with the names made one line.
+ */
+export function breakGlassLoginMail(p: { name: string; orgName: string; at: string; ip: string | undefined; sessionHours: number }): MailText {
+  return {
+    subject: MAIL_SUBJECTS.break_glass_login,
+    text:
+      `${oneLine(p.name)} signed in with the break-glass password at ${p.at} from ${p.ip ?? 'an unknown address'}.\n\n` +
+      `Single sign-on is required for ${oneLine(p.orgName)}; break-glass sessions last ${p.sessionHours} hour(s). ` +
+      'If this was not expected, review the audit log and the break-glass list in the SSO settings.',
   };
 }

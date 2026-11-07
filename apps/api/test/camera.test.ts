@@ -3,7 +3,8 @@
  * chain entries. Links: RBAC (the session's Assist only), tier and state refusals, one per session, single use, TTL,
  * revoke. Hello: a bad code closes 4403, resume within the window and not after. WebRTC routing camera <-> the
  * session's Assist only. Session end closes the camera. The code never appears in a log line. Two nodes sharing
- * presence: `camera_busy`, single use and `DELETE` on the node that does not own the session (`ia:camsess:`).
+ * presence: `camera_busy`, single use and `DELETE` on the node that does not own the session (`ia:camsess:`), a first
+ * hello bridged to the owner, and a resume through either node (`ia:camres:`, the key checked and spent on the owner).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -535,6 +536,102 @@ describe('two nodes sharing presence (section 6.2c)', () => {
       const entries = await actions(s.sessionId, db);
       expect(entries.some((e) => e.action === 'camera.started')).toBe(true);
       expect(entries.find((e) => e.action === 'camera.ended')?.data).toMatchObject({ by: 'assist' });
+    } finally {
+      k.closeAll();
+    }
+  });
+
+  /** A live camera of a session A owns, the phone first on `first`. */
+  async function liveCamera(acc: Account, k: Kit, first: Node) {
+    const s = await k.activeSession(acc); // Desk and Assist on A: A owns the session
+    const res = await call(A.app, `/api/v1/sessions/${s.sessionId}/camera-links`, { method: 'POST', cookie: acc.cookie });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as { cameraId: string; code: string };
+    await s.assist.next('camera.state', (m: Msg) => m.state === 'linked');
+    const ph = await phone(first.url);
+    const ok = await ph.request({ t: 'camera.hello', code: body.code }, 'camera.hello.ok');
+    ph.send({ t: 'camera.ready', cameraId: body.cameraId, width: 640, height: 480, facing: 'environment' });
+    await s.assist.next('camera.state', (m: Msg) => m.state === 'live');
+    return { s, body, ph, ok };
+  }
+
+  /** The phone's offer reaches the Assist (tagged with the camera id) and the Assist's answer reaches the phone. */
+  async function streams(assist: SignalClient, ph: SignalClient, sessionId: string, cameraId: string, sdp: string) {
+    ph.send({ t: 'webrtc.offer', sessionId, sdp: `v=0 ${sdp}` });
+    expect(await assist.next('webrtc.offer', (m: Msg) => m.peer === 'camera' && m.sdp === `v=0 ${sdp}`)).toMatchObject({
+      sessionId: cameraId,
+    });
+    assist.send({ t: 'webrtc.answer', sessionId, sdp: `v=0 ${sdp}-answer`, peer: 'camera' });
+    expect(await ph.next('webrtc.answer')).toMatchObject({ sessionId, sdp: `v=0 ${sdp}-answer` });
+  }
+
+  async function refused(node: Node, resumeKey: string): Promise<void> {
+    const p = await phone(node.url);
+    p.send({ t: 'camera.hello', resumeKey });
+    expect((await p.next('error')).code).toBe('camera_link_invalid');
+    expect(await p.closed()).toBe(4403);
+  }
+
+  it('a phone that reconnects through the node that does not own the session resumes there (section 6.4)', async () => {
+    const acc = await signup(A.app);
+    const k = new Kit(A, A.url);
+    try {
+      const { s, body, ph, ok } = await liveCamera(acc, k, A);
+      const key1 = ok.resumeKey as string;
+      // the owner stored only the hash of the key, never the key
+      expect(await A.ctx.presence.getKey(`ia:camres:${key1}`)).toBeNull();
+      ph.close();
+      await sleep(150);
+      // the phone comes back through B: B bridges the resume to A, which checks the key and answers through B
+      const back = await phone(B.url);
+      const ok2 = await back.request({ t: 'camera.hello', resumeKey: key1 }, 'camera.hello.ok');
+      expect(ok2).toMatchObject({ cameraId: body.cameraId, sessionId: s.sessionId });
+      const key2 = ok2.resumeKey as string;
+      expect(key2).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(key2).not.toBe(key1);
+      await s.assist.next('camera.state', (m: Msg) => m.state === 'live');
+      // the Assist keeps seeing the phone's stream: the camera <-> Assist signaling is piped from B to A
+      await streams(s.assist, back, s.sessionId, body.cameraId, 'resumed-through-b');
+      // the spent key is refused through either node; so is a key nobody issued
+      await refused(A, key1);
+      await refused(B, key1);
+      await refused(A, 'A'.repeat(43));
+      await refused(B, 'B'.repeat(43));
+      // the key B's resume issued resumes on the owner itself, and the next one through B again
+      back.close();
+      await sleep(150);
+      const third = await phone(A.url);
+      const ok3 = await third.request({ t: 'camera.hello', resumeKey: key2 }, 'camera.hello.ok');
+      expect(ok3.cameraId).toBe(body.cameraId);
+      await refused(B, key2);
+      await streams(s.assist, third, s.sessionId, body.cameraId, 'back-on-a');
+      third.close();
+      await sleep(150);
+      const fourth = await phone(B.url);
+      const ok4 = await fourth.request({ t: 'camera.hello', resumeKey: ok3.resumeKey }, 'camera.hello.ok');
+      expect(ok4.cameraId).toBe(body.cameraId);
+      await streams(s.assist, fourth, s.sessionId, body.cameraId, 'b-again');
+      expect(s.assist.messages.some((m) => m.t === 'camera.state' && m.state === 'ended')).toBe(false);
+      expect((await actions(s.sessionId, db)).some((e) => e.action === 'camera.ended')).toBe(false);
+    } finally {
+      k.closeAll();
+    }
+  });
+
+  it('a resume through either node is refused once the window has passed (section 6.4)', async () => {
+    cameraTiming.resumeMs = 600;
+    const acc = await signup(A.app);
+    const k = new Kit(A, A.url);
+    try {
+      // the phone first joins through B (bridged), so both its sockets were held by the node that does not own it
+      const { s, ph, ok } = await liveCamera(acc, k, B);
+      ph.close();
+      await s.assist.next('camera.state', (m: Msg) => m.state === 'ended' && m.reason === 'disconnected', 3000);
+      await refused(B, ok.resumeKey as string);
+      await refused(A, ok.resumeKey as string);
+      expect((await actions(s.sessionId, db)).find((e) => e.action === 'camera.ended')?.data).toMatchObject({
+        by: 'disconnected',
+      });
     } finally {
       k.closeAll();
     }
