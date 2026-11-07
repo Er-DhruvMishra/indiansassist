@@ -200,7 +200,9 @@ pub fn enroll_now(
         &request,
         |req| {
             let body = serde_json::to_string(req).map_err(|e| e.to_string())?;
-            match ureq::post(&url)
+            match ia_waker::https::builder()
+                .build()
+                .post(&url)
                 .set("content-type", "application/json")
                 // A §3.2 requirement: the endpoint takes no cookie and no Origin, and demands
                 // this header so a browser cannot be made to enrol a device.

@@ -203,6 +203,7 @@ fn run_consent_app(
                 CONSENT_TITLE,
                 options,
                 Box::new(move |cc| {
+                    crate::fonts::install(&cc.egui_ctx);
                     if let Ok(mut g) = slot.lock() {
                         *g = Some(cc.egui_ctx.clone());
                     }
@@ -334,7 +335,10 @@ mod mac_host {
             let result = eframe::run_native(
                 "IndiansAssist",
                 options,
-                Box::new(move |_| Ok(Box::new(PermissionsApp { out: app_out }))),
+                Box::new(move |cc| {
+                    crate::fonts::install(&cc.egui_ctx);
+                    Ok(Box::new(PermissionsApp { out: app_out }))
+                }),
             );
             if let Err(e) = result {
                 tracing::warn!("the permissions window could not open: {e}");
@@ -373,6 +377,7 @@ mod mac_host {
                 CONSENT_TITLE,
                 options,
                 Box::new(move |cc| {
+                    crate::fonts::install(&cc.egui_ctx);
                     if let Ok(mut g) = slot.lock() {
                         *g = Some(cc.egui_ctx.clone());
                     }

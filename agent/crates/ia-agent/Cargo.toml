@@ -33,6 +33,8 @@ media = [
     "dep:bytes",
     "dep:async-trait",
     "dep:shiguredo_libvpx",
+    # The OS-verified rustls config the `wss:` signalling connect uses (licence audit F1).
+    "ia-platform/tls",
 ]
 # Phase E §7.2: voice (cpal + Opus, C §6.3) split out of `media`, on by default on Windows and off
 # on Linux, so the Linux build needs neither ALSA nor libopus.

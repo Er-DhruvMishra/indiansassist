@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CameraSlot } from '../src/assist/console/PhaseFSlots';
 import { AssistSignalProvider } from '../src/assist/signal/AssistSignalProvider';
 import { cameraLinkIn, CameraLinkAccessory } from '../src/camera/CameraLinkAccessory';
-import { setCameraConsoleDeps } from '../src/camera/CameraPanel';
+import { releaseCameraControllersForTests, setCameraConsoleDeps } from '../src/camera/CameraPanel';
 import { cameraChatText, ConsoleCameraController, snapshotFileName, type CameraApi } from '../src/camera/cameraConsole';
 import { FakePeerConnection, FakeWebSocket, fakeStream, fakeTrack } from './fakes';
 
@@ -69,7 +69,10 @@ beforeEach(() => {
     MediaRecorderImpl: FakeRecorder as unknown as typeof MediaRecorder,
   });
 });
-afterEach(() => setCameraConsoleDeps(null));
+afterEach(() => {
+  releaseCameraControllersForTests();
+  setCameraConsoleDeps(null);
+});
 
 function renderPanel(consoleRecording = false) {
   const ui = (rec: boolean) => (
@@ -149,6 +152,57 @@ describe('link step (sections 6.1, 6.6)', () => {
       </MemoryRouter>,
     );
     expect(container.innerHTML).toBe('');
+  });
+});
+
+describe('layout switch (section 7.4)', () => {
+  it('keeps the link and the live camera when the console re-mounts the panel in another layout', async () => {
+    // The console renders a different tree per layout, so a resize across 1024 px unmounts the panel and mounts it
+    // again elsewhere in the same commit (the e2e saw this during a full-page screenshot).
+    const ui = (layout: 'desktop' | 'tablet') => (
+      <MemoryRouter>
+        <AssistSignalProvider enabled url="ws://test/signal" WebSocketImpl={FakeWebSocket as unknown as typeof WebSocket}>
+          {layout === 'desktop' ? (
+            <div>
+              <CameraSlot session={{ id: SESSION, live: true, consoleRecording: false }} sendChat={sendChat} tier="p3_portable" />
+            </div>
+          ) : (
+            <section>
+              <CameraSlot session={{ id: SESSION, live: true, consoleRecording: false }} sendChat={sendChat} tier="p3_portable" />
+            </section>
+          )}
+        </AssistSignalProvider>
+      </MemoryRouter>
+    );
+    const r = render(ui('desktop'));
+    const ws = FakeWebSocket.instances[0]!;
+    act(() => ws.open());
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Phone camera' })));
+    expect(await screen.findByRole('button', { name: "Send to the Desk's chat" })).toBeTruthy();
+    for (const layout of ['tablet', 'desktop', 'tablet'] as const) r.rerender(ui(layout));
+    await act(async () => new Promise((res) => setTimeout(res, 5)));
+    expect(screen.getByRole('button', { name: "Send to the Desk's chat" })).toBeTruthy();
+    expect(fake.createLink).toHaveBeenCalledTimes(1);
+    expect(fake.revoke).not.toHaveBeenCalled();
+    act(() => ws.receive({ t: 'camera.state', cameraId: CAMERA, state: 'live' }));
+    expect(screen.getByLabelText("Phone camera, live video from the person's phone")).toBeTruthy();
+  });
+
+  it('ends the camera controller once no layout holds the panel', async () => {
+    const r = render(
+      <MemoryRouter>
+        <AssistSignalProvider enabled url="ws://test/signal" WebSocketImpl={FakeWebSocket as unknown as typeof WebSocket}>
+          <CameraSlot session={{ id: SESSION, live: true, consoleRecording: false }} sendChat={sendChat} tier="p3_portable" />
+        </AssistSignalProvider>
+      </MemoryRouter>,
+    );
+    const ws = FakeWebSocket.instances[0]!;
+    act(() => ws.open());
+    const pc = await toLive(ws);
+    expect(pc.closed).toBe(false);
+    r.unmount();
+    await act(async () => new Promise((res) => setTimeout(res, 5)));
+    expect(pc.closed).toBe(true);
   });
 });
 

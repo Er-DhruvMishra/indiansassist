@@ -36,6 +36,7 @@ service = [
     "dep:ureq",
     "ia-session0/winapi",
     "ia-platform/winapi",
+    "ia-platform/tls",
     "ia-waker/net",
 ]
 # Phase F §8.2: the Linux systemd service (logind and systemd over the system bus through zbus,
@@ -47,6 +48,7 @@ linux-service = [
     "dep:futures-util",
     "dep:ureq",
     "ia-platform/linux-os",
+    "ia-platform/tls",
     "ia-waker/net",
     "dep:zbus",
 ]
@@ -60,6 +62,7 @@ macos-service = [
     "dep:tokio-tungstenite",
     "dep:futures-util",
     "dep:ureq",
+    "ia-platform/tls",
     "ia-waker/net",
 ]
 
@@ -87,7 +90,9 @@ chrono = { workspace = true, features = ["clock"] }
 tokio = { workspace = true, optional = true, features = ["process", "signal"] }
 tokio-tungstenite = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
-ureq = { version = "2.10.1", default-features = false, features = ["tls", "gzip"], optional = true }
+# No `tls` feature: ureq's own rustls backend bundles webpki-roots (licence audit F1). Every call goes
+# through `ia_waker::https`, which plugs in the OS-verified config of `ia_platform::tls`.
+ureq = { version = "2.10.1", default-features = false, features = ["gzip"], optional = true }
 windows-service = { version = "0.7.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]

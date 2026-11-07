@@ -301,7 +301,14 @@ async fn one_connection(
     // §3.4: an absent `Origin` on `/signal/device`, and never a cookie.
     req.headers_mut().remove("origin");
     req.headers_mut().remove("cookie");
-    let (ws, _) = tokio_tungstenite::connect_async(req)
+    // wss: is verified by the operating system (`ia_platform::tls`, licence audit F1).
+    let connector = match req.uri().scheme_str() {
+        Some("wss") => Some(tokio_tungstenite::Connector::Rustls(
+            ia_platform::tls::client_config()?,
+        )),
+        _ => None,
+    };
+    let (ws, _) = tokio_tungstenite::connect_async_tls_with_config(req, None, false, connector)
         .await
         .map_err(|e| format!("connect: {e}"))?;
     tracing::info!(%url, "device socket open");
@@ -855,9 +862,7 @@ async fn run_queued(shared: &Arc<LinuxShared>, action: ia_core::fleet::QueuedAct
 /// Fetch a `file_push` body (rule 9.4), bounded by the native file limit.
 fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let max = ia_core::types::limits::FILE_MAX_BYTES_NATIVE;
-    let resp = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(120))
-        .build()
+    let resp = ia_waker::https::agent(Duration::from_secs(120))
         .get(url)
         .set("user-agent", &crate::user_agent())
         .call()

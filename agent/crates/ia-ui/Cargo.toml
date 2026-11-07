@@ -25,9 +25,12 @@ dev = []
 [dependencies]
 ia-core.workspace = true
 tracing.workspace = true
-egui = { version = "0.29.1", optional = true }
-# glow only (no wgpu: smaller exe); default_fonts so text renders.
-eframe = { version = "0.29.1", optional = true, default-features = false, features = ["glow", "default_fonts"] }
+# No `default_fonts` anywhere (licence audit F2): egui's built-in set includes Ubuntu-Light under
+# the Ubuntu Font Licence, which is not OSI-approved. `fonts` embeds Noto Sans and Noto Emoji (SIL
+# OFL 1.1) from `assets/fonts/` instead.
+egui = { version = "0.29.1", optional = true, default-features = false }
+# glow only (no wgpu: smaller exe).
+eframe = { version = "0.29.1", optional = true, default-features = false, features = ["glow"] }
 # Same winit eframe uses; only for `EventLoopBuilderExtWindows::with_any_thread`.
 winit = { version = "0.30", optional = true, default-features = false }
 
@@ -49,7 +52,7 @@ windows = { workspace = true, optional = true, features = [
 # are opened at run time, not linked), and the tray is ksni (pure-Rust D-Bus through zbus).
 [target.'cfg(target_os = "linux")'.dependencies]
 qrcode = { version = "=0.14.1", default-features = false }
-eframe ={ version = "0.29.1", optional = true, default-features = false, features = ["glow", "default_fonts", "x11"] }
+eframe ={ version = "0.29.1", optional = true, default-features = false, features = ["glow", "x11"] }
 winit = { version = "0.30", optional = true, default-features = false, features = ["x11", "rwh_06"] }
 # The pill treatment over EWMH (utility type, above, skip-taskbar), pure-Rust X11.
 x11rb = { workspace = true, optional = true }

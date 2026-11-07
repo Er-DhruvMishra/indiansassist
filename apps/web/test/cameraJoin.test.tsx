@@ -20,7 +20,16 @@ const FPR_ANSWER = 'sha-256 DD:EE:FF';
 
 class PhonePc extends FakePeerConnection {
   added: { track: MediaStreamTrack; init: unknown }[] = [];
+  senders: FakeSender[] = [];
+  /** Runs while the offer is being made (a test ends the capture there), then lets a task pass. */
+  static duringOffer: (() => void) | null = null;
   async createOffer(): Promise<RTCSessionDescriptionInit> {
+    const hook = PhonePc.duringOffer;
+    PhonePc.duringOffer = null;
+    if (hook) {
+      hook();
+      await new Promise((r) => setTimeout(r, 0));
+    }
     return { type: 'offer', sdp: `v=0\r\na=fingerprint:${FPR_OFFER}\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n` };
   }
   override async setLocalDescription(desc?: RTCSessionDescriptionInit): Promise<void> {
@@ -33,7 +42,9 @@ class PhonePc extends FakePeerConnection {
   }
   addTransceiver(track: MediaStreamTrack, init: unknown) {
     this.added.push({ track, init });
-    return { sender: new FakeSender(track) };
+    const sender = new FakeSender(track);
+    this.senders.push(sender);
+    return { sender };
   }
 }
 
@@ -52,6 +63,7 @@ let video: ReturnType<typeof fakeTrack>;
 beforeEach(() => {
   FakeWebSocket.reset();
   FakePeerConnection.reset();
+  PhonePc.duringOffer = null;
   hidden.state = 'visible';
   hidden.listeners = [];
   video = fakeTrack('video');
@@ -63,6 +75,7 @@ beforeEach(() => {
     secureContext: () => true,
     doc,
     hiddenStopMs: 50,
+    retryDelaysMs: [],
   });
 });
 afterEach(() => setCameraPhoneDeps(null));
@@ -206,6 +219,104 @@ describe('capture (section 6.3b, 6.3c)', () => {
     await act(async () => new Promise((r) => setTimeout(r, 120)));
     expect(ws.ofType('camera.stop')[0]).toMatchObject({ reason: 'phone_stopped' });
     expect(video.stop).toHaveBeenCalled();
+  });
+
+  /** The `ended` listener the page put on a track (the fake records `addEventListener` calls). */
+  function endedListener(track: MediaStreamTrack): () => void {
+    const calls = (track.addEventListener as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const call = calls.find((c) => c[0] === 'ended');
+    if (!call) throw new Error('no ended listener');
+    return call[1] as () => void;
+  }
+
+  it('takes the camera again when the browser ends the track, without renegotiating or stopping', async () => {
+    const ws = await consent();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start camera' })));
+    const pc = FakePeerConnection.instances[0] as PhonePc;
+    const second = fakeTrack('video');
+    gum.mockResolvedValueOnce(fakeStream([second]));
+    await act(async () => endedListener(video)());
+    expect(gum).toHaveBeenCalledTimes(2);
+    expect(pc.senders[0]!.track).toBe(second);
+    expect(ws.ofType('camera.stop')).toHaveLength(0);
+    expect(ws.ofType('webrtc.offer')).toHaveLength(1); // no renegotiation
+    expect(video.stop).toHaveBeenCalled();
+    expect(screen.getByLabelText('What your camera is sharing')).toBeTruthy();
+    // a track that keeps ending: after MAX_TRACK_RECOVERIES the camera stops as unusable
+    let last = second;
+    for (let i = 0; i < 2; i++) {
+      const next = fakeTrack('video');
+      gum.mockResolvedValueOnce(fakeStream([next]));
+      await act(async () => endedListener(last)());
+      last = next;
+    }
+    expect(ws.ofType('camera.stop')).toHaveLength(0);
+    await act(async () => endedListener(last)());
+    expect(ws.ofType('camera.stop')[0]).toMatchObject({ reason: 'no_camera' });
+  });
+
+  it('a track the browser ends before the offer is out is taken again, and the camera is still reported ready', async () => {
+    const ws = await consent();
+    const second = fakeTrack('video');
+    gum.mockResolvedValueOnce(fakeStream([video])).mockResolvedValueOnce(fakeStream([second]));
+    PhonePc.duringOffer = () => endedListener(video)(); // the e2e failure: Chromium ended the capture here
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start camera' })));
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(ws.ofType('camera.stop')).toHaveLength(0);
+    expect(ws.ofType('camera.ready')).toHaveLength(1);
+    expect((FakePeerConnection.instances[0] as PhonePc).senders[0]!.track).toBe(second);
+    expect((await screen.findAllByText('Your camera is being shared with Priya S')).length).toBeGreaterThan(0);
+  });
+
+  it('a camera that ends while the offer is made is never reported ready nor shown as shared', async () => {
+    const ws = await consent();
+    gum
+      .mockResolvedValueOnce(fakeStream([video]))
+      .mockRejectedValueOnce(Object.assign(new Error('gone'), { name: 'NotReadableError' }));
+    PhonePc.duringOffer = () => endedListener(video)();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start camera' })));
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(ws.ofType('camera.stop')[0]).toMatchObject({ reason: 'no_camera' });
+    expect(ws.ofType('camera.ready')).toHaveLength(0);
+    expect(await screen.findByText(/No camera could be used on this device/)).toBeTruthy();
+    expect(screen.queryByLabelText('What your camera is sharing')).toBeNull();
+  });
+
+  it('waits for a camera that is briefly gone (the e2e: Chromium re-listed its devices) and takes it again', async () => {
+    setCameraPhoneDeps({
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      PeerConnection: PhonePc as unknown as typeof RTCPeerConnection,
+      getUserMedia: gum as unknown as (c: MediaStreamConstraints) => Promise<MediaStream>,
+      secureContext: () => true,
+      doc,
+      retryDelaysMs: [1, 1],
+    });
+    const ws = await consent();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start camera' })));
+    const second = fakeTrack('video');
+    gum
+      .mockRejectedValueOnce(Object.assign(new Error('Requested device not found'), { name: 'NotFoundError' }))
+      .mockResolvedValueOnce(fakeStream([second]));
+    await act(async () => endedListener(video)());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(gum).toHaveBeenCalledTimes(3);
+    expect(ws.ofType('camera.stop')).toHaveLength(0);
+    expect((FakePeerConnection.instances[0] as PhonePc).senders[0]!.track).toBe(second);
+    // a refusal is final at once, with no retry
+    const third = gum.mock.calls.length;
+    gum.mockRejectedValueOnce(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
+    await act(async () => endedListener(second)());
+    expect(gum.mock.calls.length).toBe(third + 1);
+    expect(ws.ofType('camera.stop')[0]).toMatchObject({ reason: 'permission_denied' });
+  });
+
+  it('a track that ends while the page is hidden stops the camera, as before', async () => {
+    const ws = await consent();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start camera' })));
+    hidden.state = 'hidden';
+    await act(async () => endedListener(video)());
+    expect(gum).toHaveBeenCalledTimes(1);
+    expect(ws.ofType('camera.stop')[0]).toMatchObject({ reason: 'phone_stopped' });
   });
 
   it('shows the server ending the camera in words', async () => {

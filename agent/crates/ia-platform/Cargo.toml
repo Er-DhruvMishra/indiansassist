@@ -15,6 +15,9 @@ winapi = ["dep:windows", "dep:libloading"]
 # Phase E §7.7: the Linux impls that need libc (SO_PEERCRED, getuid, the abstract socket).
 # Compiles to nothing off Linux, so the Windows `--all-features` gates pass.
 linux-os = ["dep:libc"]
+# Licence audit F1: the rustls client config of every https / wss call, verified by the
+# operating system (`tls`). Pulled in by `ia-agent/media` and `ia-waker/net`.
+tls = ["dep:rustls", "dep:rustls-platform-verifier"]
 
 [dependencies]
 ia-core.workspace = true
@@ -22,6 +25,8 @@ regex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true, optional = true }

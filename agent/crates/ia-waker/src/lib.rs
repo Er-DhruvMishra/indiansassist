@@ -18,6 +18,9 @@ pub mod wol;
 
 #[cfg(feature = "net")]
 mod client;
+/// The OS-verified ureq agent every https call of the service makes (licence audit F1).
+#[cfg(feature = "net")]
+pub mod https;
 
 #[cfg(feature = "net")]
 pub use client::{AmtClient, LocalWaker};

@@ -519,7 +519,10 @@ mod mac {
     /// One step in the consent window: a tick when granted; otherwise why, and "Show me how".
     fn step(ui: &mut egui::Ui, g: &mut Guide, granted: bool, grant: Grant, title: &str, why: &str) {
         if granted {
-            ui.label(RichText::new(format!("✓ {title}")).color(Color32::from_rgb(60, 170, 90)));
+            // U+2714 (Noto Emoji has it; U+2713 is in neither embedded font, `crate::fonts`).
+            ui.label(
+                RichText::new(format!("\u{2714} {title}")).color(Color32::from_rgb(60, 170, 90)),
+            );
             return;
         }
         ui.label(RichText::new(title).strong());

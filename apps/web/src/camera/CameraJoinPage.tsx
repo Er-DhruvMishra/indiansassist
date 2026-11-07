@@ -88,7 +88,7 @@ function CameraSession({ code }: { code: string }) {
     if (!v) return;
     const stream = ctrl.preview;
     if (v.srcObject !== stream) v.srcObject = stream;
-  }, [ctrl, snap.phase, snap.facing]);
+  }, [ctrl, snap.phase, snap.facing, snap.capture]);
 
   const tech = snap.technician ?? 'The technician';
   const org = snap.org ?? 'your support provider';

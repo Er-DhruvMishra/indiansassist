@@ -20,6 +20,8 @@ pub mod macos;
 pub mod protocol;
 pub mod selfdelete;
 pub mod service;
+#[cfg(feature = "tls")]
+pub mod tls;
 pub mod traits;
 pub mod trust;
 

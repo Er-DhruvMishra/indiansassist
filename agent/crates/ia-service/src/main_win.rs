@@ -231,9 +231,7 @@ fn uninstall() {
                     // Best effort and bounded: an uninstall must not hang because the server is
                     // unreachable. §10.2's silent-past-grace rule means the fleet still shows
                     // the machine honestly if this call never lands.
-                    let outcome = ureq::AgentBuilder::new()
-                        .timeout(std::time::Duration::from_secs(10))
-                        .build()
+                    let outcome = ia_waker::https::agent(std::time::Duration::from_secs(10))
                         .post(&url)
                         .set("content-type", "application/json")
                         .set("x-requested-with", "IndiansAssist")

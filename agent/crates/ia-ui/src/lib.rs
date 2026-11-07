@@ -21,6 +21,9 @@ pub mod uifail;
 
 #[cfg(feature = "gui")]
 pub mod app;
+/// The two embedded SIL OFL 1.1 fonts every window draws with (licence audit F2).
+#[cfg(feature = "gui")]
+pub mod fonts;
 #[cfg(feature = "gui")]
 pub mod guard;
 #[cfg(feature = "gui")]

@@ -36,9 +36,16 @@ export function shellWorker(): Plugin {
   };
 }
 
+/**
+ * The Playwright suites run the dev server with `IA_E2E_STATIC=1`: no file watcher and no HMR, so a build, a typecheck
+ * or an edit elsewhere in the repository cannot hot-update or reload a page in the middle of a test (a hot update
+ * re-runs the effects of the updated components, which tears down a live camera or session controller).
+ */
+const e2eStatic = process.env.IA_E2E_STATIC === '1';
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), shellWorker()],
-  server: { port: 5173, strictPort: true },
+  server: { port: 5173, strictPort: true, ...(e2eStatic ? { hmr: false, watch: null } : {}) },
   preview: { port: 5173 },
   worker: { format: 'es' },
   build: { target: 'es2022', sourcemap: true },

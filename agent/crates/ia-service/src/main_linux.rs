@@ -425,9 +425,7 @@ fn deregister(layout: &LinuxLayout, ctx: &SealerContext) {
                         "{}/api/v1/devices/{device_id}/deregister",
                         cfg.api_origin.trim_end_matches('/')
                     );
-                    let outcome = ureq::AgentBuilder::new()
-                        .timeout(Duration::from_secs(10))
-                        .build()
+                    let outcome = ia_waker::https::agent(Duration::from_secs(10))
                         .post(&url)
                         .set("content-type", "application/json")
                         .set("x-requested-with", "IndiansAssist")

@@ -28,6 +28,66 @@ export function setCameraConsoleDeps(d: Partial<ConsoleCameraDeps> | null): void
   depsOverride = d;
 }
 
+/**
+ * One camera controller per session, shared by every mount of the panel. The console renders a different tree per
+ * layout (desktop, tablet, phone: `useViewport`), so a window resized across 1024 px, a rotated tablet or a docked
+ * developer tool unmounts the panel and mounts it again in the other layout, sometimes several times in a row. The
+ * link, the peer connection and the live video belong to the session, not to that mount: the controller is attached
+ * while any panel holds it and is disposed only when none holds it once the commit is over.
+ */
+type HeldCamera = {
+  ctrl: ConsoleCameraController;
+  signal: SignalClient | null;
+  holders: number;
+  detach: (() => void) | null;
+  release: ReturnType<typeof setTimeout> | null;
+};
+const heldCameras = new Map<string, HeldCamera>();
+
+function cameraFor(sessionId: string, signal: SignalClient | null): HeldCamera {
+  const held = heldCameras.get(sessionId);
+  if (held && held.signal === signal) return held;
+  if (held) drop(sessionId, held);
+  const fresh: HeldCamera = {
+    ctrl: new ConsoleCameraController({ sessionId, signal, ...(depsOverride ?? {}) }),
+    signal,
+    holders: 0,
+    detach: null,
+    release: null,
+  };
+  heldCameras.set(sessionId, fresh);
+  return fresh;
+}
+
+function drop(sessionId: string, held: HeldCamera): void {
+  if (held.release) clearTimeout(held.release);
+  held.detach?.();
+  held.ctrl.dispose();
+  if (heldCameras.get(sessionId) === held) heldCameras.delete(sessionId);
+}
+
+function useSessionCameraController(sessionId: string, signal: SignalClient | null): ConsoleCameraController {
+  const held = useMemo(() => cameraFor(sessionId, signal), [sessionId, signal]);
+  useEffect(() => {
+    if (heldCameras.get(sessionId) !== held) heldCameras.set(sessionId, held);
+    held.holders += 1;
+    if (held.release) clearTimeout(held.release);
+    held.release = null;
+    held.detach ??= held.ctrl.attach();
+    return () => {
+      held.holders -= 1;
+      // The next layout's panel mounts in the same commit; only a panel nobody re-mounts ends the camera.
+      if (held.holders === 0) held.release = setTimeout(() => held.holders === 0 && drop(sessionId, held), 0);
+    };
+  }, [sessionId, held]);
+  return held.ctrl;
+}
+
+/** Test hook: the panels' shared controllers are dropped at once (a test's unmount would otherwise leave a timer). */
+export function releaseCameraControllersForTests(): void {
+  for (const [id, held] of [...heldCameras]) drop(id, held);
+}
+
 export function CameraPanel({ session, sendChat, tier }: CameraSlotProps) {
   const signal = useAssistSignal()?.client ?? null;
   if (tier === 'p2_extension') return null; // section 6.2d: no camera in P2 (PRD 4)
@@ -46,17 +106,7 @@ function CameraPanelView({
   sendChat,
   signal,
 }: Omit<CameraSlotProps, 'tier'> & { signal: SignalClient | null }) {
-  const ctrl = useMemo(
-    () => new ConsoleCameraController({ sessionId: session.id, signal, ...(depsOverride ?? {}) }),
-    [session.id, signal],
-  );
-  useEffect(() => {
-    const detach = ctrl.attach();
-    return () => {
-      detach();
-      ctrl.dispose();
-    };
-  }, [ctrl]);
+  const ctrl = useSessionCameraController(session.id, signal);
   useEffect(() => ctrl.setConsoleRecording(session.consoleRecording), [ctrl, session.consoleRecording]);
   const snap = useSyncExternalStore(ctrl.subscribe, () => ctrl.snapshot);
   const [frozen, setFrozen] = useState(false);

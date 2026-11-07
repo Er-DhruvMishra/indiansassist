@@ -232,7 +232,14 @@ async fn one_connection(
     // §3.4: an absent `Origin` is required on `/signal/device`, and no cookie is ever sent.
     req.headers_mut().remove("origin");
     req.headers_mut().remove("cookie");
-    let (ws, _) = tokio_tungstenite::connect_async(req)
+    // wss: is verified by the operating system (`ia_platform::tls`, licence audit F1).
+    let connector = match req.uri().scheme_str() {
+        Some("wss") => Some(tokio_tungstenite::Connector::Rustls(
+            ia_platform::tls::client_config()?,
+        )),
+        _ => None,
+    };
+    let (ws, _) = tokio_tungstenite::connect_async_tls_with_config(req, None, false, connector)
         .await
         .map_err(|e| format!("connect: {e}"))?;
     tracing::info!(%url, "device socket open");

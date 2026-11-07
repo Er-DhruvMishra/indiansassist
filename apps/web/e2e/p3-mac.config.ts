@@ -50,7 +50,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `node apps/web/e2e/reset-data-p3-mac.mjs && pnpm --filter @indiansassist/api dev`,
+      command: `node apps/web/e2e/reset-data-p3-mac.mjs && pnpm --filter @indiansassist/api exec tsx src/server.ts`,
       cwd: repoRoot,
       url: `${apiUrl}/api/v1/health`,
       reuseExistingServer: false,
@@ -81,7 +81,7 @@ export default defineConfig({
       stdout: 'ignore',
       stderr: 'pipe',
       // The browser talks to the api on localhost, like the page itself, so the session cookie is same-site.
-      env: { VITE_API_URL: `http://localhost:${apiPort}` },
+      env: { IA_E2E_STATIC: '1', VITE_API_URL: `http://localhost:${apiPort}` },
     },
   ],
 });

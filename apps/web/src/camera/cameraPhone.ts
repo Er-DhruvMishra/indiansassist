@@ -3,7 +3,8 @@
  * (`camera.hello { code }`, then `{ resumeKey }` after a drop), waits for the person's tap, captures the camera with
  * the section 6.3b constraints and offers it `sendonly` to the session's Assist over its own peer connection, runs the
  * `ia.cam` exchange on the negotiated channel, answers the server recorder's offer (`peer: 'recorder'`) when the
- * session is recorded, and stops on Stop, on the technician's or the server's word, or after 60 s hidden.
+ * session is recorded, and stops on Stop, on the technician's or the server's word, or after 60 s hidden. When the
+ * browser ends the capture on its own (not the person), it takes the same camera again without renegotiating.
  *
  * Nothing is captured before `start()`; nothing is stored (no cookie, no storage): the page keeps its state in memory.
  */
@@ -30,6 +31,8 @@ export type PhoneSnap = {
   torch: { available: boolean; on: boolean };
   /** The six-digit camera code, `123 456`, once the `ia.cam` exchange finished. */
   securityCode: string | null;
+  /** Counts the captures (start, switch, a recovered track), so the page's preview follows the current one. */
+  capture: number;
   endedReason: CameraStopReason | null;
   /** A sentence for the person (why it ended, what went wrong). */
   message: string | null;
@@ -45,7 +48,18 @@ export type PhoneDeps = {
   random?: RandomBytes;
   /** Hidden this long stops the camera (section 6.3b). */
   hiddenStopMs?: number;
+  /**
+   * The waits before asking for the camera again after a passing failure (the device was briefly gone or busy:
+   * `NotFoundError`, `NotReadableError`, `AbortError`); default `CAMERA_RETRY_MS`.
+   */
+  retryDelaysMs?: readonly number[];
 };
+
+/** The waits between camera attempts after a passing failure: a camera that comes back within ~3 s is taken again. */
+export const CAMERA_RETRY_MS: readonly number[] = [250, 1000, 2000];
+
+/** `getUserMedia` failures that can pass: the device is briefly gone (re-listed) or busy. */
+const PASSING_GUM_FAILURES = new Set(['NotFoundError', 'NotReadableError', 'AbortError']);
 
 const ENDED_TEXT: Record<CameraStopReason, string> = {
   declined: 'You chose not to share your camera. You can close this page.',
@@ -88,10 +102,14 @@ export class CameraPhoneController {
     facing: 'environment',
     torch: { available: false, on: false },
     securityCode: null,
+    capture: 0,
     endedReason: null,
     message: null,
   };
   private readonly listeners = new Set<Listener>();
+  /** Captures the browser ended on its own that were taken again (see `recoverTrack`). */
+  private recoveries = 0;
+  private recovering = false;
   private signal: SignalClient | null = null;
   private hello: CameraHelloOk | null = null;
   private resumeKey: string | null = null;
@@ -212,18 +230,13 @@ export class CameraPhoneController {
     const secure = this.deps.secureContext
       ? this.deps.secureContext()
       : typeof window !== 'undefined' && window.isSecureContext;
-    const gum =
-      this.deps.getUserMedia ??
-      (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia
-        ? (c: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(c)
-        : null);
+    const gum = this.gum();
     if (!secure || !gum) return this.stop('no_camera');
     let stream: MediaStream;
     try {
-      stream = await gum(cameraConstraints(this.snap.facing));
+      stream = await this.acquire(gum);
     } catch (e) {
-      const name = (e as { name?: string }).name;
-      return this.stop(name === 'NotAllowedError' || name === 'SecurityError' ? 'permission_denied' : 'no_camera');
+      return this.stop(gumFailure(e));
     }
     if (this.ended) {
       for (const t of stream.getTracks()) t.stop();
@@ -234,8 +247,13 @@ export class CameraPhoneController {
     if (!track) return this.stop('no_camera');
     this.watchTrack(track);
     this.updateTorch(track);
+    this.set({ capture: this.snap.capture + 1 });
     await this.offerToAssist(track, stream);
-    const st = track.getSettings?.() ?? {};
+    // The camera may have ended while the offer was made (the track could not be taken again, or a server word):
+    // then it is over, and must not be reported ready or shown as shared.
+    if (this.ended) return;
+    const current = this.stream?.getVideoTracks()[0] ?? track;
+    const st = current.getSettings?.() ?? {};
     const facing: CameraFacing =
       st.facingMode === 'user' || st.facingMode === 'environment' ? st.facingMode : this.snap.facing;
     this.signal?.send({
@@ -248,10 +266,83 @@ export class CameraPhoneController {
     this.set({ phase: 'live' });
   }
 
+  /**
+   * `getUserMedia` for the current facing, asked again after each `retryDelaysMs` wait while the failure is a passing
+   * one (the device is briefly gone or busy, as while the OS or the browser re-lists its cameras); a refusal, or the
+   * camera ending meanwhile, is final at once.
+   */
+  private async acquire(gum: (c: MediaStreamConstraints) => Promise<MediaStream>): Promise<MediaStream> {
+    const waits = this.deps.retryDelaysMs ?? CAMERA_RETRY_MS;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await gum(cameraConstraints(this.snap.facing));
+      } catch (e) {
+        const wait = waits[attempt];
+        if (wait === undefined || this.ended || !PASSING_GUM_FAILURES.has((e as { name?: string }).name ?? '')) throw e;
+        await new Promise((r) => setTimeout(r, wait));
+        if (this.ended) throw e;
+      }
+    }
+  }
+
+  private gum(): ((c: MediaStreamConstraints) => Promise<MediaStream>) | null {
+    return (
+      this.deps.getUserMedia ??
+      (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia
+        ? (c: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(c)
+        : null)
+    );
+  }
+
+  /**
+   * `ended` on the live track means the browser or the OS ended the capture, never the person (their Stop, No thanks
+   * and a switch go through `stop()` / `switchCamera()`, and `track.stop()` fires no `ended`): another app took the
+   * camera, the device reset, or the browser restarted its capture. The person agreed to share, so the page takes the
+   * same camera again and swaps it into the peer connections without renegotiating.
+   */
   private watchTrack(track: MediaStreamTrack): void {
     track.addEventListener?.('ended', () => {
-      if (this.stream?.getVideoTracks()[0] === track && !this.ended) this.stop('phone_stopped');
+      if (this.stream?.getVideoTracks()[0] === track && !this.ended) void this.recoverTrack();
     });
+  }
+
+  /**
+   * Takes the camera again after the browser ended it, at most `MAX_TRACK_RECOVERIES` times per camera; a camera that
+   * cannot be taken again (refused, gone, or ending over and over) stops the camera with the reason it gives.
+   */
+  private async recoverTrack(): Promise<void> {
+    if (this.recovering || this.ended) return;
+    // A hidden page cannot take the camera (iOS ends the capture when the page goes to the background): it stops as
+    // the person left it, as before.
+    const doc = this.deps.doc ?? (typeof document !== 'undefined' ? document : null);
+    if (doc?.visibilityState === 'hidden') return this.stop('phone_stopped');
+    const gum = this.gum();
+    if (!gum || this.recoveries >= MAX_TRACK_RECOVERIES) return this.stop('no_camera');
+    this.recovering = true;
+    this.recoveries += 1;
+    try {
+      let stream: MediaStream;
+      try {
+        stream = await this.acquire(gum);
+      } catch (e) {
+        return this.stop(gumFailure(e));
+      }
+      if (this.ended) {
+        for (const t of stream.getTracks()) t.stop();
+        return;
+      }
+      const track = stream.getVideoTracks()[0];
+      if (!track) return this.stop('no_camera');
+      for (const t of this.stream?.getTracks() ?? []) t.stop();
+      this.stream = stream;
+      this.watchTrack(track);
+      await this.sender?.replaceTrack(track).catch(() => undefined);
+      await this.recSender?.replaceTrack(track).catch(() => undefined);
+      this.updateTorch(track);
+      this.set({ capture: this.snap.capture + 1 });
+    } finally {
+      this.recovering = false;
+    }
   }
 
   private updateTorch(track: MediaStreamTrack): void {
@@ -422,7 +513,7 @@ export class CameraPhoneController {
     await this.sender?.replaceTrack(track).catch(() => undefined);
     await this.recSender?.replaceTrack(track).catch(() => undefined);
     this.updateTorch(track);
-    this.set({ facing: next });
+    this.set({ facing: next, capture: this.snap.capture + 1 });
   }
 
   /** **Light**: only offered when the track reports the `torch` capability. */
@@ -492,6 +583,15 @@ export class CameraPhoneController {
   get preview(): MediaStream | null {
     return this.stream;
   }
+}
+
+/** How many times one camera is taken again after the browser ended it (see `recoverTrack`). */
+export const MAX_TRACK_RECOVERIES = 3;
+
+/** The stop reason a failed `getUserMedia` gives. */
+function gumFailure(e: unknown): CameraStopReason {
+  const name = (e as { name?: string }).name;
+  return name === 'NotAllowedError' || name === 'SecurityError' ? 'permission_denied' : 'no_camera';
 }
 
 function clampDim(n: number): number {

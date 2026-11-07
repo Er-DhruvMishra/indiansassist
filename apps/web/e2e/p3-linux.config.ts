@@ -51,7 +51,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `node apps/web/e2e/reset-data-p3-linux.mjs && pnpm --filter @indiansassist/api dev`,
+      command: `node apps/web/e2e/reset-data-p3-linux.mjs && pnpm --filter @indiansassist/api exec tsx src/server.ts`,
       cwd: repoRoot,
       url: `${apiLocal}/api/v1/health`,
       reuseExistingServer: false,
@@ -81,7 +81,7 @@ export default defineConfig({
       timeout: 120_000,
       stdout: 'ignore',
       stderr: 'pipe',
-      env: { VITE_API_URL: apiLocal },
+      env: { IA_E2E_STATIC: '1', VITE_API_URL: apiLocal },
     },
   ],
 });

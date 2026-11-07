@@ -615,7 +615,9 @@ fn facts_console_session() -> Option<u32> {
 /// checked against what arrives.
 pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let response = ureq::get(url)
+    let response = ia_waker::https::builder()
+        .build()
+        .get(url)
         .set("user-agent", &crate::user_agent())
         .call()
         .map_err(|e| e.to_string())?;

@@ -13,7 +13,9 @@ description = "Phase D wake and AMT proxy (contract D 11.1): the magic-packet bu
 # AMT host").
 default = []
 # The transports: UDP broadcast (std only) and the AMT HTTPS client (ureq + rustls, D 11.2).
-net = ["dep:ureq"]
+# ureq's own `tls` feature is off: it always compiles in the webpki-roots list (licence audit F1),
+# so `https` plugs the OS-verified rustls config of `ia-platform/tls` into ureq instead.
+net = ["dep:ureq", "dep:rustls", "ia-platform/tls"]
 
 [dependencies]
 ia-core.workspace = true
@@ -28,7 +30,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
-ureq = { version = "2.10.1", default-features = false, features = ["tls", "gzip"], optional = true }
+ureq = { version = "2.10.1", default-features = false, features = ["gzip"], optional = true }
+rustls = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

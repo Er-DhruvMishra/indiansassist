@@ -10,7 +10,7 @@ says where the project meets each condition and what the owner, Dhruv Mishra
 | # | Condition | Where the project meets it | Status |
 |---|---|---|---|
 | 1 | OSI-approved licence for the project, no commercial dual licensing | `LICENSE` (the official AGPL-3.0 text from gnu.org, byte for byte), `NOTICE` (AGPL-3.0-only, Copyright (C) 2026 Dhruv Mishra), `README.md` "Licence and policies", website `license.html` | Met |
-| 2 | OSI-approved licences for all components | `docs/LICENSE-REGISTER.md`, section "Licence compatibility audit for AGPL-3.0-only" | Met except findings F1 (`webpki-roots`, CDLA-Permissive-2.0) and F2 (egui's default fonts, Ubuntu Font Licence); F3 and F4 need a check and a decision. See "Before applying" |
+| 2 | OSI-approved licences for all components | `docs/LICENSE-REGISTER.md`, section "Licence compatibility audit for AGPL-3.0-only" | Met for everything SignPath would sign (the Windows agent, service binaries and `.msi`) and for the Linux, macOS and iOS builds: F1 resolved (the agents use the operating system's trust store; `webpki-roots` is gone), F2 resolved (egui's fonts replaced by Noto Sans and Noto Emoji, OFL-1.1), F4 handled (`CONTRIBUTING.md`: DCO sign-off and a narrow app-store permission, checked by CI). **Not met for the Android app** (F3): its prebuilt WebRTC (M125) carries BoringSSL code under the OpenSSL and SSLeay licences; see "Before applying" |
 | 3 | The project is actively maintained and already released | GitHub Releases | **Owner:** publish a first release |
 | 4 | The functionality is described on the download page | website `download.html`: every platform, what it does | Met |
 | 5 | A code signing policy on the project's home page | website `index.html` and `download.html`, section "Code signing policy" with the sentence "Free code signing provided by SignPath.io, certificate by SignPath Foundation" (linked to about.signpath.io and signpath.org); full policy at `code-signing.html` and `CODE_SIGNING_POLICY.md` | Met; says plainly that releases are self-signed (Windows) and GPG-signed (Linux) until approval |
@@ -34,13 +34,15 @@ says where the project meets each condition and what the owner, Dhruv Mishra
 4. **Connect the domain and enable Pages:** follow `site/README.md` (Pages source "GitHub Actions", custom domain
    `indiansassist.com`, the DNS `A`/`AAAA` records and the `www` `CNAME`, then **Enforce HTTPS**). Check that
    <https://indiansassist.com>, `/download.html` and `/code-signing.html` load.
-5. **Decide the licence findings** in `docs/LICENSE-REGISTER.md`:
-   - F1 `webpki-roots` (CDLA-Permissive-2.0, not OSI): explain it as certificate data, or switch the agent to the
-     operating system's trust store;
-   - F2 egui's default fonts (Ubuntu Font Licence, not OSI): accept as font data, or embed one OFL/Apache font;
-   - F3 check the BoringSSL licence inside the Android (and iOS) WebRTC builds;
-   - F4 decide whether the iOS app goes to the App Store, and if so add the section 7 permission before accepting
-     outside contributions.
+5. **The licence findings** in `docs/LICENSE-REGISTER.md` (audit section):
+   - F1 `webpki-roots`: **resolved** (the operating system's trust store through `rustls-platform-verifier`);
+   - F2 egui's default fonts: **resolved** (Noto Sans and Noto Emoji, SIL OFL 1.1, embedded in `ia-ui`);
+   - F3 BoringSSL in the WebRTC builds: iOS (`stasel/WebRTC` 155.0.0, M155) is **Apache-2.0, resolved**; Android
+     (`stream-webrtc-android` 1.3.10, M125) is **open**: its BoringSSL predates the Apache-2.0 relicensing. **Owner:**
+     pick one of the options listed under F3 (a WebRTC build at M135 or later, building libwebrtc ourselves, or not
+     shipping the Android app in signed releases) before the Android app is part of a release;
+   - F4 app-store distribution: **handled** (`CONTRIBUTING.md`: every commit carries a DCO 1.1 sign-off, which also
+     grants the narrow app-store permission; CI's `signoff` job checks every pull request).
 6. **Publish a first release** on GitHub Releases, built by the release workflow from a tag, with `SHA256SUMS`, the
    Linux `.asc` signatures and the self-signed Windows files; check that the public keys in `site/keys/` match the keys
    that signed it.

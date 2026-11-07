@@ -20,6 +20,11 @@
  * (`pnpm e2e:f`); the P3 suite also holds the `<stream>-p3.spec.ts` specs (`camera-p3.spec.ts`) and honours
  * E2E_DATA_DIR (default unchanged, ./data/e2e-p3). The emulator specs (`*-emulator.spec.ts`) belong only to
  * e2e/emulator.config.ts, the mobile and Linux suites to their own configs.
+ *
+ * Neither server watches files: the API runs `tsx src/server.ts` (not `tsx watch`, which restarts it, and every live
+ * session with it, when any source file changes) and the web dev server runs with `IA_E2E_STATIC=1` (no watcher, no
+ * HMR; vite.config.ts). Otherwise a build or an edit elsewhere in the repository during a run reloads pages or tears
+ * down live controllers mid-test (seen as the intermittent camera-p3 failure).
  */
 import { defineConfig } from '@playwright/test';
 import { dirname, resolve } from 'node:path';
@@ -124,7 +129,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `${resetCmd} && pnpm --filter @indiansassist/api dev`,
+      command: `${resetCmd} && pnpm --filter @indiansassist/api exec tsx src/server.ts`,
       cwd: repoRoot,
       url: `${apiUrl}/api/v1/health`,
       reuseExistingServer: false,
@@ -141,7 +146,7 @@ export default defineConfig({
       timeout: 120_000,
       stdout: 'ignore',
       stderr: 'pipe',
-      env: { VITE_API_URL: apiUrl },
+      env: { IA_E2E_STATIC: '1', VITE_API_URL: apiUrl },
     },
   ],
 });

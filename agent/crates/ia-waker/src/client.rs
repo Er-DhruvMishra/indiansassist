@@ -79,7 +79,7 @@ impl AmtClient {
     /// response body.
     fn post(&self, req: &AmtRequest<'_>, body: &str, message_id: &str) -> Result<String, AmtError> {
         let url = wsman::wsman_url(req.host, req.tls);
-        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
+        let agent = crate::https::agent(self.timeout);
         // First attempt: no credentials, to collect the challenge (what every digest client does).
         let challenge = match agent
             .post(&url)

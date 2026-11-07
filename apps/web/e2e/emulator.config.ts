@@ -56,7 +56,7 @@ export default defineConfig({
   webServer: enabled
     ? [
         {
-          command: `node apps/web/e2e/reset-data.mjs && pnpm --filter @indiansassist/api dev`,
+          command: `node apps/web/e2e/reset-data.mjs && pnpm --filter @indiansassist/api exec tsx src/server.ts`,
           cwd: repoRoot,
           url: `${apiUrl}/api/v1/health`,
           reuseExistingServer: false,

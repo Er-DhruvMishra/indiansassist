@@ -1,6 +1,7 @@
 # Continuous integration: every push and pull request builds and tests the public source (docs/release.md
-# section 4.8). Every action is pinned to a full commit SHA (the version is in the comment); only GitHub's own
-# actions are used; the token can only read the repository.
+# section 4.8), and a pull request's commits must each carry a DCO sign-off (CONTRIBUTING.md). Every action is
+# pinned to a full commit SHA (the version is in the comment); only GitHub's own actions are used; the token can
+# only read the repository.
 name: CI
 
 on:
@@ -15,6 +16,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # CONTRIBUTING.md: every commit of a pull request carries a `Signed-off-by:` line (the Developer
+  # Certificate of Origin 1.1 and the app-store permission). Pull requests only; plain git, no
+  # third-party action. The default pull-request checkout is the merge commit, whose history (with
+  # fetch-depth 0) holds both the base and the head, so `base..head` is exactly the PR's commits.
+  signoff:
+    name: DCO sign-off (every commit of the pull request)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Every commit has a Signed-off-by line
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          commits="$(git rev-list "$BASE_SHA..$HEAD_SHA")"
+          for c in $commits; do
+            if git log -1 --format=%B "$c" | grep -qE '^Signed-off-by: [^<>]+ <[^<>@ ]+@[^<> ]+>$'; then
+              echo "ok      $(git log -1 --format='%h %s' "$c")"
+            else
+              echo "::error::Commit $(git log -1 --format='%h' "$c") has no Signed-off-by line. See CONTRIBUTING.md (git commit -s; git rebase --signoff to add it to earlier commits)."
+              missing=1
+            fi
+          done
+          echo "$(echo "$commits" | grep -c . || true) commit(s) checked"
+          exit "$missing"
+
   node:
     name: Node (build, typecheck, lint, test, test:scripts)
     runs-on: ubuntu-24.04

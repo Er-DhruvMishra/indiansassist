@@ -2,7 +2,9 @@
 //! upgrades with no `Origin` and the `IndiansAssist-Agent/<ver>` User-Agent, sends
 //! `desk.hello`, then knocks and polls while waiting (§3.1 "polls until it connects").
 //!
-//! TLS is rustls + webpki-roots (§11.2); `wss:` is reached without native-tls / schannel.
+//! TLS is rustls (§11.2), with the certificate checked by the operating system's verifier and
+//! trust store (`ia_platform::tls`, licence audit F1); `wss:` is reached without native-tls /
+//! schannel and without a bundled root list.
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -136,9 +138,17 @@ impl SignalClient {
             HeaderValue::from_str(&ua).map_err(|e| e.to_string())?,
         );
         req.headers_mut().remove("origin");
-        let (ws, _resp) = tokio_tungstenite::connect_async(req)
-            .await
-            .map_err(|e| format!("connect: {e}"))?;
+        // wss: is verified by the operating system (`ia_platform::tls`, licence audit F1).
+        let connector = match req.uri().scheme_str() {
+            Some("wss") => Some(tokio_tungstenite::Connector::Rustls(
+                ia_platform::tls::client_config()?,
+            )),
+            _ => None,
+        };
+        let (ws, _resp) =
+            tokio_tungstenite::connect_async_tls_with_config(req, None, false, connector)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         Ok(Self { ws })
     }
 
