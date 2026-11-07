@@ -363,7 +363,7 @@ export async function runLoadP4(opts = {}) {
       const r = await api.expect(
         'POST',
         '/api/v1/auth/signup',
-        { orgName: `Load P4 ${sx}`, region: state.region, name: `Load P4 ${sx}`, email: `load-p4-${sx}@example.com`, password: `Load-${randomBytes(12).toString('base64url')}` },
+        { orgName: `Load P4 ${sx}`, region: state.region, name: `Load P4 ${sx}`, email: `load-p4-${sx}@example.test`, password: `Load-${randomBytes(12).toString('base64url')}` },
         [201],
       );
       check(r.org.planTier === 'p4_installed', `org.planTier ${r.org.planTier}`);

@@ -245,7 +245,7 @@ broadcast extension (view only; Apple allows no remote input on iOS).
 Still outside this machine: a run against a real Linux window manager and session bus; the
 manual checks on a disposable machine; the full-size 2,000-device load run.
 
-### 8.1 Status (5 Nov 2026): Phase F built
+### 8.1 Status (7 Nov 2026): Phase F built and verified on Windows and Linux
 
 Everything planned for Phase F is built and on `master`:
 
@@ -282,12 +282,15 @@ Defects found and fixed across all platforms on the way:
 - A dead Desk blocked its token for about 10 s.
 - The agent printed a Tokio panic after every session.
 
-Last full gate run (5 Nov 2026, wave 3 merged):
+Last full sweep (7 Nov 2026), every suite on Windows and Linux green:
 - build, typecheck, lint, all unit tests, `test:scripts`, `license:check`, both fixture checks,
-  `validate:infra`, `packaging:test`;
-- Rust fmt, clippy and tests (703 passed);
-- `e2e:p3` 2/2, `e2e:p3:linux` 5/5, `e2e:p4:linux` 2/2.
-
+  `validate:infra`, `recorder:test`, `packaging:test`, `android:test`;
+- Rust on Windows 703 passed; in WSL the Linux agent 603, the service 117, the worker 12, the
+  portal build 146, and the headless portal stack 3/3;
+- `linux:pkg --sandbox` (package checks and the T1 install, 23/23);
+- every smoke: core 26, p2 14, p3 12, recorder 17, e 47, f 27, p4 15;
+- end to end: `e2e:e` 4, `e2e:f` 3, `e2e:mobile` 6, `e2e:p3` 2, `e2e:p4` 1, `e2e:ext` 4,
+  `e2e:p3:linux` 5, `e2e:p4:linux` 2.
 Open after Phase F:
 - **Signing (needs the owner):** an Apple Developer ID Application and Installer certificate
   with notarization, and a Windows code-signing certificate. Until then artefacts are marked
@@ -302,5 +305,6 @@ Open after Phase F:
 - **Ticketing:** the Jira, ServiceNow, Freshdesk and Zoho request shapes are checked against
   vendor documentation only; all stay `verified: false` until a run against a vendor sandbox.
 - **Phone camera:** a phone that reconnects through a different api node cannot resume (§15.10).
-- **Not run here:** the opt-in T2 throwaway-distro install (`IA_THROWAWAY_WSL=1 pnpm
-  linux:throwaway`) and the full-size 2,000-device load run.
+- **Not run here:** the full-size 2,000-device load run. On 7 Nov 2026 the T2 throwaway-distro
+  install passed every step under a real systemd, and a scaled load run passed at 500 devices
+  (contract F §15.10).
