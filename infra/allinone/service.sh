@@ -8,6 +8,8 @@ set -Eeuo pipefail
 name=${1:?usage: service.sh <name>}
 
 ping_valkey() { [ "$(valkey-cli -h 127.0.0.1 -p "$IA_VALKEY_PORT" ping)" = PONG ]; }
+# Bash's own TCP redirection: a builtin with a failed redirect returns 1 instead of ending the shell.
+s3_listening() { : <"/dev/tcp/127.0.0.1/$IA_S3_PORT"; }
 
 case "$name" in
   postgres)
@@ -42,6 +44,9 @@ case "$name" in
     ( load_env migrate; cd /app/apps/api; as_user ia-migrate node ia-migrate.mjs )
     ( load_env seaweedfs-init; as_user seaweedfs sh /ia/seaweedfs/create-bucket.sh )
     ( load_env health; retry 60 ping_valkey ) || { log "valkey did not become ready"; exit 1; }
+    # The bucket step needs only the SeaweedFS master; the S3 port opens later, once the filer is up (about 25 s after a
+    # restart). The api waits, so "healthy" means recordings can be stored.
+    ( load_env health; retry 120 s3_listening ) || { log "the object store did not become ready"; exit 1; }
     load_env api
     cd /app/apps/api
     as_user ia-api node dist/server.js

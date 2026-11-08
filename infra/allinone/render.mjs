@@ -325,6 +325,7 @@ export function healthEnv(input, secrets) {
     IA_API_PORT: String(PORTS.api),
     IA_PG_PORT: String(PORTS.postgres),
     IA_VALKEY_PORT: String(PORTS.valkey),
+    IA_S3_PORT: String(PORTS.s3),
     IA_PROXY_MODE: input.proxy ? '1' : '0',
     IA_HTTP_PORT: String(input.httpPort),
     IA_HEALTH_HOST: input.httpBind && input.httpBind !== '0.0.0.0' && input.httpBind !== '::' ? input.httpBind : '127.0.0.1',
