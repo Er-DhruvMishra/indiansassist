@@ -201,7 +201,9 @@ validates the authoring only. The result is named `...-placeholder.msi` and refu
 One-time setup in the WSL build distro (user-level, the operator runs these once; no script installs anything): Zig
 0.15.2 under `~/.local/zig`, `cargo install cargo-zigbuild --locked` (0.24.0), `cargo install cargo-deb --version 3.8.0
 --locked`, `cargo install cargo-generate-rpm --version 0.21.1 --locked`; for the package checks
-`sudo apt install --no-install-recommends rpm ansible-core ansible-lint`.
+`sudo apt install --no-install-recommends rpm ansible-core ansible-lint`. The release workflow instead installs
+ansible-core 2.20.1 and ansible-lint 26.1.1 into their own venv, first on PATH: the GitHub runner image ships its own
+ansible CLI, and pairing it with Ubuntu's python module makes ansible-lint refuse to run ("versions do not match").
 
 1. On Windows, with the region keys set (see the top of this document), run **`pnpm linux:pkg`**. It builds `ia-service`
    and `ia-desktop` at the **glibc 2.34** floor, gates both with `scripts/elf-check.mjs` (NEEDED within libc, libm and

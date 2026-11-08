@@ -206,7 +206,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev \
             libpipewire-0.3-dev libspa-0.2-dev libx11-dev libxext-dev libxtst-dev libxrandr-dev libxfixes-dev \
-            rpm ansible-core ansible-lint gnupg
+            rpm gnupg python3-venv
+      # ansible-core and ansible-lint in their own venv at the versions the package checks were verified with
+      # (Phase F section 8.12): the runner image ships its own ansible CLI, and mixing it with the apt python module
+      # makes ansible-lint refuse to run.
+      - name: Ansible tools (own venv, first on PATH)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ansible-venv"
+          "$RUNNER_TEMP/ansible-venv/bin/pip" install --quiet --disable-pip-version-check \
+            ansible-core==2.20.1 ansible-lint==26.1.1
+          echo "$RUNNER_TEMP/ansible-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/ansible-venv/bin/ansible" --version | head -1
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --version
       # The contract's versions: Zig 0.15.2 (sha256 from ziglang.org/download/index.json), cargo-zigbuild 0.24.0,
       # cargo-deb 3.8.0, cargo-generate-rpm 0.21.1.
       - name: Build tools at the contract's versions

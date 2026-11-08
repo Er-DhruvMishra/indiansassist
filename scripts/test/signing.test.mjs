@@ -30,7 +30,7 @@ import {
   windowsSigningConfig,
 } from '../../packaging/sign/sign-lib.mjs';
 import { signLinuxFiles } from '../../packaging/sign/sign-linux.mjs';
-import { acceptable, signWindowsFiles } from '../../packaging/sign/sign-windows.mjs';
+import { acceptable, inspectionEnv, signWindowsFiles } from '../../packaging/sign/sign-windows.mjs';
 import { rehashManifest } from '../../packaging/sign/rehash.mjs';
 import { MSI_MIN_OS, mergeInstallerRow, msiRow } from '../../packaging/windows/build.mjs';
 import { updateSignedList, windowsDistFileName } from '../agent-release-windows.mjs';
@@ -106,6 +106,15 @@ describe('Windows keys come from the environment only', () => {
     expect(r).toMatchObject({ ok: false, provider: 'signpath' });
     expect(r.reason).toContain(SIGNPATH_ACTION);
     expect(SIGNPATH_ACTION).toBe('signpath/github-action-submit-signing-request');
+  });
+});
+
+describe('the Windows PowerShell 5.1 inspection environment', () => {
+  it('drops PSModulePath in any casing (a parent pwsh 7 would load its own Security module) and passes the file', () => {
+    const env = inspectionEnv({ PSModulePath: 'C:\\pwsh7\\Modules', psmodulepath: 'x', PATH: 'C:\\bin' }, 'C:\\a.exe');
+    expect(Object.keys(env).filter((k) => k.toLowerCase() === 'psmodulepath')).toEqual([]);
+    expect(env.PATH).toBe('C:\\bin');
+    expect(env.IA_INSPECT_FILE).toBe('C:\\a.exe');
   });
 });
 

@@ -51,12 +51,30 @@ export function inspectAuthenticode(file) {
     '  timestamper = $(if ($s.TimeStamperCertificate) { $s.TimeStamperCertificate.Subject } else { $null }) }',
     '| ConvertTo-Json -Compress',
   ].join(' ');
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+  return JSON.parse(windowsPowerShell(script, file, 'Get-AuthenticodeSignature'));
+}
+
+/**
+ * Windows PowerShell 5.1 environment for one inspection: PSModulePath is dropped, because a parent PowerShell 7 (the
+ * GitHub runner's `pwsh` steps) puts its own module folders there and 5.1 then loads the 7.x
+ * Microsoft.PowerShell.Security, whose cmdlets fail with a non-terminating error and an exit code of 0.
+ */
+export function inspectionEnv(env, file) {
+  const out = { ...env, IA_INSPECT_FILE: file };
+  for (const k of Object.keys(out)) if (k.toLowerCase() === 'psmodulepath') delete out[k];
+  return out;
+}
+
+function windowsPowerShell(script, file, what) {
+  // Stop makes a cmdlet error terminating (exit 1) instead of empty fields and exit 0; progress records would only
+  // reach stderr as CLIXML noise.
+  const guarded = `$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; ${script}`;
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', guarded], {
     encoding: 'utf8',
-    env: { ...process.env, IA_INSPECT_FILE: file },
+    env: inspectionEnv(process.env, file),
   });
-  if (r.status !== 0) throw new Error(`Get-AuthenticodeSignature failed for ${file}: ${r.stderr}`);
-  return JSON.parse(r.stdout.trim());
+  if (r.status !== 0) throw new Error(`${what} failed for ${file}: ${r.stderr}`);
+  return r.stdout.trim();
 }
 
 /** A PE's version resource as FileVersionInfo reads it: { productName, companyName, fileVersion, productVersion }. */
@@ -67,12 +85,7 @@ export function readVersionInfo(file) {
     '  fileVersion = $v.FileVersion; productVersion = $v.ProductVersion;',
     '  fileDescription = $v.FileDescription; originalFilename = $v.OriginalFilename } | ConvertTo-Json -Compress',
   ].join(' ');
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf8',
-    env: { ...process.env, IA_INSPECT_FILE: file },
-  });
-  if (r.status !== 0) throw new Error(`reading the version resource of ${file} failed: ${r.stderr}`);
-  return JSON.parse(r.stdout.trim());
+  return JSON.parse(windowsPowerShell(script, file, 'reading the version resource'));
 }
 
 /** Whether an inspected signature is acceptable for the provider's chain (see the header). */
