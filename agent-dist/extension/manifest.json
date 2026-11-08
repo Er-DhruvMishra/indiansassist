@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "builds": [
+    {
+      "version": "0.2.0",
+      "size": 210252,
+      "sha256": "ea65b2cca566e101a0f484c03e4c000dadbc79046b538cad650d36059d4e9199",
+      "minOs": "Chrome or Edge 120 or later",
+      "file": "IndiansAssist-extension-0.2.0.zip"
+    }
+  ]
+}

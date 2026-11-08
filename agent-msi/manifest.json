@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "builds": [
+    {
+      "arch": "x64",
+      "version": "0.3.2",
+      "size": 7426048,
+      "sha256": "e7897626bec0680a44640a6424fae659d72370bbaa6c7d916963200ea17c954a",
+      "signed": true,
+      "minOs": "10.0.17763",
+      "file": "IndiansAssist-Agent-0.3.2-windows-x64.msi"
+    }
+  ]
+}

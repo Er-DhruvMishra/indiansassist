@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "builds": [
+    {
+      "platform": "android",
+      "arch": "universal",
+      "version": "0.3.0",
+      "size": 36724445,
+      "sha256": "1cd2b96b6bddff60f1835e31a20ca5fa81e33b8431c24b11e3a299a1433b6be8",
+      "signed": true,
+      "minOs": "29"
+    },
+    {
+      "platform": "windows",
+      "arch": "x64",
+      "version": "0.3.2",
+      "size": 13207336,
+      "sha256": "c6bdbd99a0bd37239623ed69eee00278ef86cff14d665ce174d78b6005a90cec",
+      "signed": true,
+      "minOs": "10.0.17763"
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "version": "0.3.2",
+      "size": 18797168,
+      "sha256": "33e9b9dafbbb35dbdf1416f096a23027c526259f4fa8461354ad65aa41f1408a",
+      "signed": true,
+      "minOs": "glibc 2.34+ x86_64; Wayland needs PipeWire 0.3+",
+      "companion": {
+        "sha256": "3373f9389b3616cda447b9abe741666acc52a6c8016a77c80aef60fc84d945d6",
+        "size": 19355536
+      }
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "v": 1,
+  "generatedAt": "2026-11-08T10:55:50.109Z",
+  "apiOrigin": "https://api.indiansassist.com",
+  "ok": true,
+  "steps": [
+    {
+      "id": "extension",
+      "status": "built"
+    },
+    {
+      "id": "windows-portable",
+      "status": "built"
+    },
+    {
+      "id": "windows-msi",
+      "status": "built"
+    },
+    {
+      "id": "linux-portable",
+      "status": "built"
+    },
+    {
+      "id": "linux-packages",
+      "status": "built"
+    },
+    {
+      "id": "android",
+      "status": "built"
+    }
+  ],
+  "files": [
+    {
+      "tier": "p3_portable",
+      "file": "IndiansAssist-android-universal-0.3.0.apk",
+      "dir": "agent-dist",
+      "version": "0.3.0",
+      "size": 36724445,
+      "sha256": "1cd2b96b6bddff60f1835e31a20ca5fa81e33b8431c24b11e3a299a1433b6be8",
+      "signed": true
+    },
+    {
+      "tier": "p3_portable",
+      "file": "IndiansAssist-windows-x64-0.3.2.exe",
+      "dir": "agent-dist",
+      "version": "0.3.2",
+      "size": 13207336,
+      "sha256": "c6bdbd99a0bd37239623ed69eee00278ef86cff14d665ce174d78b6005a90cec",
+      "signed": true
+    },
+    {
+      "tier": "p3_portable",
+      "file": "IndiansAssist-linux-x64-0.3.2",
+      "dir": "agent-dist",
+      "version": "0.3.2",
+      "size": 18797168,
+      "sha256": "33e9b9dafbbb35dbdf1416f096a23027c526259f4fa8461354ad65aa41f1408a",
+      "signed": true
+    },
+    {
+      "tier": "p3_portable",
+      "file": "IndiansAssist-linux-portal-x64-0.3.2",
+      "dir": "agent-dist",
+      "version": "0.3.2",
+      "size": 19355536,
+      "sha256": "3373f9389b3616cda447b9abe741666acc52a6c8016a77c80aef60fc84d945d6",
+      "signed": true
+    },
+    {
+      "tier": "p2_extension",
+      "file": "IndiansAssist-extension-0.2.0.zip",
+      "dir": "extension",
+      "version": "0.2.0",
+      "size": 210252,
+      "sha256": "ea65b2cca566e101a0f484c03e4c000dadbc79046b538cad650d36059d4e9199",
+      "signed": false
+    },
+    {
+      "tier": "p4_installed",
+      "file": "IndiansAssist-Agent-0.3.2-windows-x64.msi",
+      "dir": "agent-msi",
+      "version": "0.3.2",
+      "size": 7426048,
+      "sha256": "e7897626bec0680a44640a6424fae659d72370bbaa6c7d916963200ea17c954a",
+      "signed": true
+    },
+    {
+      "tier": "p4_installed",
+      "file": "IndiansAssist-Agent-0.3.2-linux-x64.deb",
+      "dir": "linux",
+      "version": "0.3.2",
+      "size": 7733712,
+      "sha256": "e8582c1cda373d707608e409b153f7b84fe94badeba7cf8d3ed81449edaef765",
+      "signed": true
+    },
+    {
+      "tier": "p4_installed",
+      "file": "IndiansAssist-Agent-0.3.2-linux-x64.rpm",
+      "dir": "linux",
+      "version": "0.3.2",
+      "size": 8352845,
+      "sha256": "404594044be5daeba5763a91028ad4c182695c962becc86be9410bc65dedb8c0",
+      "signed": true
+    }
+  ],
+  "problems": [],
+  "notBuilt": [
+    {
+      "target": "windows/arm64",
+      "reason": "the aarch64-pc-windows-msvc Rust target and an arm64 prebuilt libvpx are not installed on this host (docs/release.md section 1.1: an arm64 build needs its own toolchain setup)"
+    },
+    {
+      "target": "macos",
+      "reason": "macOS builds need a Mac with Xcode (agent/scripts/macos-bundle.sh, macos-pkg.sh); a macOS app cannot be built or signed here"
+    },
+    {
+      "target": "ios",
+      "reason": "the iOS app needs Xcode and an Apple developer account; nothing in the repository builds it from Windows"
+    }
+  ]
+}
