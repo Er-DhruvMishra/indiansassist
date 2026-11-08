@@ -103,9 +103,9 @@ KID=$(jq -er '.keys[0].kid' "$WORK/wk.json")
 SECRETS_HASH=$(secrets_hash)
 
 say "the SPA loads and its runtime config names the domain"
-http "$BASE/" | grep -q 'id="root"' || fail "/ did not serve the SPA"
-http "$BASE/" | grep -q 'src="/runtime-config.js"' || fail "index.html does not load the runtime config"
-http "$BASE/runtime-config.js" | grep -qF "\"apiUrl\":\"$ORIGIN\"" || fail "runtime-config.js does not name $ORIGIN"
+http "$BASE/" | grep 'id="root"' >/dev/null || fail "/ did not serve the SPA"
+http "$BASE/" | grep 'src="/runtime-config.js"' >/dev/null || fail "index.html does not load the runtime config"
+http "$BASE/runtime-config.js" | grep -F "\"apiUrl\":\"$ORIGIN\"" >/dev/null || fail "runtime-config.js does not name $ORIGIN"
 http -o /dev/null -D "$WORK/headers" "$BASE/"
 grep -qi '^content-security-policy:.*connect-src' "$WORK/headers" || fail "the security headers are missing"
 
@@ -140,7 +140,7 @@ assert_clean_postgres_stop
 
 say "recreating the container on the same volume keeps them too"
 docker stop -t 60 "$NAME" >/dev/null
-docker logs "$NAME" 2>&1 | grep -q 'database system is shut down' || fail "Postgres did not report a clean shutdown"
+docker logs "$NAME" 2>&1 | grep 'database system is shut down' >/dev/null || fail "Postgres did not report a clean shutdown"
 docker rm "$NAME" >/dev/null
 start
 wait_healthy
@@ -162,6 +162,6 @@ done
 [ "$(docker inspect -f '{{.State.Status}}' "$NAME")" = exited ] || fail "the container is still up after repeated api failures"
 EXIT_CODE=$(docker inspect -f '{{.State.ExitCode}}' "$NAME")
 [ "$EXIT_CODE" != 0 ] || fail "the container exited 0 after a permanent failure"
-docker logs "$NAME" 2>&1 | grep -q 'database system is shut down' || fail "Postgres was not stopped cleanly on the way out"
+docker logs "$NAME" 2>&1 | grep 'database system is shut down' >/dev/null || fail "Postgres was not stopped cleanly on the way out"
 
 say "all-in-one smoke passed"
