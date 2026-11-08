@@ -1,17 +1,22 @@
 /**
  * Build-time configuration (contracts section 11.2). Every value has the documented dev default so the
- * app runs with no `.env` at all.
+ * app runs with no `.env` at all. A value compiled in at build time wins; otherwise `lib/runtimeConfig.ts` reads what
+ * the container wrote at start (the all-in-one image), so a published bundle holds no domain.
  */
 import { parseRegionOrigins, type Region } from '@indiansassist/shared';
+import { readRuntimeConfig, resolveApiUrl, resolveRegionOrigins } from './lib/runtimeConfig';
 
 const DEFAULT_REGION_ORIGINS =
   'in-mum=http://localhost:5173,eu-fra=http://localhost:5173,us-east=http://localhost:5173';
 
-function stripSlash(s: string): string {
-  return s.replace(/\/+$/, '');
-}
+const RUNTIME = readRuntimeConfig();
 
-export const API_URL: string = stripSlash(import.meta.env.VITE_API_URL || 'http://localhost:4000');
+export const API_URL: string = resolveApiUrl({
+  buildValue: import.meta.env.VITE_API_URL,
+  runtimeValue: RUNTIME.apiUrl,
+  prod: import.meta.env.PROD,
+  pageOrigin: globalThis.location?.origin ?? '',
+});
 export const API_BASE = `${API_URL}/api/v1`;
 /** Assist WS endpoint. The Desk uses `PublicToken.signalUrl` instead (section 6.13 step 3). */
 export const ASSIST_SIGNAL_URL = `${API_URL.replace(/^http/, 'ws')}/signal`;
@@ -38,9 +43,13 @@ function safeOrigins(raw: string): Partial<Record<Region, string>> {
   }
 }
 
-/** Compiled allow-list for `421` redirects and the login region picker (R3, T3). */
+/** Allow-list for `421` redirects and the login region picker (R3, T3): compiled in, or written at container start. */
 export const REGION_ORIGINS: Partial<Record<Region, string>> = safeOrigins(
-  import.meta.env.VITE_REGION_ORIGINS || DEFAULT_REGION_ORIGINS,
+  resolveRegionOrigins({
+    buildValue: import.meta.env.VITE_REGION_ORIGINS,
+    runtimeValue: RUNTIME.regionOrigins,
+    fallback: DEFAULT_REGION_ORIGINS,
+  }),
 );
 
 export const IS_PROD = import.meta.env.PROD;

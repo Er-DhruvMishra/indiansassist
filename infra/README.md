@@ -7,6 +7,9 @@ Vocabulary: **Desk** = the employee's computer being helped, **Assist** = the te
 Binding references: `docs/specs/phase-a-contracts.md` sections 1, 10, 11. Operator detail for each hardening
 item is in [HARDENING.md](HARDENING.md).
 
+Prefer one container to a Compose stack? The [all-in-one image](allinone/README.md) runs the same components with one
+`docker run` and one data volume.
+
 | File                           | Purpose                                                                                                                                                                   |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docker-compose.yml`           | the stack: `postgres`, `valkey`, `seaweedfs` (+ one-shot `storage-init`), `coturn`, `migrate` (one-shot), `api`, `web`; optional profiles `garage` and `sso` (`keycloak`) |

@@ -16,6 +16,8 @@
   </head>
   <body class="min-h-screen">
     <div id="root"></div>
+    <!-- A blocking classic script, so it runs before the deferred module below. Empty except in the all-in-one image. -->
+    <script src="/runtime-config.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

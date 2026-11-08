@@ -27,6 +27,14 @@ import {
   checkSecurityHeaders,
   checkTurnserverConf,
 } from './infra/configs.mjs';
+import {
+  ALLINONE_SCRIPTS,
+  checkAllinoneDockerfile,
+  checkAllinoneRuntime,
+  checkDockerWorkflow,
+  checkScriptText,
+} from './infra/allinone.mjs';
+import { API_ENV_DEFAULTED, API_ENV_FIXED, API_ENV_PASSTHROUGH } from '../infra/allinone/render.mjs';
 import { buildManifest } from '../apps/extension/src/manifest.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,6 +168,25 @@ export function validateInfra(root = ROOT) {
     ...checkReplayerLocation(read('infra/nginx/web.conf')),
     ...checkPhaseFLocations(read('infra/nginx/web.conf')),
   ]);
+  run('infra/allinone/Dockerfile', () =>
+    checkAllinoneDockerfile(read('infra/allinone/Dockerfile'), read('apps/api/Dockerfile')),
+  );
+  run('infra/allinone scripts', () => [
+    ...ALLINONE_SCRIPTS.flatMap((p) => checkScriptText(p, read(p))),
+    ...checkAllinoneRuntime({
+      entrypoint: read('infra/allinone/entrypoint.sh'),
+      service: read('infra/allinone/service.sh'),
+      render: read('infra/allinone/render.mjs'),
+    }),
+  ]);
+  run('api env parity (config.ts envSchema vs all-in-one image)', () =>
+    checkApiEnvParity(configEnvKeys(read('apps/api/src/config.ts')), [
+      ...API_ENV_FIXED,
+      ...API_ENV_DEFAULTED,
+      ...API_ENV_PASSTHROUGH,
+    ]),
+  );
+  run('.github/workflows/docker.yml', () => checkDockerWorkflow(read('.github/workflows/docker.yml')));
   return groups;
 }
 

@@ -1,0 +1,104 @@
+# The all-in-one image (infra/allinone): every run builds it and runs the end-to-end smoke; a v* tag or a manual run
+# then publishes the very image that passed, to ghcr.io/er-dhruvmishra/indiansassist. A push to master only builds and
+# smokes. Path filters are not evaluated for tag pushes, so a v* tag always runs.
+#
+# Every action is pinned to a full commit SHA with its version in the comment. GITHUB_TOKEN can write packages only in
+# the publish job.
+name: Docker
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+    paths:
+      - 'infra/**'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.base.json'
+      - '.dockerignore'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' && github.event_name == 'push' }}
+
+env:
+  IMAGE: ghcr.io/er-dhruvmishra/indiansassist
+  LOCAL_TAG: indiansassist-allinone:smoke
+
+jobs:
+  build-smoke:
+    name: Build and smoke the all-in-one image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (linux/amd64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infra/allinone/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_TAG }}
+          cache-from: type=gha,scope=allinone
+          cache-to: type=gha,scope=allinone,mode=max
+      - name: Smoke (first boot, signup, restart, recreate, isolation, failure exit)
+        run: bash infra/allinone/smoke.sh "$LOCAL_TAG"
+      - name: Keep the tested image for the publish job
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: docker save "$LOCAL_TAG" | gzip -1 > allinone-image.tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        with:
+          name: allinone-image
+          path: allinone-image.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish to GHCR
+    needs: build-smoke
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: allinone-image
+      - name: Load the image that passed the smoke
+        run: gunzip -c allinone-image.tar.gz | docker load
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag and push
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            tags="latest ${GITHUB_SHA::7}"
+          else
+            tags="${GITHUB_REF_NAME#v} latest"
+          fi
+          for t in $tags; do
+            docker tag "$LOCAL_TAG" "$IMAGE:$t"
+            docker push "$IMAGE:$t"
+            echo "pushed $IMAGE:$t"
+          done
