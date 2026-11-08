@@ -300,11 +300,18 @@ Open after Phase F:
   - Keep on a real desktop;
   - an installed Linux machine with Xorg (reboot, lock, removal), and EL 9 or Fedora;
   - GNOME and KDE for the Wayland portal build;
-  - touch and the camera on a real Android phone (the emulator specs are unstable on this
-    machine).
+  - touch and the camera on a real Android phone. The Android app's own emulator e2e passes
+    (8 Nov 2026, WebRTC M150: 18/18, video decoded); the browser-on-emulator specs stay unstable
+    on this machine.
 - **Ticketing:** the Jira, ServiceNow, Freshdesk and Zoho request shapes are checked against
   vendor documentation only; all stay `verified: false` until a run against a vendor sandbox.
 - **Phone camera:** a phone that reconnects through a different api node cannot resume (§15.10).
 - **Not run here:** the full-size 2,000-device load run. On 7 Nov 2026 the T2 throwaway-distro
   install passed every step under a real systemd, and a scaled load run passed at 500 devices
   (contract F §15.10).
+
+Licence and signing (8 Nov 2026): the project is AGPL-3.0-only; every shipped component on
+Windows, Linux and Android is OSI-licensed (the agents use the OS trust store and OFL fonts; Android
+moved to WebRTC M150 with Apache-2.0 BoringSSL). Releases are signed with interim self-signed
+(Windows) and GPG (Linux) keys and the Android release key; the project website, policies and CI
+are ready for a SignPath Foundation application (`docs/SIGNPATH-APPLICATION.md`).
