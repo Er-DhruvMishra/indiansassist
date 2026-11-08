@@ -1,6 +1,7 @@
 // IndiansAssist Android host (Phase C contracts section 12). Single Gradle module, application id
 // com.indiansassist.desk, min SDK 29. Every dependency below is listed with its licence in docs/LICENSE-REGISTER.md.
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application") version "9.0.1"
@@ -19,7 +20,8 @@ val debugOrigins = listOf(devApi, "http://10.0.2.2:4000", "http://localhost:4000
 // from apps/android/keystore.properties (git-ignored; see keystore.properties.example) or from the environment
 // (IA_ANDROID_KEYSTORE, IA_ANDROID_KEYSTORE_PASSWORD, IA_ANDROID_KEY_ALIAS, IA_ANDROID_KEY_PASSWORD). Without them the
 // release APK is built unsigned, as before; debug builds keep the debug key.
-val signingProps = java.util.Properties().apply {
+// (Imported: inside the script `java` resolves to the `java` extension, so `java.util.Properties` does not compile.)
+val signingProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
@@ -106,7 +108,10 @@ kotlin {
 }
 
 dependencies {
-    implementation("io.getstream:stream-webrtc-android:1.3.10")
+    // Prebuilt Google libwebrtc M150 (webrtc-sdk, BSD-3-Clause; the same org.webrtc API the app used through
+    // stream-webrtc-android, whose newest release is still M125). Its BoringSSL f91f144 (28 May 2026) is Apache-2.0,
+    // which resolves licence audit F3 for Android (docs/LICENSE-REGISTER.md). Exact version, no ranges.
+    implementation("io.github.webrtc-sdk:android:150.7871.04")
     implementation("com.google.crypto.tink:tink-android:1.18.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")

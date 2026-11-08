@@ -20,7 +20,7 @@ import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
 
 /**
- * Google's libwebrtc for Android (stream-webrtc-android, contracts section 1.2 c): one factory, the MediaProjection
+ * Google's libwebrtc for Android (prebuilt `io.github.webrtc-sdk:android` M150, contracts section 1.2 c): one factory, the MediaProjection
  * screen track (`ScreenCapturerAndroid`, section 12.2) and the muted microphone track (section 6.3). Hardware
  * encoders come from `DefaultVideoEncoderFactory` (MediaCodec through `HardwareVideoEncoderFactory`, software VP8
  * fallback); VP8 is preferred, H.264 offered where present.
