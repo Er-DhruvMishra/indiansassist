@@ -10,7 +10,9 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Configurator
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -100,16 +102,19 @@ class AssistE2ETest {
         val title = device.wait(Until.findObject(By.textContains("wants to see this phone")), 20_000)
         check(title != null, "consent_screen_missing", "the consent screen did not open")
         val titleText = title!!.text
+        // The consent screen is still in its open transition here on a slow emulator: let it settle before reading.
+        device.waitForIdle(3_000)
         check(tech.isEmpty() || titleText == "$who wants to see this phone", "consent_title", "consent title was '$titleText', expected '$who wants to see this phone'")
         step("consent_screen", "title" to titleText)
-        val control = find(By.text("View and control (tap, swipe and type)"), 5_000, "control_radio")
-        check(control.isEnabled, "control_disabled", "View and control is disabled: the Accessibility service is not enabled")
-        control.click()
+        val controlSel = By.text("View and control (tap, swipe and type)")
+        find(controlSel, 10_000, "control_radio")
+        check(waitFor(3_000) { device.findObject(controlSel)?.isEnabled == true }, "control_disabled", "View and control is disabled: the Accessibility service is not enabled")
+        check(waitFor(5_000) { device.findObject(controlSel)?.click() != null }, "control_click", "View and control could not be tapped")
         check(waitFor(3_000) { device.findObject(By.text("View and control (tap, swipe and type)"))?.isChecked == true }, "control_not_checked", "View and control did not get checked")
-        scrollTo("I have closed or hidden anything private").click()
-        val share = scrollTo("Share my screen")
+        tapText("I have closed or hidden anything private")
+        scrollTo("Share my screen")
         check(waitFor(5_000) { device.findObject(By.text("Share my screen"))?.isEnabled == true }, "share_disabled", "Share my screen stays disabled (notifications not allowed?)")
-        share.click()
+        tapText("Share my screen")
         step("share_clicked")
 
         acceptProjectionDialog()
@@ -151,7 +156,7 @@ class AssistE2ETest {
         val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 10_000)
         check(field != null, "chat_field", "no chat field on the in-session screen")
         field!!.text = chatOut
-        scrollTo("Send").click()
+        tapText("Send")
         check(waitFor(10_000) { SessionHub.state.value.chat.any { it.from == "You" && it.text == chatOut } }, "chat_out", "the reply did not reach the chat list")
         step("chat_out")
 
@@ -175,7 +180,7 @@ class AssistE2ETest {
         // Stop from the app when the driver has checked everything it needs from the live session.
         check(waitSignal("stop", 180_000), "stop_signal_timeout", "the driver never sent the stop signal")
         bringToFront()
-        scrollTo("Stop sharing").click()
+        tapText("Stop sharing")
         check(waitFor(30_000) { SessionHub.state.value.ended != null }, "end_timeout", "Stop did not end the session")
         val ended = SessionHub.state.value.ended!!
         // The end reason is the server's (session.ended); the driver asserts and classifies it with the audit.
@@ -187,24 +192,88 @@ class AssistE2ETest {
     // ---------- MediaProjection system dialog ----------
 
     /**
-     * API 34+: "Start recording or casting with IndiansAssist?" with a spinner (A single app / Entire screen) and
-     * Start; API 35 builds also say "Share one app" / "Share entire screen" and "Share screen". Neither can be
-     * pre-granted with adb (appops PROJECT_MEDIA only skips the dialog for privileged callers).
+     * The SystemUI MediaProjection consent dialog, which cannot be pre-granted with adb (appops PROJECT_MEDIA only
+     * skips it for privileged callers). Variants handled:
+     * - API 34: "Start recording or casting with IndiansAssist?", a spinner (A single app / Entire screen), and a
+     *   positive button reading "Next" for one app and "Start" for the entire screen;
+     * - API 35: "Share your screen with IndiansAssist?", a spinner (Share one app / Share entire screen), and
+     *   "Next" / "Share screen";
+     * - older images or a single-display config: no spinner, just "Start now" / "Start".
+     * The spinner is found by its SystemUI resource id (`screen_share_mode_*`) or class, the positive button by
+     * `android:id/button1` or its text. "Entire screen" is chosen whenever a chooser is offered, and the selection is
+     * read back before confirming, so a single-app grant (which would hand off to an app picker) never slips through.
      */
     private fun acceptProjectionDialog() {
-        val single = device.wait(Until.findObject(By.text(Pattern.compile("A single app|Share one app", Pattern.CASE_INSENSITIVE))), 15_000)
-        if (single != null) {
-            single.click()
-            val entire = device.wait(Until.findObject(By.text(Pattern.compile("Entire screen|Share entire screen", Pattern.CASE_INSENSITIVE))), 5_000)
-            check(entire != null, "projection_entire", "no 'Entire screen' option in the MediaProjection dialog: ${screenTexts()}")
-            entire!!.click()
+        val entireText = Pattern.compile("(Share )?entire screen", Pattern.CASE_INSENSITIVE)
+        val confirmText = Pattern.compile("Start|Start now|Share screen", Pattern.CASE_INSENSITIVE)
+        val spinnerSel = { By.pkg(SYSUI).res(Pattern.compile("$SYSUI:id/screen_share_mode.*")) }
+        val spinnerClassSel = { By.pkg(SYSUI).clazz("android.widget.Spinner") }
+        val positiveSel = { By.pkg(SYSUI).res("android:id/button1") }
+
+        // The dialog is slow to appear on a software-rendered emulator: wait for any of its parts.
+        val shown = waitFor(30_000, 300) {
+            device.hasObject(spinnerSel()) || device.hasObject(spinnerClassSel()) || device.hasObject(positiveSel()) ||
+                device.hasObject(By.pkg(SYSUI).text(confirmText))
         }
-        val start = device.wait(Until.findObject(By.text(Pattern.compile("Start|Start now|Share screen", Pattern.CASE_INSENSITIVE)).clickable(true)), 10_000)
-            ?: device.wait(Until.findObject(By.text(Pattern.compile("Start|Start now|Share screen", Pattern.CASE_INSENSITIVE))), 2_000)
-        check(start != null, "projection_start", "no Start button in the MediaProjection dialog: ${screenTexts()}")
-        val label = start!!.text
-        start.click()
-        step("projection_accepted", "spinner" to (single != null).toString(), "button" to label)
+        check(shown, "projection_dialog_missing") { "the MediaProjection dialog did not open: ${screenTexts()}" }
+        device.waitForIdle(1_000)
+
+        val hasSpinner = device.hasObject(spinnerSel()) || device.hasObject(spinnerClassSel())
+        if (hasSpinner) {
+            if (!spinnerShowsEntire(spinnerSel, spinnerClassSel, entireText)) {
+                // Open the chooser and pick the entire screen; retried because the popup can race the dialog's layout.
+                val picked = waitFor(15_000, 500) {
+                    if (spinnerShowsEntire(spinnerSel, spinnerClassSel, entireText)) return@waitFor true
+                    val option = device.findObject(By.text(entireText))
+                    if (option != null && !isInsideSpinner(option)) {
+                        option.click()
+                        device.waitForIdle(1_000)
+                    } else {
+                        (device.findObject(spinnerSel()) ?: device.findObject(spinnerClassSel()))?.click()
+                        device.wait(Until.hasObject(By.text(entireText)), 3_000)
+                    }
+                    spinnerShowsEntire(spinnerSel, spinnerClassSel, entireText)
+                }
+                check(picked, "projection_entire") { "could not select 'Entire screen' in the MediaProjection dialog: ${screenTexts()}" }
+            }
+        }
+
+        // Confirm: the positive button by id (its text must say start/share, never "Next"), else by text.
+        var label = ""
+        val confirmed = waitFor(15_000, 500) {
+            val button = device.findObject(positiveSel())?.takeIf { b -> confirmText.matcher(b.text.orEmpty()).matches() }
+                ?: device.findObject(By.pkg(SYSUI).text(confirmText).clickable(true))
+                ?: device.findObject(By.text(confirmText).clickable(true))
+            if (button == null) return@waitFor false
+            label = button.text.orEmpty()
+            button.click()
+            true
+        }
+        check(confirmed, "projection_start") { "no Start / Share screen button in the MediaProjection dialog: ${screenTexts()}" }
+        val gone = waitFor(15_000, 300) { !device.hasObject(positiveSel()) && !device.hasObject(spinnerSel()) && !device.hasObject(spinnerClassSel()) }
+        check(gone, "projection_dialog_stuck") { "the MediaProjection dialog is still open after '$label': ${screenTexts()}" }
+        step("projection_accepted", "spinner" to hasSpinner.toString(), "button" to label)
+    }
+
+    /** Whether the projection-mode spinner currently shows the entire-screen option (its selected TextView child). */
+    private fun spinnerShowsEntire(spinnerSel: () -> BySelector, spinnerClassSel: () -> BySelector, entire: Pattern): Boolean = try {
+        val spinner = device.findObject(spinnerSel()) ?: device.findObject(spinnerClassSel())
+        spinner?.findObject(By.text(entire)) != null
+    } catch (_: StaleObjectException) {
+        false
+    }
+
+    /** True when [o] is the spinner's own selected-value text (clicking it only re-opens the chooser). */
+    private fun isInsideSpinner(o: UiObject2): Boolean = try {
+        var p: UiObject2? = o.parent
+        var inside = false
+        while (p != null && !inside) {
+            inside = p.className == "android.widget.Spinner" || (p.resourceName ?: "").contains("screen_share_mode")
+            p = p.parent
+        }
+        inside
+    } catch (_: StaleObjectException) {
+        false
     }
 
     // ---------- helpers ----------
@@ -215,9 +284,13 @@ class AssistE2ETest {
         device.waitForIdle(2_000)
     }
 
-    private fun find(sel: androidx.test.uiautomator.BySelector, ms: Long, what: String): UiObject2 {
+    /**
+     * The diagnostic is built only on failure: building it eagerly walked every node of a screen still in its open
+     * transition and threw StaleObjectException even when [sel] had been found (the run-20261107193611 failure).
+     */
+    private fun find(sel: BySelector, ms: Long, what: String): UiObject2 {
         val o = device.wait(Until.findObject(sel), ms)
-        check(o != null, "missing_$what", "$what not on screen: ${screenTexts()}")
+        check(o != null, "missing_$what") { "$what not on screen: ${screenTexts()}" }
         return o!!
     }
 
@@ -225,13 +298,43 @@ class AssistE2ETest {
     private fun scrollTo(text: String): UiObject2 {
         repeat(6) {
             device.findObject(By.text(text))?.let { return it }
-            device.findObject(By.scrollable(true))?.scroll(androidx.test.uiautomator.Direction.DOWN, 0.6f)
+            try {
+                device.findObject(By.scrollable(true))?.scroll(androidx.test.uiautomator.Direction.DOWN, 0.6f)
+            } catch (_: StaleObjectException) {
+                // re-laid out mid-scroll: look again
+            }
             device.waitForIdle(500)
         }
         return find(By.text(text), 2_000, text)
     }
 
-    private fun screenTexts(): String = device.findObjects(By.textStartsWith("")).mapNotNull { it.text?.takeIf { t -> t.isNotBlank() } }.take(40).joinToString(" | ")
+    /** [scrollTo] then click, found again when the node goes stale between finding and tapping it. */
+    private fun tapText(text: String) {
+        repeat(3) { attempt ->
+            try {
+                scrollTo(text).click()
+                return
+            } catch (e: StaleObjectException) {
+                if (attempt == 2) throw e
+                device.waitForIdle(1_000)
+            }
+        }
+    }
+
+    /** Visible texts (with resource ids) for failure messages; never throws, as nodes go stale while the screen moves. */
+    private fun screenTexts(): String = try {
+        device.findObjects(By.textStartsWith("")).mapNotNull { o ->
+            try {
+                val t = o.text?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val id = o.resourceName?.substringAfter(":id/")
+                if (id.isNullOrEmpty()) t else "$t [$id]"
+            } catch (_: StaleObjectException) {
+                null
+            }
+        }.take(40).joinToString(" | ")
+    } catch (e: RuntimeException) {
+        "(screen texts unavailable: ${e.javaClass.simpleName})"
+    }
 
     /**
      * Values are percent-encoded (`Uri.encode`), which is lossless: a space becomes `%20` and an underscore stays an
@@ -242,10 +345,14 @@ class AssistE2ETest {
         Log.i(TAG, "step=$name" + kv.joinToString("") { " ${it.first}=${Uri.encode(it.second)}" })
     }
 
-    private fun check(cond: Boolean, code: String, message: String) {
+    private fun check(cond: Boolean, code: String, message: String) = check(cond, code) { message }
+
+    /** [message] is evaluated only when [cond] is false (use it for anything that reads the screen). */
+    private inline fun check(cond: Boolean, code: String, message: () -> String) {
         if (!cond) {
-            Log.e(TAG, "fail=$code $message")
-            throw AssertionError("$code: $message")
+            val m = message()
+            Log.e(TAG, "fail=$code $m")
+            throw AssertionError("$code: $m")
         }
     }
 
@@ -256,16 +363,19 @@ class AssistE2ETest {
 
     private fun waitSignal(name: String, ms: Long): Boolean = waitFor(ms, 500) { shell("ls $signalDir").lines().any { it.trim() == name } }
 
+    /** Polls [cond]; a node going stale mid-check (the screen re-laid out) counts as "not yet", not as a failure. */
     private fun waitFor(ms: Long, every: Long = 250, cond: () -> Boolean): Boolean {
+        val safe = { try { cond() } catch (_: StaleObjectException) { false } }
         val end = System.currentTimeMillis() + ms
         while (System.currentTimeMillis() < end) {
-            if (cond()) return true
+            if (safe()) return true
             Thread.sleep(every)
         }
-        return cond()
+        return safe()
     }
 
     companion object {
         const val TAG = "IA_E2E"
+        const val SYSUI = "com.android.systemui"
     }
 }
