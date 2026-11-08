@@ -170,9 +170,15 @@ fn powershell_gets_params_stderr_cwd_and_exit_code() {
     let (events, end) = pbrun::run_collect(spec_for(&f, &[("host", "example.com")], &dir, 2));
     let out = text_of(&events, "stdout");
     assert!(out.contains("host=example.com count=4 leak=[]"), "{out}");
+    // PowerShell prints the long path; %TEMP% may be an 8.3 short path (GitHub's runners use
+    // `C:\Users\RUNNER~1\...`), so compare against the canonical long form, without `\\?\`.
+    let long = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    let long = long.display().to_string();
+    let long = long.strip_prefix(r"\\?\").unwrap_or(&long);
+    let out_lc = out.to_lowercase();
     assert!(
-        out.to_lowercase()
-            .contains(&format!("cwd={}", dir.display()).to_lowercase()),
+        out_lc.contains(&format!("cwd={long}").to_lowercase())
+            || out_lc.contains(&format!("cwd={}", dir.display()).to_lowercase()),
         "{out}"
     );
     assert!(text_of(&events, "stderr").contains("to stderr"));
