@@ -1,6 +1,7 @@
 /**
  * Dev / production entry point (`tsx watch src/server.ts`, `node dist/server.js`): loads `.env` from the repo root,
- * opens the database (PGlite when DATABASE_URL is empty), applies migrations, builds the app, ends this node's
+ * opens the database (PGlite when DATABASE_URL is empty), applies migrations unless the deployment's own migrate step
+ * owns them (bootMigration in config.ts), builds the app, ends this node's
  * orphaned sessions (N3), starts the sweeper and serves HTTP + WS on PORT and Prometheus on METRICS_PORT.
  */
 import { createServer, type Server } from 'node:http';
@@ -8,7 +9,7 @@ import { resolve } from 'node:path';
 import { closeDb, createDb, migrate } from '@indiansassist/db';
 import dotenv from 'dotenv';
 import { buildApp } from './app.js';
-import { findRepoRoot, loadConfig } from './config.js';
+import { bootMigration, findRepoRoot, loadConfig } from './config.js';
 import { bootCleanup, Sweeper } from './sweeper.js';
 
 async function main(): Promise<void> {
@@ -17,11 +18,12 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env, { repoRoot });
 
   const db = await createDb({ databaseUrl: config.databaseUrl, pgliteDir: config.pgliteDir });
-  if (config.migrateDatabaseUrl !== '' && config.migrateDatabaseUrl !== config.databaseUrl) {
+  const migration = bootMigration(config);
+  if (migration === 'owner') {
     const owner = await createDb({ databaseUrl: config.migrateDatabaseUrl });
     await migrate(owner, { appRole: config.dbAppRole || null });
     await closeDb(owner);
-  } else {
+  } else if (migration === 'same') {
     await migrate(db, { appRole: config.dbAppRole || null });
   }
 

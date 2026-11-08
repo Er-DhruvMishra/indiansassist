@@ -342,6 +342,16 @@ function readOrCreateSecret(file: string, make: () => string, validate: (s: stri
 
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 
+/**
+ * What the api does about migrations at boot: `owner` runs them on a separate owner connection, `same` on the app's
+ * own connection (dev, PGlite), and `none` leaves them to the deployment's migrate step (a Postgres api with no owner
+ * URL, the production Compose stack: its `migrate` service finishes before the api starts).
+ */
+export function bootMigration(config: Pick<Config, 'databaseUrl' | 'migrateDatabaseUrl'>): 'owner' | 'same' | 'none' {
+  if (config.migrateDatabaseUrl === '') return config.databaseUrl === '' ? 'same' : 'none';
+  return config.migrateDatabaseUrl === config.databaseUrl ? 'same' : 'owner';
+}
+
 export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadConfigOptions = {}): Config {
   const parsed = envSchema.safeParse(rawEnv);
   if (!parsed.success) {
@@ -548,7 +558,9 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env, opts: LoadCo
     webOrigin,
     trustProxy: e.TRUST_PROXY,
     databaseUrl: e.DATABASE_URL,
-    migrateDatabaseUrl: e.MIGRATE_DATABASE_URL !== '' ? e.MIGRATE_DATABASE_URL : e.DATABASE_URL,
+    // Defaults to DATABASE_URL in dev only. A production api connects as DB_APP_ROLE, which cannot migrate by design,
+    // and never receives the owner credential: empty here means the deployment's migrate step owns the schema.
+    migrateDatabaseUrl: e.MIGRATE_DATABASE_URL !== '' ? e.MIGRATE_DATABASE_URL : production ? '' : e.DATABASE_URL,
     pgliteDir: abs(e.PGLITE_DIR),
     dbAppRole: e.DB_APP_ROLE,
     sessionCookieSecret: cookieSecret,

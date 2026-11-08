@@ -27,6 +27,16 @@ const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 const compose = read('infra/docker-compose.yml');
 const env = parseEnvFile(read('infra/.env.example'));
 
+describe('infra/scripts/init-env.sh', () => {
+  it('gives a value to every variable Compose refuses to start without', () => {
+    const code = compose.replace(/^\s*#.*$/gm, '');
+    const required = [...new Set([...code.matchAll(/\$\{([A-Z0-9_]+):\?/g)].map((m) => m[1]))];
+    expect(required.length).toBeGreaterThan(0);
+    const generated = new Set([...read('infra/scripts/init-env.sh').matchAll(/^\s*setv ([A-Z0-9_]+)/gm)].map((m) => m[1]));
+    expect(required.filter((v) => !generated.has(v) && !env.get(v))).toEqual([]);
+  });
+});
+
 describe('shipped infra passes every check', () => {
   it('validateInfra reports no problems', () => {
     const groups = validateInfra(ROOT);
