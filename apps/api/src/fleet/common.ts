@@ -243,7 +243,9 @@ export function toDevice(d: DeviceRow, online: boolean, opts: { withIp?: boolean
     name: d.name,
     platform: d.platform,
     status: d.status,
-    online,
+    // Only an enrolled device can be online: disable / retire / deregister kick its socket, but the presence entry
+    // is cleared by the socket's close handler, which can land after the response that changed the status.
+    online: online && d.status === 'enrolled',
     keyId: d.keyId ?? null,
     osVersion: d.osVersion ?? null,
     arch: d.arch ?? null,
