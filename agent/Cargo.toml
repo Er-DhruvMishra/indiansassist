@@ -31,7 +31,7 @@ members = [
 # The library crates still compile pure-Rust with no features on the gnu toolchain
 # (ia-core cross-check), but the binary needs MSVC. See agent/README.md.
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.99"
 license = "AGPL-3.0-only"

@@ -183,7 +183,7 @@ Development builds also accept --api-origin <origin>, --signal-url <ws-url>,
 display), --no-self-delete (keep the binary) and --stop-after <secs> for local and
 automated testing against `pnpm dev`.
 
-With no code the connect window prompts for one. The agent shows a consent window
+With no code it says so and exits: use your technician's join link. The agent shows a consent window
 before sharing and an always-on-top indicator while a session is live, and removes
 itself on exit unless you choose to keep it.";
 

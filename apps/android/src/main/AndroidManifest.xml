@@ -50,7 +50,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
-                <data android:host="in.indiansassist.example" />
+                <data android:host="${webHost}" />
                 <data android:path="/join" />
                 <data android:path="/download" />
             </intent-filter>

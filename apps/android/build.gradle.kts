@@ -1,6 +1,7 @@
 // IndiansAssist Android host (Phase C contracts section 12). Single Gradle module, application id
 // com.indiansassist.desk, min SDK 29. Every dependency below is listed with its licence in docs/LICENSE-REGISTER.md.
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.net.URI
 import java.util.Properties
 
 plugins {
@@ -10,11 +11,19 @@ plugins {
 
 // Compiled region origins (contracts section 2.1): the app joins only through these. Debug builds add the
 // emulator's view of the host (10.0.2.2) so `pnpm dev` works; release builds carry production origins only.
-val releaseOrigins = "https://in.indiansassist.example"
+// `-PiaReleaseOrigin=` or `IA_API_ORIGIN` (the same variable the agent builds read) moves the release build to another
+// server (a self-hoster); by default it is the production origin. It must be an exact https origin.
+val releaseOrigin = ((findProperty("iaReleaseOrigin") as String?) ?: System.getenv("IA_API_ORIGIN") ?: "https://api.indiansassist.com").trimEnd('/')
+val releaseUri = URI(releaseOrigin)
+require(releaseUri.scheme == "https" && !releaseUri.host.isNullOrEmpty() && releaseUri.path.isNullOrEmpty() && releaseUri.query == null) {
+    "iaReleaseOrigin / IA_API_ORIGIN must be a bare https origin such as https://api.indiansassist.com (got '$releaseOrigin')"
+}
+val releaseHost: String = releaseUri.host
+val releaseOrigins = releaseOrigin
 // `IA_DEV_API` (env) or `-PiaDevApi=` moves the debug build's default api, e.g. http://localhost:4300 behind
 // `adb reverse tcp:4300 tcp:4300` for the live emulator e2e (tools/android-e2e.mjs); it joins the debug origins.
 val devApi = ((findProperty("iaDevApi") as String?) ?: System.getenv("IA_DEV_API") ?: "http://10.0.2.2:4000").trimEnd('/')
-val debugOrigins = listOf(devApi, "http://10.0.2.2:4000", "http://localhost:4000", "https://in.indiansassist.example").distinct().joinToString(",")
+val debugOrigins = listOf(devApi, "http://10.0.2.2:4000", "http://localhost:4000", releaseOrigin).distinct().joinToString(",")
 
 // Release signing (docs/release.md section 4.5). The keystore and its passwords never enter the repository: they come
 // from apps/android/keystore.properties (git-ignored; see keystore.properties.example) or from the environment
@@ -45,7 +54,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // One universal APK (section 2.6): phones, old 32-bit phones and the x86_64 emulator.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
-        buildConfigField("String", "WEB_HOST", "\"in.indiansassist.example\"")
+        buildConfigField("String", "WEB_HOST", "\"$releaseHost\"")
+        manifestPlaceholders["webHost"] = releaseHost
         // Instrumented smoke (section 15.3) is gated on IA_EMULATOR=1, passed through as a runner argument.
         testInstrumentationRunnerArguments["IA_EMULATOR"] = System.getenv("IA_EMULATOR") ?: "0"
         testInstrumentationRunnerArguments["IA_TOKEN"] = System.getenv("IA_TOKEN") ?: ""
@@ -75,7 +85,7 @@ android {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("String", "REGION_ORIGINS", "\"$releaseOrigins\"")
-            buildConfigField("String", "DEFAULT_API_ORIGIN", "\"https://in.indiansassist.example\"")
+            buildConfigField("String", "DEFAULT_API_ORIGIN", "\"$releaseOrigin\"")
             buildConfigField("boolean", "DEV", "false")
             manifestPlaceholders["cleartext"] = "false"
             signingConfigs.findByName("release")?.let { signingConfig = it }

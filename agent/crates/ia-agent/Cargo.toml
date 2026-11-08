@@ -135,6 +135,8 @@ windows = { workspace = true, features = [
     "Win32_System_Pipes",
     "Win32_System_Threading",
     "Win32_UI_Shell",
+    # `MessageBoxW`: the no-code notice of a GUI-subsystem build (main.rs).
+    "Win32_UI_WindowsAndMessaging",
     # `ShellExecuteExW` / `SHELLEXECUTEINFOW` (the §7.3 `runas` launch) sit behind the `windows`
     # crate's `Win32_System_Registry` gate. Phase C compiled only because another crate in the
     # graph happened to enable it; naming it here keeps `ia-agent` building on its own, which is

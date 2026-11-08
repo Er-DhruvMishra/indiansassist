@@ -153,7 +153,7 @@ describe('JoinP2', () => {
 
   it('shows the unpublished notice when there is no store URL, and the developer install details', () => {
     renderP2({ win: new FakeWin(), brands: [{ brand: 'Microsoft Edge' }] });
-    expect(screen.getByText(/not yet published; use the developer install below/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'downloads page' }).getAttribute('href')).toBe('/downloads');
     expect(screen.getByText('Developer install (load unpacked)')).toBeTruthy();
     expect(screen.getByText(/apps\/extension\/dist/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy token' })).toBeTruthy();

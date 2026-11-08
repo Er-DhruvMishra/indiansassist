@@ -103,7 +103,13 @@ export function JoinP2({ info, code, accent, expired, env: envProp }: { info: Pu
               Install the extension
             </Button>
           ) : (
-            <Alert tone="amber">The extension is not yet published; use the developer install below.</Alert>
+            <Alert tone="amber">
+              The extension is not in the browser stores yet. Get it from the{' '}
+              <a href="/downloads" className="font-medium underline">
+                downloads page
+              </a>{' '}
+              and follow the steps there, or use the developer install below.
+            </Alert>
           )}
           {installNote && <Alert tone="blue">Token copied. After installing, click the IndiansAssist icon in your toolbar and choose Paste from clipboard.</Alert>}
           <p className="text-xs text-slate-600 dark:text-slate-400">This page notices the extension as soon as it is installed; no reload is needed.</p>

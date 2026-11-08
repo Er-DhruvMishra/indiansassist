@@ -80,6 +80,9 @@ export async function registerSecurity(app: FastifyInstance, ctx: AppContext): P
 export const limits = {
   auth: { rateLimit: { max: 10, timeWindow: 60_000 } },
   publicLookup: { rateLimit: { max: 30, timeWindow: 60_000 } },
+  // The public downloads page: one list, and a few Range requests per file, per IP (a NAT shares them).
+  publicDownloadsList: { rateLimit: { max: 120, timeWindow: 60_000 } },
+  publicDownloadsFile: { rateLimit: { max: 60, timeWindow: 60_000 } },
   // Phase E section 2.5 (per IP; NAT-friendly).
   ssoDiscover: { rateLimit: { max: 120, timeWindow: 60_000 } },
   ssoBegin: { rateLimit: { max: 120, timeWindow: 60_000 } },

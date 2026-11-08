@@ -59,6 +59,14 @@ describe('bar e2e hook', () => {
     expect(host.hasAttribute('data-ia-e2e-toast')).toBe(false);
   });
 
+  it('a production build for the public downloads page carries exactly its https origin', () => {
+    const cfg = buildEnv({ IA_DEV: '0', VITE_REGION_ORIGINS: 'in-mum=https://api.indiansassist.com' });
+    expect(cfg.dev).toBe(false);
+    expect(cfg.regionOrigins).toEqual(['https://api.indiansassist.com']);
+    expect(cfg.defaultApiOrigin).toBe('https://api.indiansassist.com');
+    expect(() => buildEnv({ IA_DEV: '0', VITE_REGION_ORIGINS: 'in-mum=http://api.indiansassist.com' })).toThrow(/https/);
+  });
+
   it('compiles the flag false in production builds and refuses IA_E2E=1 there', () => {
     expect(defines(buildEnv({ IA_DEV: '0', VITE_REGION_ORIGINS: PROD_ORIGINS })).__IA_E2E__).toBe('false');
     expect(() => buildEnv({ IA_DEV: '0', IA_E2E: '1', VITE_REGION_ORIGINS: PROD_ORIGINS })).toThrow(/IA_E2E=1 is for the dev e2e build only/);

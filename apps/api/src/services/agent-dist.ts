@@ -14,6 +14,8 @@ import {
   agentDistFileName,
   agentDistManifestSchema,
   agentPortalDistFileName,
+  extensionDistFileName,
+  extensionDistManifestSchema,
   type AgentArch,
   type AgentBuild,
   type AgentPlatform,
@@ -25,6 +27,9 @@ import { loadMacZip } from './macos-archive.js'; // apple-owned (import)
 /** `archive` is set for a Linux build only: the cached compressed ELF body of its per-download `.tar.gz`. */
 export type ServedBuild = AgentBuild & { path: string; file: string; archive?: LinuxArchiveBody };
 
+/** A packaged extension zip from `AGENT_DIST_DIR/extension/manifest.json` (the public downloads page). */
+export type ServedExtension = { version: string; size: number; sha256: string; minOs: string; path: string; file: string };
+
 const DEV_STUB_TEXT =
   'IndiansAssist development placeholder. This is NOT the support client: no agent build is installed on this server ' +
   '(set AGENT_DIST_DIR to a directory with manifest.json).\r\n';
@@ -35,15 +40,41 @@ function sha256File(path: string): string {
 
 export class AgentDist {
   private builds: ServedBuild[] = [];
+  private extensions: ServedExtension[] = [];
   /** Why the manifest is empty (logged once per load). */
   lastError: string | null = null;
+  /** Why the extension manifest was not read (never stops the boot or the agent builds). */
+  extensionError: string | null = null;
 
   constructor(private readonly config: Pick<Config, 'agent'>) {}
+
+  /** The extension zips of `<distDir>/extension/`; `[]` when the directory or manifest is absent. Never throws. */
+  private loadExtensions(distDir: string): void {
+    this.extensions = [];
+    this.extensionError = null;
+    const dir = join(distDir, 'extension');
+    const manifestPath = join(dir, 'manifest.json');
+    if (!existsSync(manifestPath)) return;
+    try {
+      const m = extensionDistManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown);
+      for (const b of m.builds) {
+        const file = b.file ?? extensionDistFileName(b.version);
+        const path = resolve(dir, file);
+        // A manifest never reaches outside its own directory, and never names a file that is not there.
+        if (dirname(path) !== resolve(dir) || !existsSync(path)) continue;
+        this.extensions.push({ version: b.version, size: statSync(path).size, sha256: b.sha256, minOs: b.minOs, path, file });
+      }
+    } catch (err) {
+      this.extensions = [];
+      this.extensionError = `extension/manifest.json is invalid: ${(err as Error).message.slice(0, 200)}`;
+    }
+  }
 
   /** (Re)reads the manifest; never throws (a bad manifest serves nothing). */
   load(): void {
     const { distDir, devStub, minVersion } = this.config.agent;
     this.lastError = null;
+    this.loadExtensions(distDir);
     const manifestPath = join(distDir, 'manifest.json');
     if (existsSync(manifestPath)) {
       try {
@@ -151,6 +182,16 @@ export class AgentDist {
 
   find(platform: AgentPlatform, arch: AgentArch): ServedBuild | null {
     return this.builds.find((b) => b.platform === platform && b.arch === arch) ?? null;
+  }
+
+  /** Every served build (the public list). The array object changes on each load, which is how a cache can tell. */
+  served(): readonly ServedBuild[] {
+    return this.builds;
+  }
+
+  /** The packaged extension zips (the public list). */
+  servedExtensions(): readonly ServedExtension[] {
+    return this.extensions;
   }
 
   /** `PublicToken.agent` (section 2.7 J6). */

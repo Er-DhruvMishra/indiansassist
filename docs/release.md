@@ -308,6 +308,17 @@ Built on a Mac with Xcode and its command-line tools, Rust (`aarch64-apple-darwi
    file, the PKG installing and enrolling, and its uninstall script (macOS unattended sessions are still an open item,
    section 15.10).
 
+### 1.10 Android and the extension for the public downloads page
+
+- The Android release build's origin defaults to `https://api.indiansassist.com`. A self-hoster moves it with
+  `-PiaReleaseOrigin=https://<origin>` or `IA_API_ORIGIN` (it must be a bare https origin, otherwise the build stops
+  with a clear message). `WEB_HOST`, `DEFAULT_API_ORIGIN`, `REGION_ORIGINS` and the App Link host in the manifest all
+  follow it.
+- The extension for release is built with `VITE_REGION_ORIGINS=in-mum=<origin>` and `IA_DEV=0` (the origin then
+  appears in `externally_connectable` and the bridge content script's matches), then packaged with `node
+  apps/extension/scripts/package-zip.mjs --out <AGENT_DIST_DIR>/extension --require-origin <origin>`. A dev build
+  (http or localhost origins) is refused. Section 5 runs both for you.
+
 ---
 
 ## 2. Self-hosted server releases
@@ -619,3 +630,37 @@ Unchanged code, documented here:
 - `pnpm agent:release:linux --skip-build` on the staged pair of 5 Nov 2026: both elf-checks passed, both files got
   `.asc` files, the Linux row says `signed: true`, and `verify-linux.sh` passed `gpg --verify` and `sha256sum -c`.
 - No certificate is left in any CurrentUser or LocalMachine store.
+
+---
+
+## 5. Publishing builds to the public downloads page
+
+`/downloads` on the web app and `GET /api/v1/downloads` offer every build the node already serves, without a login:
+the list and the files come straight from `AGENT_DIST_DIR` and `AGENT_MSI_DIST_DIR`, so publishing is the same copy
+the sections above describe. What is added:
+
+- `AGENT_DIST_DIR/extension/` holds the packaged extension (`IndiansAssist-extension-<v>.zip` and its
+  `manifest.json`); it is optional and never needed to boot.
+- A portable build served here carries **no per-download code**. Started with no code it says so and exits (it does
+  not prompt). The join page's download still names the file with a desk code. The list says this on the page.
+- `signed` on the Linux portable row is false: the row is the archive assembled by the api, and the detached `.asc`
+  files cover the two ELFs, not the archive.
+
+`node scripts/build-downloads.mjs` (`pnpm downloads:build`) stages the whole tree on the build machine by running
+the scripts of this document in order: extension, Windows portable, MSI, Linux portable, Linux packages, Android. It
+needs `IA_TOKEN_PUBKEYS` and `IA_API_ORIGIN`, takes the signing locations from the environment (section 4.3, plus
+`IA_ANDROID_KEYSTORE` and `IA_ANDROID_KEYSTORE_PASSWORD_FILE`) and refuses to continue without them unless
+`--allow-unsigned` is given. It stops at the first failing step and always writes
+`<out>/downloads-summary.json` (`steps`, `files`, `notBuilt`, `problems`, `ok`). macOS, iOS and Windows arm64 cannot
+be built on the Windows build machine and are recorded as not built. The output folder has the on-server layout:
+
+```
+<out>/agent-dist/manifest.json + the portable files
+<out>/agent-dist/extension/manifest.json + the zip
+<out>/agent-msi/manifest.json + the msi
+<out>/agent-msi/linux/manifest.json + deb, rpm, .sha256, .asc, SHA256SUMS
+```
+
+Copy `agent-dist` to the server's `infra/data/agent-dist` and `agent-msi` to `infra/data/agent-msi` (mounted read-only
+by Compose), then reload the api (`SIGHUP` or restart). Keep the two `manifest.json` files in step with their
+files: a row whose file is missing is left out, so the page shows "Not available yet" for it.

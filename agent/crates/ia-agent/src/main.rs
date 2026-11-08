@@ -93,6 +93,20 @@ fn main() {
     let _ = handed_from;
     #[cfg(target_os = "linux")]
     linux_start(&cli, &mut candidates, &raw_args);
+    // §2.3 rank 3 on Windows: the per-download filename (`IndiansAssist-<region>-<dddd>-<dddd>-<dddd>.exe`, a browser's
+    // ` (1)` tolerated). The code still goes through the same server checks as any other carrier (`desk.hello`).
+    #[cfg(windows)]
+    if candidates.arg.is_none() {
+        if let Some(p) = std::env::current_exe()
+            .ok()
+            .as_ref()
+            .and_then(|e| e.file_name())
+            .and_then(|n| n.to_str())
+            .and_then(|name| ia_core::download::parse_own_filename(name, ia_core::token::REGIONS))
+        {
+            candidates.filename_code = Some(ia_core::join_input::TokenInput::ShortCode(p.code));
+        }
+    }
     // apple-owned: begin
     // Phase F §17.2: the macOS start-up (the `.iaconfig` sidecar beside `IndiansAssist.app`, the
     // `CFBundleURLTypes` deep link, the single instance); empty until the apple stream fills it.
@@ -104,7 +118,7 @@ fn main() {
     println!("IndiansAssist agent {}", env!("CARGO_PKG_VERSION"));
     match &resolved {
         Some(r) => println!("token source: {:?}", r.source),
-        None => println!("No support code supplied; the connect window would prompt for one."),
+        None => println!("No support code supplied."),
     }
 
     // apple-owned: begin
@@ -729,6 +743,39 @@ fn self_trust_check() {
 #[cfg(all(feature = "media", not(all(windows, feature = "winapi"))))]
 fn self_trust_check() {}
 
+/// What a generic download tells a person who starts it with no code (public downloads page).
+const NO_CODE_MESSAGE: &str = "IndiansAssist needs a support code to connect.\n\n\
+Open the join link your technician sent you and use the download it offers: that copy connects \
+on its own.\n\n\
+If you already have a 12-digit support code, start this program with --code <code>, as shown on \
+the downloads page of your IndiansAssist server.";
+
+/// A release Windows build has no console (`windows_subsystem`), so the notice is a message box;
+/// a dev build and every other platform print it instead (a dev run may be headless).
+#[cfg(all(feature = "media", windows, feature = "winapi", not(feature = "dev")))]
+fn no_code_notice() {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+    // SAFETY: both strings are valid for the call and no owner window is passed.
+    unsafe {
+        let _ = MessageBoxW(
+            HWND::default(),
+            &HSTRING::from(NO_CODE_MESSAGE),
+            &HSTRING::from("IndiansAssist"),
+            MB_OK | MB_ICONINFORMATION,
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "media",
+    not(all(windows, feature = "winapi", not(feature = "dev")))
+))]
+fn no_code_notice() {
+    eprintln!("{NO_CODE_MESSAGE}");
+}
+
 #[cfg(feature = "media")]
 fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
     use std::time::Duration;
@@ -742,8 +789,9 @@ fn run(cli: &Cli, resolved: Option<ia_agent::tokensource::Resolved>) {
     self_trust_check();
 
     let Some(r) = resolved else {
-        // No token: a release build would open the connect window here. Nothing to do
-        // headless, so exit cleanly.
+        // No code from any carrier (argument, filename, sidecar, clipboard): there is no prompt to
+        // type one into, so say what to do instead of exiting silently, then exit cleanly.
+        no_code_notice();
         return;
     };
 

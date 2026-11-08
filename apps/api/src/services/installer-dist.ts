@@ -88,6 +88,11 @@ export class InstallerDist {
     return this.builds.find((b) => b.arch === arch && installerFormatOf(b) === format && installerPlatformOf(b) === platform) ?? null;
   }
 
+  /** Every served installer (the public list). The array object changes on each load, which is how a cache can tell. */
+  served(): readonly ServedInstaller[] {
+    return this.builds;
+  }
+
   /** Whether this node can serve any installer at all (the console offers the download only then). */
   get available(): boolean {
     return this.builds.length > 0;

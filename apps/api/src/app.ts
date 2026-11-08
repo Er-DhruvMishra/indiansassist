@@ -41,6 +41,7 @@ import { SignalHub } from './signal/hub.js';
 import { AgentDist } from './services/agent-dist.js';
 import { InstallerDist } from './services/installer-dist.js';
 import { downloadRoutes } from './routes/download.js';
+import { publicDownloadRoutes } from './routes/public-downloads.js';
 import { playbookRoutes } from './routes/playbooks.js';
 import { deviceRoutes } from './fleet/routes-devices.js';
 import { fleetAdminRoutes } from './fleet/routes-admin.js';
@@ -142,6 +143,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   ctx.egressFetch = createEgressFetch({ config: config.egress, lookup: (h) => ctx.dnsResolver.lookup(h), log: app.log, metrics: ctx.metrics });
   ctx.agentDist.load();
   if (ctx.agentDist.lastError) app.log.info({ reason: ctx.agentDist.lastError }, 'no agent builds served by this node');
+  if (ctx.agentDist.extensionError) app.log.warn({ reason: ctx.agentDist.extensionError }, 'the packaged extension is not served');
   ctx.installerDist.load();
   if (ctx.installerDist.lastError) app.log.info({ reason: ctx.installerDist.lastError }, 'no installer served by this node');
   ctx.hub = new SignalHub(ctx);
@@ -166,6 +168,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<{ app: FastifyIns
   await iceRoutes(app, ctx);
   await internalRecordingRoutes(app, ctx);
   await downloadRoutes(app, ctx);
+  await publicDownloadRoutes(app, ctx);
   await playbookRoutes(app, ctx);
   // Phase D (docs/specs/phase-d-contracts.md section 7.2)
   await deviceRoutes(app, ctx);

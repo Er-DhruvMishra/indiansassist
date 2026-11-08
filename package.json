@@ -41,6 +41,7 @@
     "linux:pkg": "node packaging/linux/build.mjs",
     "agent:release:linux": "node packaging/linux/agent-release.mjs",
     "agent:release:windows": "node scripts/agent-release-windows.mjs",
+    "downloads:build": "node scripts/build-downloads.mjs",
     "sign:windows": "node packaging/sign/sign-windows.mjs",
     "linux:throwaway": "powershell -NoProfile -ExecutionPolicy Bypass -File agent/scripts/throwaway-wsl.ps1",
     "packaging:test": "node --test packaging/windows/tools/enroll-config.test.mjs && cargo test --manifest-path packaging/windows/ca/Cargo.toml --locked",

@@ -173,7 +173,16 @@ export function JoinP3({ info, code, accent, expired, env: envProp }: { info: Pu
                 Get the app
               </Button>
             ) : (
-              <Alert tone="amber">{P3_UNAVAILABLE}</Alert>
+              <>
+                <Alert tone="amber">{P3_UNAVAILABLE}</Alert>
+                <p className="text-sm">
+                  You can check the{' '}
+                  <a href="/downloads" className="font-medium text-teal-800 underline dark:text-teal-300">
+                    downloads page
+                  </a>{' '}
+                  for the Android app.
+                </p>
+              </>
             )}
           </div>
         )}

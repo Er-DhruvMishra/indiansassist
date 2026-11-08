@@ -39,6 +39,7 @@ export * from './agent/control.js';
 export * from './agent/capabilities.js';
 export * from './agent/sec-handshake.js';
 export * from './agent/download.js';
+export * from './agent/public-downloads.js';
 export * from './agent/playbook.js';
 // Phase D (docs/specs/phase-d-contracts.md section 13.1)
 export * from './fleet/device.js';

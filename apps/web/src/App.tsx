@@ -11,6 +11,7 @@ import { Alert, Spinner } from './components/ui';
 import { DownloadRedirect } from './desk/DownloadRedirect';
 import { JoinPage } from './desk/JoinPage';
 import { InvitePage } from './pages/InvitePage';
+import { DownloadsPage } from './pages/DownloadsPage';
 import { LoginPage } from './pages/LoginPage';
 import { PublicLayout, TextLink } from './pages/PublicLayout';
 import { SignupPage } from './pages/SignupPage';
@@ -75,6 +76,7 @@ export function App() {
         <Route path="/c/:code" element={<CameraJoinPage />} />
         <Route path="/join" element={<JoinPage />} />
         <Route path="/download" element={<DownloadRedirect />} />
+        <Route path="/downloads" element={<DownloadsPage />} />
         <Route path="/room" element={<RoomLayout />}>
           <Route path="new" element={null} />
           <Route path=":sessionId" element={null} />
