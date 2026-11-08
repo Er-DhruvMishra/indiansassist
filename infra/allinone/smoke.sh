@@ -151,7 +151,9 @@ assert_clean_postgres_stop
 
 say "inside: internal ports on loopback, nothing needlessly root, services under their own users"
 docker cp "$HERE/smoke-inside.mjs" "$NAME:/tmp/smoke-inside.mjs" >/dev/null
-docker exec "$NAME" node /tmp/smoke-inside.mjs
+# --privileged for this one inspection only: reading another user's /proc/<pid>/{fd,environ} needs CAP_SYS_PTRACE, which
+# a container's root does not have. The container itself keeps Docker's default capabilities.
+docker exec --privileged "$NAME" node /tmp/smoke-inside.mjs
 
 say "a core service that keeps dying stops the container with a non-zero exit"
 for _ in $(seq 1 60); do
