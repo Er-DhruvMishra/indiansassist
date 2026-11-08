@@ -32,7 +32,7 @@
     "drizzle-orm": "0.45.4",
     "fastify": "^5.12.7",
     "ioredis": "5.11.1",
-    "nodemailer": "^8.0.11",
+    "nodemailer": "^10.1.4",
     "openid-client": "6.8.8",
     "pg": "^8.23.1",
     "prom-client": "^15.1.3",
